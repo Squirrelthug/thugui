@@ -1,0 +1,11 @@
+## Interface: 120005
+## Title: ThugUI
+## Notes: Enhanced UI features including Essential Rings - cursor-centered cooldown tracking
+## Author: Thug
+## IconTexture: Interface\AddOns\ThugUI\media\ThugUI_Icon
+## SavedVariables: ThugUI_Config ThugUI_DebugLog
+
+ThugUI.xml
+modules\EssentialRings.lua
+modules\EssentialRings_Settings.lua
+modules\FrameHider.lua
