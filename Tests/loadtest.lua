@@ -28,6 +28,11 @@ frameMT.__index = function(tbl, key)
             a.__point = nil
             return
         end
+        -- Recorded so the resource ring's arc maths can be asserted on.
+        if key == "SetCooldown" and type(a) == "table" then
+            a.__cooldown = { a1, a2, a3 }
+            return
+        end
         -- Shown-state is modelled, not stubbed away: several code paths early-
         -- return on IsShown, so a stub that always says false silently skips
         -- the very logic under test.
@@ -111,6 +116,25 @@ function GetSpecializationInfoByID(id) return id, "Spec" .. id end
 function IsPlayerSpell() return true end
 function IsSpellKnownOrOverridesKnown() return true end
 function RegisterStateDriver() end
+function GetTime() return 1000 end
+
+-- Resource ring. __powerToken is what UnitPowerType reports (it already
+-- follows shapeshift form in the real game); __form drives the override path.
+_G.__powerToken = "MANA"
+_G.__power, _G.__powerMax = 50, 100
+_G.__form = 0
+function UnitPowerType() return 0, _G.__powerToken end
+function UnitPower() return _G.__power end
+function UnitPowerMax() return _G.__powerMax end
+function GetShapeshiftFormID() return _G.__form end
+MOONKIN_FORM = 31
+PowerBarColor = {
+    MANA = { r = 0, g = 0, b = 1 },
+    RAGE = { r = 1, g = 0, b = 0 },
+    ENERGY = { r = 1, g = 1, b = 0 },
+    LUNAR_POWER = { r = 0.3, g = 0.52, b = 0.9 },
+}
+RAID_CLASS_COLORS = { DRUID = { r = 1, g = 0.49, b = 0.04 } }
 function hooksecurefunc() end
 function GetBuildInfo() return "12.0.7", "12345", "date", 120007 end
 function SetPortraitTexture() end
@@ -136,6 +160,7 @@ Enum = {
     CooldownViewerCategory = { Essential = 0, Utility = 1, TrackedBuff = 2, TrackedBar = 3 },
     SpellBookSpellBank = { Player = 0, Pet = 1 },
     SpellBookItemType = { None = 0, Spell = 1 },
+    PowerType = { Mana = 0, Rage = 1, Energy = 3, LunarPower = 8 },
 }
 
 _G.__unknownNames = {}
@@ -457,6 +482,86 @@ if failures == 0 and ThugUI.CooldownViewer then
             assert(Data.ResolveCollapseDirection(profile) == "right", "anchor 10 should pack right")
             profile.anchorCol = 5
             assert(Data.ResolveCollapseDirection(profile) == "left", "dead centre should fall to left")
+        end },
+    }
+
+    for _, step in ipairs(steps) do
+        local ok, err = pcall(step[2])
+        if ok then
+            say("ok         " .. step[1])
+        else
+            say(("STEP FAIL  %s\n           %s"):format(step[1], tostring(err)))
+            failures = failures + 1
+        end
+    end
+end
+
+-- Resource ring: power resolution and the static-arc maths.
+if failures == 0 and ThugUI.ResourceRing then
+    say("\n-- resource ring --")
+    local RR = ThugUI.ResourceRing
+    _G.ThugUI_CursorFrame = _G.ThugUI_CursorFrame or NewFrame()
+    ThugUI_CursorFrame:Show()
+
+    --- The fraction of the arc actually drawn, recovered from the seeded
+    --- SetCooldown. With SetReverse(false) the drawn arc is what remains.
+    local function DrawnFraction()
+        local cd = RR.frame and RR.frame.__cooldown
+        assert(cd, "resource ring never seeded a cooldown")
+        local start, duration = cd[1], cd[2]
+        return (start + duration - GetTime()) / duration
+    end
+
+    local function Approx(got, want, what)
+        assert(math.abs(got - want) < 0.0001,
+            ("%s (got %.4f, wanted %.4f)"):format(what, got, want))
+    end
+
+    local steps = {
+        { "initialize", function()
+            ThugUI_Config.showResourceRing = true
+            RR:Initialize()
+            assert(RR.frame, "no resource ring frame")
+        end },
+
+        { "arc matches the resource fraction", function()
+            for _, fraction in ipairs({ 0, 0.25, 0.5, 1 }) do
+                _G.__power = fraction * 100
+                RR.lastFraction = nil
+                RR:Update()
+                Approx(DrawnFraction(), fraction, "arc for fraction " .. fraction)
+            end
+        end },
+
+        { "power type follows the game by default", function()
+            _G.__powerToken, _G.__form = "RAGE", 0
+            RR:UpdateColor()
+            local _, token = RR:GetPowerType()
+            assert(token == "RAGE", "did not follow UnitPowerType, got " .. tostring(token))
+        end },
+
+        { "moonkin form overrides to astral power", function()
+            -- The game still reports MANA as primary here; the override is the
+            -- whole point.
+            _G.__powerToken, _G.__form = "MANA", MOONKIN_FORM
+            local _, token = RR:GetPowerType()
+            assert(token == "LUNAR_POWER",
+                "moonkin did not override to astral power, got " .. tostring(token))
+            _G.__form = 0
+        end },
+
+        { "hidden when switched off", function()
+            ThugUI_Config.showResourceRing = false
+            RR:Update()
+            assert(not RR.frame:IsShown(), "resource ring showed while disabled")
+            ThugUI_Config.showResourceRing = true
+        end },
+
+        { "hidden when the resource has no maximum", function()
+            _G.__powerMax = 0
+            RR:Update()
+            assert(not RR.frame:IsShown(), "resource ring showed with zero max power")
+            _G.__powerMax = 100
         end },
     }
 

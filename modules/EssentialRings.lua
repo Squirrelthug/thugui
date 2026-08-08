@@ -349,6 +349,15 @@ ER.defaults = {
     gcvScale = 1.0,
     gcvPoint = nil,  -- saved position {point, relPoint, x, y}
 
+    -- Resource Ring (modules/ResourceRing.lua) — a radial resource meter
+    -- sharing the cast ring's band, with the cast sweep drawn over it.
+    -- Off by default: it changes what the cursor looks like, so it should be
+    -- an explicit choice rather than something an update does to you.
+    showResourceRing = false,
+    resourceRingColorMode = "power",  -- power | class | custom
+    resourceRingCustomColor = {r = 0.3, g = 0.5, b = 0.9},
+    resourceRingAlpha = 0.55,
+
     -- Test mode
     testMode = false,
 
@@ -1849,6 +1858,13 @@ function ER:StopCastAnimation()
 end
 
 function ER:GCDCastHandler(self, event, unit, spellName, spellId)
+    -- Belt and braces alongside RegisterUnitEvent: if these ever get
+    -- re-registered with a plain RegisterEvent, every raid member's cast would
+    -- otherwise retrigger the player's GCD sweep -- and the throttle below
+    -- would then swallow the player's own cast whenever somebody else cast
+    -- within the preceding 100ms.
+    if unit and unit ~= "player" then return end
+
     if GetTime() - ER.lastGCDTime < 0.1 then return end
 
     ER.lastGCDTime = GetTime()
@@ -1861,28 +1877,48 @@ function ER:GCDCastHandler(self, event, unit, spellName, spellId)
 end
 
 function ER:CastEventHandler(self, event, unit)
+    -- See GCDCastHandler: these read UnitCastingInfo("player") regardless of
+    -- which unit the event was about, so anything but the player must be
+    -- dropped here rather than acted on.
+    if unit and unit ~= "player" then return end
+
     local startTime, endTime, infoValid = nil, nil, false
 
-    if event == "UNIT_SPELLCAST_START" then
+    if event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_DELAYED" then
+        -- DELAYED is pushback: the cast now ends later than it did, so the
+        -- times are re-read and the sweep re-seeded rather than left to drift.
         local cName, cRank, cTarget, cStartTime, cEndTime = UnitCastingInfo("player")
         startTime, endTime = cStartTime, cEndTime
         infoValid = true
 
-    elseif event == "UNIT_SPELLCAST_CHANNEL_START" then
+    elseif event == "UNIT_SPELLCAST_CHANNEL_START" or event == "UNIT_SPELLCAST_CHANNEL_UPDATE" then
+        -- CHANNEL_UPDATE is the channel equivalent: haste procs and talents
+        -- that extend or shorten a channel land here.
         local chName, chRank, chTarget, chStartTime, chEndTime, isMoving = UnitChannelInfo("player")
         startTime, endTime = chStartTime, chEndTime
         infoValid = true
+
+    elseif event == "UNIT_SPELLCAST_STOP"
+        or event == "UNIT_SPELLCAST_CHANNEL_STOP"
+        or event == "UNIT_SPELLCAST_INTERRUPTED"
+        or event == "UNIT_SPELLCAST_FAILED"
+    then
+        ER:StopCastAnimation()
+        return
     end
 
-    if infoValid and startTime and endTime then
-        local duration = (endTime - startTime) / 1000
+    if infoValid then
+        if not (startTime and endTime) then
+            -- The cast ended between the event firing and this read, so there
+            -- is nothing to animate; leaving the ring up would strand it.
+            ER:StopCastAnimation()
+            return
+        end
 
+        local duration = (endTime - startTime) / 1000
         if duration > 0.1 then
             ER:StartCastAnimation(startTime / 1000, duration)
         end
-
-    elseif event == "UNIT_SPELLCAST_STOP" or event == "UNIT_SPELLCAST_CHANNEL_STOP" then
-        ER:StopCastAnimation()
     end
 end
 
@@ -1943,6 +1979,12 @@ function ER:UpdateVisibility(forceState)
     ER:UpdateECVVisibility(inCombat)
     ER:UpdateBCVVisibility(inCombat)
     ER:UpdateGCVVisibility(inCombat)
+
+    -- The resource ring rides the cursor rings' visibility rather than owning
+    -- a second in-combat setting that could drift out of step with them.
+    if ThugUI.ResourceRing then
+        ThugUI.ResourceRing:Update()
+    end
 end
 
 function ER:ResetCooldownFrames()
@@ -2114,6 +2156,12 @@ function ER:SetupUI()
     -- Build the Guardian Cooldown Viewer
     ER:CreateGCV()
 
+    -- Resource ring last: it sizes itself from ER.CastFrame, which only exists
+    -- once the block above has run.
+    if ThugUI.ResourceRing then
+        ThugUI.ResourceRing:Initialize()
+    end
+
     TrackerFrame:UnregisterEvent("PLAYER_ENTERING_WORLD")
 end
 
@@ -2135,8 +2183,13 @@ function ER:OnInitialize()
                 ER:SetupUI()
             end
 
-        elseif event:match("UNIT_SPELLCAST_") then
+        elseif event == "UNIT_SPELLCAST_SENT" then
+            -- SENT is the GCD trigger and nothing else. It used to fall into
+            -- the same branch as the cast events, so every cast event ran both
+            -- handlers and the GCD sweep was being re-poked by STOPs.
             ER:GCDCastHandler(self, event, ...)
+
+        elseif event:match("^UNIT_SPELLCAST_") then
             ER:CastEventHandler(self, event, ...)
 
         elseif event == "PLAYER_REGEN_DISABLED" then

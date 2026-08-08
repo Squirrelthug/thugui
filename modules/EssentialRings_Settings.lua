@@ -1752,28 +1752,54 @@ function ER:ApplySettings()
         end
     end
 
-    -- Register/unregister events based on enabled features
+    -- Register/unregister events based on enabled features.
+    --
+    -- RegisterUnitEvent(..., "player"), never RegisterEvent. UNIT_SPELLCAST_*
+    -- fires for every unit in range, and the handlers read UnitCastingInfo
+    -- ("player") unconditionally -- so with a plain RegisterEvent, any raid
+    -- member finishing any cast ran StopCastAnimation() on YOUR ring. The cast
+    -- ring survived about as long as the gap between other people's casts,
+    -- which is why it worked solo for months and fell apart in a raid.
+    --
+    -- DELAYED and CHANNEL_UPDATE matter for the same setting: pushback from
+    -- raid damage moves endTime, and without re-reading it the swipe drifts
+    -- out of sync with the cast it is supposed to be tracking.
+    local CAST_EVENTS = {
+        "UNIT_SPELLCAST_START",
+        "UNIT_SPELLCAST_STOP",
+        "UNIT_SPELLCAST_CHANNEL_START",
+        "UNIT_SPELLCAST_CHANNEL_STOP",
+        "UNIT_SPELLCAST_DELAYED",
+        "UNIT_SPELLCAST_CHANNEL_UPDATE",
+        -- A cast can end without a STOP; without these the ring sticks.
+        "UNIT_SPELLCAST_INTERRUPTED",
+        "UNIT_SPELLCAST_FAILED",
+    }
+
     if ER.TrackerFrame then
         if ER.enableGCD then
-            ER.TrackerFrame:RegisterEvent("UNIT_SPELLCAST_SENT")
+            ER.TrackerFrame:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
         else
             ER.TrackerFrame:UnregisterEvent("UNIT_SPELLCAST_SENT")
         end
 
-        if ER.enableCast then
-            ER.TrackerFrame:RegisterEvent("UNIT_SPELLCAST_START")
-            ER.TrackerFrame:RegisterEvent("UNIT_SPELLCAST_STOP")
-            ER.TrackerFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")
-            ER.TrackerFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
-        else
-            ER.TrackerFrame:UnregisterEvent("UNIT_SPELLCAST_START")
-            ER.TrackerFrame:UnregisterEvent("UNIT_SPELLCAST_STOP")
-            ER.TrackerFrame:UnregisterEvent("UNIT_SPELLCAST_CHANNEL_START")
-            ER.TrackerFrame:UnregisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
+        for _, event in ipairs(CAST_EVENTS) do
+            if ER.enableCast then
+                ER.TrackerFrame:RegisterUnitEvent(event, "player")
+            else
+                ER.TrackerFrame:UnregisterEvent(event)
+            end
         end
     end
 
     ER:UpdateRingColors()
     ER:UpdateVisibility()
     ER:UpdateReticle()
+
+    -- The resource ring borrows the cast ring's size and rotation, so it has to
+    -- be re-synced whenever a ring slot assignment changes those.
+    if ThugUI.ResourceRing then
+        ThugUI.ResourceRing:SyncGeometry()
+        ThugUI.ResourceRing:Update()
+    end
 end

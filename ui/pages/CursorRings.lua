@@ -132,6 +132,57 @@ function Page:Build(host, panel)
         set = function(v) Cfg().castRotation = v; Call("ResetCooldownFrames") end,
     }
 
+    panel:Section("Resource ring")
+
+    panel:Note("A radial resource meter in the cast ring's band, with the cast sweep drawn "
+        .. "over the top. The resource follows your form on its own — rage in Bear, energy "
+        .. "in Cat, Astral Power in Moonkin — so there is nothing to configure per spec.")
+
+    panel:Checkbox{
+        label = "Show resource ring",
+        get = function() return Cfg().showResourceRing end,
+        set = function(v)
+            Cfg().showResourceRing = v
+            if ThugUI.ResourceRing then ThugUI.ResourceRing:Update() end
+        end,
+    }
+
+    panel:Dropdown{
+        label = "Colour:", width = 170,
+        options = {
+            { value = "power",  text = "Match the resource" },
+            { value = "class",  text = "Class colour" },
+            { value = "custom", text = "Custom colour" },
+        },
+        get = function() return Cfg().resourceRingColorMode or "power" end,
+        set = function(v)
+            Cfg().resourceRingColorMode = v
+            if ThugUI.ResourceRing then ThugUI.ResourceRing:UpdateColor() end
+        end,
+    }
+    panel:Color{
+        get = function()
+            local c = Cfg().resourceRingCustomColor
+            if not c then return 1, 1, 1 end
+            return c.r, c.g, c.b
+        end,
+        set = function(r, g, b)
+            Cfg().resourceRingCustomColor = { r = r, g = g, b = b }
+            if ThugUI.ResourceRing then ThugUI.ResourceRing:UpdateColor() end
+        end,
+        sameLine = true,
+    }
+
+    panel:Slider{
+        label = "Resource ring opacity", min = 0.1, max = 1.0, step = 0.05, format = "%.2f",
+        tooltip = "Kept below full by default so the cast sweep stays legible over it.",
+        get = function() return Cfg().resourceRingAlpha or 0.55 end,
+        set = function(v)
+            Cfg().resourceRingAlpha = v
+            if ThugUI.ResourceRing then ThugUI.ResourceRing:UpdateColor() end
+        end,
+    }
+
     panel:Section("Visibility")
 
     panel:Checkbox{
