@@ -631,11 +631,24 @@ function Page:BuildInspector(host)
         options = Data.COLLAPSE_MODES,
         width = 190,
         get = function() return Profile().collapse or "none" end,
-        set = function(v) Profile().collapse = v; Apply(); Page:Refresh() end,
+        set = function(v)
+            local profile = Profile()
+            profile.collapse = v
+            -- Direction is per-axis. Carrying "left" into columns mode would
+            -- leave the menu showing a value that does nothing, so switching
+            -- axis resets to auto.
+            if not Data.IsDirectionValid(v, profile.collapseDirection) then
+                profile.collapseDirection = "auto"
+            end
+            Apply()
+            Page:Refresh()
+        end,
     }
 
     panel:Dropdown{
-        options = Data.COLLAPSE_DIRECTIONS,
+        options = function()
+            return Data.GetCollapseDirections(Profile().collapse or "rows")
+        end,
         width = 190,
         get = function() return Profile().collapseDirection or "auto" end,
         set = function(v) Profile().collapseDirection = v; Apply(); Page:Refresh() end,
@@ -721,10 +734,15 @@ function Page:Refresh()
     self.anchorLabel:SetText(("Cursor holds the grid at column %d, row %d.")
         :format(profile.anchorCol or 0, profile.anchorRow or 0))
 
-    if (profile.collapse or "none") == "rows" then
-        self.collapseNote:SetText(("Rows pack %s. Icons close up as they go on cooldown, and "
-            .. "a gap you left between clusters closes too — tick preview to see the real shape.")
+    local mode = profile.collapse or "none"
+    if mode == "rows" then
+        self.collapseNote:SetText(("Rows pack %s. Each row closes up on its own, so an icon "
+            .. "never changes row. A gap you left between clusters closes too.")
             :format(Data.ResolveCollapseDirection(profile)))
+    elseif mode == "columns" then
+        self.collapseNote:SetText(("Columns pack %s. When a column empties, the rest slide "
+            .. "%s to fill the gap.")
+            :format(Data.ResolveCollapseDirection(profile), Data.ResolveColumnShift(profile)))
     else
         self.collapseNote:SetText("Icons hold their cells. A spell on cooldown leaves a hole "
             .. "where it was.")

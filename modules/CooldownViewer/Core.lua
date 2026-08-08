@@ -282,44 +282,109 @@ function CV:ApplyLayout()
     local profile = CV:CurrentProfile()
     local cellW, cellH, _, pad = self:GetCellSize(profile)
 
-    local function Put(icon, col)
+    local function Put(icon, col, row)
         icon:ClearAllPoints()
         icon:SetPoint("TOPLEFT", f, "TOPLEFT",
             (col - 1) * cellW + pad / 2,
-            -((icon.row - 1) * cellH + pad / 2))
+            -((row - 1) * cellH + pad / 2))
     end
 
-    if (profile.collapse or "none") ~= "rows" then
+    --- Bucket icons by one axis. `key` picks the bucket, `order` sorts within.
+    local function Bucket(key, order)
+        local buckets, keys = {}, {}
         for _, icon in pairs(self.icons) do
-            Put(icon, icon.col)
+            local k = icon[key]
+            if not buckets[k] then
+                buckets[k] = {}
+                table.insert(keys, k)
+            end
+            table.insert(buckets[k], icon)
         end
-        return
+        table.sort(keys)
+        for _, list in pairs(buckets) do
+            table.sort(list, function(a, b) return a[order] < b[order] end)
+        end
+        return buckets, keys
     end
 
-    -- Bucket by row; each row compacts independently, which is what keeps an
-    -- icon at a constant height no matter what else is on cooldown.
-    local rows = {}
-    for _, icon in pairs(self.icons) do
-        rows[icon.row] = rows[icon.row] or {}
-        table.insert(rows[icon.row], icon)
-    end
-
-    local packRight = Data.ResolveCollapseDirection(profile) == "right"
-
-    for _, list in pairs(rows) do
-        table.sort(list, function(a, b) return a.col < b.col end)
-
-        -- Pack from the row's own outermost PLACED column, not the grid edge:
-        -- a row at full strength must land exactly where the editor drew it.
-        local firstCol, lastCol = list[1].col, list[#list].col
-
+    --- The live icons of a list, in order.
+    local function Live(list)
         local live = {}
         for _, icon in ipairs(list) do
             if icon.wanted then table.insert(live, icon) end
         end
+        return live
+    end
 
-        for i, icon in ipairs(live) do
-            Put(icon, packRight and (lastCol - (#live - i)) or (firstCol + i - 1))
+    --- Slot index for the i-th of n survivors packing between first and last.
+    --- Packing runs from the group's own outermost PLACED slot, never the grid
+    --- edge, so a group at full strength lands exactly where it was drawn.
+    local function Slot(i, n, first, last, packHigh)
+        if packHigh then return last - (n - i) end
+        return first + i - 1
+    end
+
+    local mode = profile.collapse or "none"
+
+    if mode == "none" then
+        for _, icon in pairs(self.icons) do
+            Put(icon, icon.col, icon.row)
+        end
+        return
+    end
+
+    if mode == "rows" then
+        -- One stage: each row compacts horizontally on its own, which is what
+        -- keeps an icon at a constant height no matter what is on cooldown.
+        local packRight = Data.ResolveCollapseDirection(profile) == "right"
+        local rows = Bucket("row", "col")
+
+        for _, list in pairs(rows) do
+            local first, last = list[1].col, list[#list].col
+            local live = Live(list)
+            for i, icon in ipairs(live) do
+                Put(icon, Slot(i, #live, first, last, packRight), icon.row)
+            end
+        end
+        return
+    end
+
+    if mode == "columns" then
+        -- Two stages.
+        --
+        -- Stage 1: each column compacts vertically within itself, so an icon
+        -- keeps its column and only slides along it.
+        --
+        -- Stage 2: a column with nothing live left vacates entirely, and the
+        -- surviving columns close horizontally into the gap. Without this a
+        -- spent column would leave a hole the width of an icon in the middle
+        -- of the shape, which is the whole thing collapse exists to avoid.
+        local packDown = Data.ResolveCollapseDirection(profile) == "down"
+        local packRight = Data.ResolveColumnShift(profile) == "right"
+
+        local columns, colNums = Bucket("col", "row")
+
+        local liveColumns = {}
+        for _, col in ipairs(colNums) do
+            if #Live(columns[col]) > 0 then
+                table.insert(liveColumns, col)
+            end
+        end
+
+        local firstCol, lastCol = colNums[1], colNums[#colNums]
+
+        for i, col in ipairs(liveColumns) do
+            local displayCol = Slot(i, #liveColumns, firstCol, lastCol, packRight)
+
+            -- Each column keeps its own vertical origin as it shifts sideways,
+            -- so the shape's profile survives the move.
+            local list = columns[col]
+            local firstRow, lastRow = list[1].row, list[#list].row
+            local live = Live(list)
+
+            for j, icon in ipairs(live) do
+                Put(icon, displayCol, Slot(j, #live, firstRow, lastRow, packDown))
+            end
         end
     end
 end

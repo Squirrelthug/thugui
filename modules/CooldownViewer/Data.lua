@@ -57,26 +57,71 @@ Data.MODES = {
 -- Within a row the whole thing is treated as ONE run: a deliberate horizontal
 -- gap between two clusters does not survive a collapse. That is a chosen
 -- trade -- it keeps the rule "a row is never gappy" simple and total.
+--   columns -- each column compacts vertically on its own, and a column left
+--              with nothing live vacates entirely: the remaining columns then
+--              close horizontally into the gap. Two stages, where rows has
+--              one. This is the shape to pick when a layout is built up or
+--              down rather than across.
 Data.COLLAPSE_MODES = {
-    { value = "none", text = "Leave the gap" },
-    { value = "rows", text = "Rows collapse sideways" },
+    { value = "none",    text = "Leave the gap" },
+    { value = "rows",    text = "Rows collapse sideways" },
+    { value = "columns", text = "Columns collapse vertically" },
 }
 
-Data.COLLAPSE_DIRECTIONS = {
-    { value = "auto",  text = "Auto (from anchor)" },
-    { value = "left",  text = "Always left" },
-    { value = "right", text = "Always right" },
+-- Direction is per-axis: a row can only pack left or right, a column only up
+-- or down. Offering all four in one list would let you pick a direction that
+-- silently does nothing, so the menu is built from the mode.
+local COLLAPSE_DIRECTIONS = {
+    rows = {
+        { value = "auto",  text = "Auto (from anchor)" },
+        { value = "left",  text = "Always left" },
+        { value = "right", text = "Always right" },
+    },
+    columns = {
+        { value = "auto", text = "Auto (from anchor)" },
+        { value = "up",   text = "Always up" },
+        { value = "down", text = "Always down" },
+    },
 }
 
---- "left" or "right" -- the direction rows pack toward.
+function Data.GetCollapseDirections(mode)
+    return COLLAPSE_DIRECTIONS[mode] or COLLAPSE_DIRECTIONS.rows
+end
+
+--- Is this direction meaningful for this collapse mode?
+function Data.IsDirectionValid(mode, direction)
+    if direction == "auto" then return true end
+    for _, option in ipairs(Data.GetCollapseDirections(mode)) do
+        if option.value == direction then return true end
+    end
+    return false
+end
+
+--- The axis direction icons pack toward: "left"/"right" in rows mode,
+--- "up"/"down" in columns mode.
+---
+--- Auto reads the anchor. An anchor right of centre means the shape hangs to
+--- the LEFT of the cursor, so its icons pack rightwards, towards the cursor;
+--- an anchor low on the grid means the shape hangs ABOVE the cursor, so its
+--- icons pack downwards. Dead centre is genuinely ambiguous and falls to the
+--- first option, which is what the explicit override is for.
 function Data.ResolveCollapseDirection(profile)
+    local mode = profile.collapse or "none"
     local direction = profile.collapseDirection or "auto"
-    if direction == "left" or direction == "right" then return direction end
 
-    -- An anchor right of centre means the shape hangs to the LEFT of the
-    -- cursor, so its icons should pack rightwards, towards the cursor. Dead
-    -- centre is genuinely ambiguous; it falls to "left" and the explicit
-    -- override exists for exactly that case.
+    if mode == "columns" then
+        if direction == "up" or direction == "down" then return direction end
+        return (profile.anchorRow or 0) > Data.GRID_ROWS / 2 and "down" or "up"
+    end
+
+    if direction == "left" or direction == "right" then return direction end
+    return (profile.anchorCol or 0) > Data.GRID_COLS / 2 and "right" or "left"
+end
+
+--- Columns mode only: which way surviving columns slide when one empties.
+--- Always derived from the anchor rather than exposed as a setting -- it is
+--- the second stage of one behaviour, not a separate choice to make.
+function Data.ResolveColumnShift(profile)
     return (profile.anchorCol or 0) > Data.GRID_COLS / 2 and "right" or "left"
 end
 

@@ -242,6 +242,23 @@ local function DisplayCols(CV, Data, row, placedCols)
     return out
 end
 
+--- Same idea on the vertical axis: recover the grid row an icon was drawn in.
+local function DisplayRows(CV, Data, col, placedRows)
+    local profile = Data.GetActiveProfile()
+    local cellH = (profile.iconSize or 32) + (profile.padding or 4)
+    local pad = profile.padding or 4
+
+    local out = {}
+    for i, row in ipairs(placedRows) do
+        local icon = CV.icons[Data.CellKey(row, col)]
+        assert(icon, ("no icon at row %d col %d"):format(row, col))
+        assert(icon.__point, ("icon at row %d col %d was never positioned"):format(row, col))
+        -- y offsets are negative going down, hence the sign flip.
+        out[i] = math.floor((-icon.__point[5] - pad / 2) / cellH + 0.5) + 1
+    end
+    return out
+end
+
 local function assertSame(got, want, message)
     assert(#got == #want, ("%s (length %d, wanted %d)"):format(message, #got, #want))
     for i = 1, #want do
@@ -435,6 +452,99 @@ if failures == 0 and ThugUI.CooldownViewer then
             CV:ApplyLayout()
             assertSame(DisplayCols(CV, Data, 1, { 1, 8, 9 }), { 1, 8, 9 },
                 "icons moved with collapse off")
+        end },
+
+        -- Columns mode, stage 1: icons slide along their own column and never
+        -- change column while anything in it is still live.
+        { "columns pack vertically within a column", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse, profile.collapseDirection = "columns", "up"
+            profile.anchorCol, profile.anchorRow = 0, 0
+            -- One column of three, starting at row 3 rather than row 1.
+            Data.SetPlacement(profile, 3, 2, 111, "cooldown")
+            Data.SetPlacement(profile, 4, 2, 222, "cooldown")
+            Data.SetPlacement(profile, 5, 2, 333, "cooldown")
+            CV:Rebuild()
+
+            assertSame(DisplayRows(CV, Data, 2, { 3, 4, 5 }), { 3, 4, 5 },
+                "full-strength column moved off its resting cells")
+
+            CV.icons[Data.CellKey(4, 2)].wanted = false
+            CV:ApplyLayout()
+            assertSame(DisplayRows(CV, Data, 2, { 3, 5 }), { 3, 4 },
+                "column did not close up toward its origin")
+        end },
+
+        { "columns can pack downward", function()
+            local profile = Data.GetActiveProfile()
+            profile.collapseDirection = "down"
+            for _, icon in pairs(CV.icons) do icon.wanted = true end
+            CV:ApplyLayout()
+            assertSame(DisplayRows(CV, Data, 2, { 3, 4, 5 }), { 3, 4, 5 },
+                "full-strength column moved when packing down")
+
+            CV.icons[Data.CellKey(4, 2)].wanted = false
+            CV:ApplyLayout()
+            assertSame(DisplayRows(CV, Data, 2, { 3, 5 }), { 4, 5 },
+                "column did not close up toward its bottom")
+        end },
+
+        -- Stage 2: an entirely spent column vacates and the rest close in.
+        { "an emptied column lets the others slide in", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse, profile.collapseDirection = "columns", "up"
+            profile.anchorCol, profile.anchorRow = 0, 0
+            -- Three columns at 2, 3 and 4, one icon each.
+            Data.SetPlacement(profile, 1, 2, 111, "cooldown")
+            Data.SetPlacement(profile, 1, 3, 222, "cooldown")
+            Data.SetPlacement(profile, 1, 4, 333, "cooldown")
+            CV:Rebuild()
+            assertSame(DisplayCols(CV, Data, 1, { 2, 3, 4 }), { 2, 3, 4 },
+                "full-strength columns moved")
+
+            -- Empty the middle column entirely.
+            CV.icons[Data.CellKey(1, 3)].wanted = false
+            CV:ApplyLayout()
+            assertSame(DisplayCols(CV, Data, 1, { 2, 4 }), { 2, 3 },
+                "columns did not close the gap left by an empty column")
+        end },
+
+        { "a column with anything live does not vacate", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse, profile.collapseDirection = "columns", "up"
+            Data.SetPlacement(profile, 1, 2, 111, "cooldown")
+            Data.SetPlacement(profile, 1, 3, 222, "cooldown")
+            Data.SetPlacement(profile, 2, 3, 444, "cooldown")
+            Data.SetPlacement(profile, 1, 4, 333, "cooldown")
+            CV:Rebuild()
+
+            -- Column 3 loses one of its two, so it must hold its place.
+            CV.icons[Data.CellKey(1, 3)].wanted = false
+            CV:ApplyLayout()
+            assertSame(DisplayCols(CV, Data, 1, { 2, 4 }), { 2, 4 },
+                "a column that still had a live icon was vacated")
+            assertSame(DisplayCols(CV, Data, 2, { 3 }), { 3 },
+                "surviving icon left its column")
+        end },
+
+        { "direction validity is per axis", function()
+            assert(Data.IsDirectionValid("rows", "left"), "left should be valid for rows")
+            assert(not Data.IsDirectionValid("rows", "up"), "up should be invalid for rows")
+            assert(Data.IsDirectionValid("columns", "down"), "down should be valid for columns")
+            assert(not Data.IsDirectionValid("columns", "right"), "right should be invalid for columns")
+            assert(Data.IsDirectionValid("columns", "auto"), "auto should always be valid")
+        end },
+
+        { "auto direction for columns reads the anchor row", function()
+            local profile = Data.GetActiveProfile()
+            profile.collapse, profile.collapseDirection = "columns", "auto"
+            profile.anchorRow = 0
+            assert(Data.ResolveCollapseDirection(profile) == "up", "anchor at top should pack up")
+            profile.anchorRow = 10
+            assert(Data.ResolveCollapseDirection(profile) == "down", "anchor at bottom should pack down")
         end },
 
         -- Regression: the grid used to vanish wholesale in combat because
