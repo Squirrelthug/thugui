@@ -475,6 +475,17 @@ function ER:IsGuardianSpec()
     return ER:IsDruid() and ER:GetActiveSpecIndex() == DRUID_SPEC_GUARDIAN
 end
 
+-- The ECV/BCV/GCV bars below have been superseded by the generic, per-spec grid
+-- engine in modules/CooldownViewer. They are kept intact, not deleted, as the
+-- fallback: setting ThugUI_Config.cvUseLegacy (or /thugcv legacy) hands control
+-- back to them wholesale. Their settings panels are untouched too.
+--
+-- While the grid engine owns the cooldown viewer, every legacy bar reports
+-- "should not be visible" so the two systems can never draw at once.
+function ER:LegacyBarsActive()
+    return ThugUI_Config and ThugUI_Config.cvUseLegacy and true or false
+end
+
 -- Cursor state tracking
 ER.cursorHidden = false
 ER.emptyCursorPath = "Interface\\AddOns\\ThugUI\\media\\Empty_Cursor"
@@ -1407,6 +1418,11 @@ end
 function ER:UpdateBCVVisibility(inCombat)
     if not ER.bcvContainer then return end
 
+    if not ER:LegacyBarsActive() then
+        ER.bcvContainer:Hide()
+        return
+    end
+
     if not ThugUI_Config.showBCV or not ER:IsBalanceSpec() then
         ER.bcvContainer:Hide()
         return
@@ -1599,6 +1615,11 @@ end
 function ER:UpdateGCVVisibility(inCombat)
     if not ER.gcvContainer then return end
 
+    if not ER:LegacyBarsActive() then
+        ER.gcvContainer:Hide()
+        return
+    end
+
     if not ThugUI_Config.showGCV or not ER:IsGuardianSpec() then
         ER.gcvContainer:Hide()
         return
@@ -1665,6 +1686,12 @@ end
 
 function ER:UpdateECVVisibility(inCombat)
     if not ER.ecvContainer then return end
+
+    if not ER:LegacyBarsActive() then
+        ER.ecvContainer:Hide()
+        return
+    end
+
     -- This bar tracks Restoration spells, so it is hidden entirely outside
     -- Restoration spec (icons, cursor-follow, and all).
     if not ER:IsRestoSpec() then

@@ -6,7 +6,7 @@ ThugUI.modules = {}
 
 -- Addon info
 ThugUI.name = "ThugUI"
-ThugUI.version = "1.0.0"
+ThugUI.version = "1.1.0"
 
 -- Saved variables (initialized on load)
 ThugUIDB = ThugUIDB or {}

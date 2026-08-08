@@ -1,8 +1,9 @@
 ## Interface: 120007
 ## Title: ThugUI
-## Notes: Enhanced UI features including Essential Rings - cursor-centered cooldown tracking
+## Notes: Enhanced UI features including per-spec cursor-anchored cooldown grids
 ## Author: Thug
-## IconTexture: Interface\AddOns\ThugUI\media\ThugUI_Icon
+## Version: 1.1.0
+## IconTexture: Interface\AddOns\ThugUI\media\Acorn
 ## SavedVariables: ThugUI_Config ThugUI_DebugLog ThugUI_BCVDump ThugUIDB
 
 ThugUI.xml
@@ -19,6 +20,11 @@ core.lua
 # through the addon namespace as ns.oUF. Must load before anything using it.
 libs\oUF\oUF.xml
 
+# Config window framework. Widgets before Window (Window builds panels from it),
+# and both before anything in ui\pages, which registers itself at file scope.
+ui\Widgets.lua
+ui\Window.lua
+
 modules\EssentialRings.lua
 modules\EssentialRings_Settings.lua
 
@@ -33,6 +39,23 @@ modules\TargetOfTarget\Core.lua
 modules\TargetOfTarget\Settings.lua
 
 modules\FrameHider.lua
+
+# Cooldown viewer: the generic per-spec grid engine that supersedes the
+# ECV/BCV/GCV bars in EssentialRings.lua. Data holds the profiles and the spell
+# catalogue; Core renders them. Loads after EssentialRings because its one-time
+# migration reads that file's legacy spell definitions.
+modules\CooldownViewer\Data.lua
+modules\CooldownViewer\Core.lua
+
+# Pages for the config window. Each registers itself on load, so every module it
+# configures must already be defined above.
+ui\pages\CooldownViewer.lua
+ui\pages\OrbAnchors.lua
+ui\pages\FrameHider.lua
+ui\pages\CursorRings.lua
+ui\pages\RaidFrames.lua
+ui\pages\TargetOfTarget.lua
+ui\pages\About.lua
+
 options.lua
 modules\OrbAnchors.lua
-
