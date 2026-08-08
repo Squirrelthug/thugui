@@ -567,6 +567,57 @@ SlashCmdList["THUGCV"] = function(msg)
         return
     end
 
+    -- Every reason the viewer can decline to draw, in the order ShouldShow
+    -- checks them. "It works in preview but not in combat" has half a dozen
+    -- possible causes and no visible difference between them; this prints
+    -- which one is actually firing.
+    if msg == "status" then
+        local specID = Data.GetActiveSpecID()
+        local profile = Data.GetActiveProfile()
+        local placed = 0
+        for _ in pairs(profile.placements) do placed = placed + 1 end
+
+        local function YesNo(value, goodIsTrue)
+            local good = goodIsTrue and value or not value
+            return (good and "|cff40ff40" or "|cffff4040") .. tostring(value and "yes" or "no") .. "|r"
+        end
+
+        print("|cff00ffccThugUI cooldown viewer|r")
+        print(("  spec: %s (%s)"):format(Data.GetSpecName(specID), tostring(specID)))
+        if not specID then
+            print("  |cffff4040No spec ID — edits are not being saved. Relog.|r")
+        end
+        print("  legacy mode:      " .. YesNo(CV:IsLegacyMode(), false))
+        print("  enabled:          " .. YesNo(profile.enabled, true))
+        print("  icons placed:     " .. (placed > 0
+            and ("|cff40ff40" .. placed .. "|r")
+            or "|cffff40400|r"))
+        print("  only in combat:   " .. tostring(profile.onlyInCombat)
+            .. "   in combat now: " .. YesNo(InCombat(), true))
+        print("  follow cursor:    " .. tostring(profile.followCursor))
+        print("  preview forced:   " .. tostring(CV.previewMode))
+        print("  collapse:         " .. tostring(profile.collapse)
+            .. " (" .. Data.ResolveCollapseDirection(profile) .. ")")
+        print("  |cffffd100would draw right now: " .. YesNo(CV:ShouldShow(), true) .. "|r")
+
+        if not profile.enabled then
+            print("  |cffffd100-> 'Enabled' is off for this spec. Tick it on the "
+                .. "Cooldown Viewer page; preview ignores it, combat does not.|r")
+        end
+
+        local unknown = {}
+        for _, placement in pairs(profile.placements) do
+            if not IsSpellKnown(placement.spellID) then
+                table.insert(unknown, placement.spellID)
+            end
+        end
+        if #unknown > 0 then
+            print(("  |cffffd100-> %d placed spell(s) are not known in this spec and will "
+                .. "never draw: %s|r"):format(#unknown, table.concat(unknown, ", ")))
+        end
+        return
+    end
+
     ThugUI:ToggleOptions("cooldownviewer")
 end
 
