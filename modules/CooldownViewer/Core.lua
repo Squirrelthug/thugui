@@ -54,12 +54,22 @@ local function InCombat()
     return InCombatLockdown() or UnitAffectingCombat("player")
 end
 
-local function IsSpellKnown(spellID)
-    if not spellID then return false end
-    if IsPlayerSpell and IsPlayerSpell(spellID) then return true end
-    if IsSpellKnownOrOverridesKnown and IsSpellKnownOrOverridesKnown(spellID) then return true end
-    if C_SpellBook and C_SpellBook.IsSpellKnown and C_SpellBook.IsSpellKnown(spellID) then return true end
-    return false
+--- Is this spell available to the player right now?
+---
+--- Asked BY NAME, because C_Spell.GetSpellInfo only resolves a name to a spell
+--- the player actually has -- a nil return doubles as "not talented". By ID it
+--- resolves for any spell in the game, so an ID check answers a different
+--- question entirely.
+---
+--- This also handles override spells, which is where an ID check goes wrong in
+--- both directions: a talent that replaces a base spell leaves IsPlayerSpell
+--- disagreeing with itself depending on which of the pair you ask about, so
+--- icons flicker in and out as talents and overrides shift. The stored ID picks
+--- the artwork; the name decides whether it draws.
+local function IsSpellAvailable(spellName)
+    if not spellName then return false end
+    local ok, info = pcall(C_Spell.GetSpellInfo, spellName)
+    return (ok and info and info.spellID) and true or false
 end
 
 --- Is the spell usable right now? Returns ready, charges.
@@ -78,19 +88,27 @@ end
 ---
 --- This mirrors IsSpellReady in modules/EssentialRings.lua, which is the logic
 --- the original druid bars have been running on all along.
-local function IsSpellReady(spellID)
+--- Queried BY NAME for the same reason as IsSpellAvailable: the name resolves
+--- to whichever version of the spell the player currently has talented, so the
+--- cooldown read always matches the button they actually press.
+local function IsSpellReady(spellName)
     -- Charge builds are ready whenever a charge is banked, even though the
     -- recharge timer is always running.
-    local ok, chargeInfo = pcall(C_Spell.GetSpellCharges, spellID)
+    local ok, chargeInfo = pcall(C_Spell.GetSpellCharges, spellName)
     if ok and chargeInfo and chargeInfo.maxCharges and chargeInfo.maxCharges > 1 then
         local current = chargeInfo.currentCharges
         if current ~= nil and not (issecretvalue and issecretvalue(current)) then
             return current > 0, current
         end
-        -- Charges are secret this tick; fall through to the isActive path.
+        -- Charges are secret this tick (they often are in combat). Falling
+        -- through to isActive would read the *recharge* timer, which for a
+        -- charge spell is essentially always running, and the icon would sit
+        -- hidden even with charges banked. Fail open instead: a reminder that
+        -- shows slightly too eagerly beats one that disappears mid-fight.
+        return true
     end
 
-    local ok2, cdInfo = pcall(C_Spell.GetSpellCooldown, spellID)
+    local ok2, cdInfo = pcall(C_Spell.GetSpellCooldown, spellName)
     if ok2 and cdInfo then
         if cdInfo.isOnGCD then return true end
         if cdInfo.isActive then return false end
@@ -102,8 +120,8 @@ end
 --- Drive an icon's sweep for "always" mode. start/duration are passed straight
 --- to SetCooldown without ever being compared here -- handing secret values to
 --- Blizzard's own API is fine, inspecting them is not.
-local function ApplySweep(icon, spellID)
-    local ok, cdInfo = pcall(C_Spell.GetSpellCooldown, spellID)
+local function ApplySweep(icon, spellName)
+    local ok, cdInfo = pcall(C_Spell.GetSpellCooldown, spellName)
     if ok and cdInfo and cdInfo.isActive and not cdInfo.isOnGCD then
         icon.cooldown:SetCooldown(cdInfo.startTime, cdInfo.duration, cdInfo.modRate)
     else
@@ -232,6 +250,11 @@ function CV:Rebuild()
         local texture = C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(placement.spellID)
         icon.tex:SetTexture(texture)
         icon.spellID = placement.spellID
+        -- Resolved by ID (which works for any spell in the game) and cached, so
+        -- the per-frame path can query by name. Rebuild re-runs on
+        -- SPELLS_CHANGED / PLAYER_TALENT_UPDATE, so this stays current.
+        local spellInfo = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(placement.spellID)
+        icon.spellName = spellInfo and spellInfo.name
         icon.mode = placement.mode
         icon.row, icon.col = placement.row, placement.col
         -- Resting state is "everything present". UpdateState corrects it, but
@@ -327,9 +350,10 @@ function CV:UpdateState()
 
     for _, icon in pairs(self.icons) do
         local spellID = icon.spellID
+        local spellName = icon.spellName
         local show = false
 
-        if not IsSpellKnown(spellID) then
+        if not IsSpellAvailable(spellName) then
             show = false
         elseif icon.mode == "aura" then
             local aura = GetAura(spellID)
@@ -346,11 +370,11 @@ function CV:UpdateState()
                 icon.count:Hide()
             end
         else
-            local ready, charges = IsSpellReady(spellID)
+            local ready, charges = IsSpellReady(spellName)
 
             if icon.mode == "always" then
                 show = true
-                ApplySweep(icon, spellID)
+                ApplySweep(icon, spellName)
             else
                 -- "cooldown" mode: the icon IS the readiness signal, so there is
                 -- nothing to sweep -- it simply disappears once spent.
@@ -373,23 +397,33 @@ function CV:UpdateState()
     self:ApplyLayout()
 end
 
-function CV:ShouldShow()
+--- @param forceCombat boolean? treat combat as this instead of asking
+function CV:ShouldShow(forceCombat)
     if self:IsLegacyMode() then return false end
     if self.previewMode then return true end
 
     local profile = CV:CurrentProfile()
     if not profile.enabled then return false end
     if next(profile.placements) == nil then return false end
-    if profile.onlyInCombat and not InCombat() then return false end
+
+    local inCombat = forceCombat
+    if inCombat == nil then inCombat = InCombat() end
+    if profile.onlyInCombat and not inCombat then return false end
     return true
 end
 
-function CV:UpdateVisibility()
+--- @param forceCombat boolean? passed through to ShouldShow. PLAYER_REGEN_*
+--- supplies it because InCombatLockdown() is not guaranteed to have flipped
+--- yet while that event is being handled -- the same reason
+--- ER:UpdateVisibility is called as UpdateVisibility(true) from its own
+--- PLAYER_REGEN_DISABLED handler.
+function CV:UpdateVisibility(forceCombat)
     local f = self.container
     if not f then return end
 
-    if not self:ShouldShow() then
+    if not self:ShouldShow(forceCombat) then
         f:Hide()
+        self.anchoredToCursor = nil
         return
     end
 
@@ -404,10 +438,19 @@ function CV:UpdateVisibility()
 
     f:Show()
 
-    if profile.followCursor and (self.previewMode or InCombat()) then
+    local inCombat = forceCombat
+    if inCombat == nil then inCombat = InCombat() end
+
+    -- Only re-anchor on a transition. This runs on a timer now, and
+    -- re-issuing ReleaseAnchor every tick would ClearAllPoints out from under
+    -- a drag in progress.
+    local wantCursor = profile.followCursor and (self.previewMode or inCombat)
+    if wantCursor then
         self:UpdateCursorPosition()
-    else
+        self.anchoredToCursor = true
+    elseif self.anchoredToCursor ~= false then
         self:ReleaseAnchor()
+        self.anchoredToCursor = false
     end
 end
 
@@ -479,17 +522,29 @@ CV.driver = driver
 local elapsedSinceUpdate = 0
 
 driver:SetScript("OnUpdate", function(_, elapsed)
-    if not CV.container or not CV.container:IsShown() then return end
-
-    local profile = CV:CurrentProfile()
-    if profile.followCursor and (CV.previewMode or InCombat()) then
-        CV:UpdateCursorPosition()
-    end
-
     elapsedSinceUpdate = elapsedSinceUpdate + elapsed
     if elapsedSinceUpdate >= UPDATE_INTERVAL then
         elapsedSinceUpdate = 0
-        CV:UpdateState()
+
+        -- Visibility is re-evaluated here unconditionally, and deliberately
+        -- BEFORE the IsShown bail-out below. Driving it from PLAYER_REGEN_*
+        -- alone means a single missed or mistimed transition leaves the viewer
+        -- hidden for the rest of the fight, with nothing able to bring it back:
+        -- UpdateState and the cursor path both bail while it is hidden, so the
+        -- hidden state becomes self-sustaining. A poll makes wrong states last
+        -- 150ms instead of forever.
+        if not CV:IsLegacyMode() then
+            CV:UpdateVisibility()
+            CV:UpdateState()
+        end
+    end
+
+    if not CV.container or not CV.container:IsShown() then return end
+
+    -- Cursor tracking stays per-frame; anything slower visibly lags the mouse.
+    local profile = CV:CurrentProfile()
+    if profile.followCursor and (CV.previewMode or InCombat()) then
+        CV:UpdateCursorPosition()
     end
 end)
 
@@ -542,7 +597,10 @@ driver:SetScript("OnEvent", function(_, event, arg1)
     end
 
     if event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
-        CV:UpdateVisibility()
+        -- Forced rather than derived: InCombatLockdown() is not reliably
+        -- flipped yet while this event is being handled, and guessing wrong
+        -- here used to strand the viewer hidden for a whole fight.
+        CV:UpdateVisibility(event == "PLAYER_REGEN_DISABLED")
         CV:UpdateState()
         return
     end
@@ -626,14 +684,16 @@ SlashCmdList["THUGCV"] = function(msg)
 
         local unknown = {}
         for _, placement in pairs(profile.placements) do
-            if not IsSpellKnown(placement.spellID) then
-                table.insert(unknown, placement.spellID)
+            local info = C_Spell.GetSpellInfo(placement.spellID)
+            if not IsSpellAvailable(info and info.name) then
+                table.insert(unknown, (info and info.name or placement.spellID))
             end
         end
         if #unknown > 0 then
-            print(("  |cffffd100-> %d placed spell(s) are not known in this spec and will "
+            print(("  |cffffd100-> %d placed spell(s) do not resolve in this spec and will "
                 .. "never draw: %s|r"):format(#unknown, table.concat(unknown, ", ")))
         end
+        print("  container shown: " .. tostring(CV.container and CV.container:IsShown()))
         return
     end
 

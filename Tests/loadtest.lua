@@ -31,6 +31,18 @@ frameMT.__index = function(tbl, key)
         -- Shown-state is modelled, not stubbed away: several code paths early-
         -- return on IsShown, so a stub that always says false silently skips
         -- the very logic under test.
+        -- Handlers are stored so tests can fire events and OnUpdate ticks
+        -- directly, which is the only way to exercise the combat transitions.
+        if type(a) == "table" then
+            if key == "SetScript" then
+                a.__scripts = a.__scripts or {}
+                a.__scripts[a1] = a2
+                return
+            end
+            if key == "GetScript" then
+                return a.__scripts and a.__scripts[a1]
+            end
+        end
         if type(a) == "table" then
             if key == "Show" then a.__shown = true return end
             if key == "Hide" then a.__shown = false return end
@@ -87,8 +99,9 @@ local say = print
 function print() end
 function PlaySound() end
 function HideUIPanel() end
-function InCombatLockdown() return false end
-function UnitAffectingCombat() return false end
+_G.__inCombat = false
+function InCombatLockdown() return _G.__inCombat end
+function UnitAffectingCombat() return _G.__inCombat end
 function UnitClass() return "Druid", "DRUID" end
 function GetCursorPosition() return 500, 500 end
 function GetSpecialization() return 4 end
@@ -125,10 +138,20 @@ Enum = {
     SpellBookItemType = { None = 0, Spell = 1 },
 }
 
+_G.__unknownNames = {}
+
 C_Spell = {
+    -- Models the asymmetry the addon depends on: by ID this resolves for any
+    -- spell in the game, but by NAME only for one the player actually has.
+    -- __unknownNames marks names that should not resolve, standing in for a
+    -- spell that is not talented in the current spec.
     GetSpellInfo = function(q)
-        local id = tonumber(q) or 12345
-        return { spellID = id, name = "Spell " .. id, iconID = 999 }
+        local id = tonumber(q)
+        if id then return { spellID = id, name = "Spell " .. id, iconID = 999 } end
+        if _G.__unknownNames[q] then return nil end
+        local named = tostring(q):match("^Spell (%d+)$")
+        if named then return { spellID = tonumber(named), name = q, iconID = 999 } end
+        return nil
     end,
     GetSpellTexture = function() return 999 end,
     -- Cooldown state is per-spell and settable by the tests. The defaults
@@ -136,7 +159,9 @@ C_Spell = {
     -- nonsense values: in 12.x they are secret, and nothing in the addon is
     -- allowed to derive readiness from them, so a test that starts passing
     -- because of them is a test that has caught a real regression.
-    GetSpellCooldown = function(id)
+    GetSpellCooldown = function(q)
+        -- Keyed by ID, but the addon queries by name, so map back.
+        local id = tonumber(q) or tonumber(tostring(q):match("^Spell (%d+)$") or "")
         local state = _G.__cooldownState and _G.__cooldownState[id]
         return {
             isActive = state and state.isActive or false,
@@ -381,6 +406,46 @@ if failures == 0 and ThugUI.CooldownViewer then
 
             assert(not CV.icons[Data.CellKey(1, 1)].wanted, "spent spell stayed visible")
             assert(CV.icons[Data.CellKey(1, 2)].wanted, "ready spell was hidden")
+        end },
+
+        { "a spell that no longer resolves by name is hidden", function()
+            _G.__cooldownState[555] = { isOnGCD = false, isActive = false }
+            _G.__unknownNames["Spell 555"] = true
+            CV:UpdateState()
+            assert(not CV.icons[Data.CellKey(1, 1)].wanted,
+                "an untalented spell stayed visible")
+            _G.__unknownNames["Spell 555"] = nil
+            CV:UpdateState()
+            assert(CV.icons[Data.CellKey(1, 1)].wanted,
+                "spell did not come back once it resolved again")
+        end },
+
+        -- Regression: the viewer used to strand itself hidden for a whole
+        -- fight if InCombatLockdown() had not flipped when PLAYER_REGEN_DISABLED
+        -- fired, because nothing re-evaluated visibility afterwards.
+        { "combat start shows the viewer even if lockdown lags", function()
+            local profile = Data.GetActiveProfile()
+            profile.enabled, profile.onlyInCombat = true, true
+            CV.previewMode = false
+            _G.__inCombat = false  -- InCombatLockdown() still reports false
+
+            CV:UpdateVisibility()
+            assert(not CV.container:IsShown(), "viewer showed while out of combat")
+
+            -- The event fires before the lockdown flag catches up.
+            CV.driver:GetScript("OnEvent")(CV.driver, "PLAYER_REGEN_DISABLED")
+            assert(CV.container:IsShown(),
+                "viewer stayed hidden when combat started")
+        end },
+
+        { "a hidden viewer recovers on the next poll", function()
+            CV.container:Hide()
+            _G.__inCombat = true
+            -- The throttled branch of OnUpdate must re-evaluate visibility even
+            -- though the container is hidden.
+            CV.driver:GetScript("OnUpdate")(CV.driver, 10)
+            assert(CV.container:IsShown(), "poll did not recover a stuck-hidden viewer")
+            _G.__inCombat = false
         end },
 
         { "auto direction follows the anchor", function()
