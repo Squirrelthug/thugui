@@ -530,12 +530,121 @@ if failures == 0 and ThugUI.CooldownViewer then
                 "surviving icon left its column")
         end },
 
+        -- Rows are now symmetric with columns: an emptied row vacates too.
+        { "an emptied row lets the others close up", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse, profile.collapseDirection = "rows", "left"
+            profile.anchorCol, profile.anchorRow = 0, 0
+            -- Three rows at 2, 3 and 4, one icon each.
+            Data.SetPlacement(profile, 2, 1, 111, "cooldown")
+            Data.SetPlacement(profile, 3, 1, 222, "cooldown")
+            Data.SetPlacement(profile, 4, 1, 333, "cooldown")
+            CV:Rebuild()
+            assertSame(DisplayRows(CV, Data, 1, { 2, 3, 4 }), { 2, 3, 4 },
+                "full-strength rows moved")
+
+            CV.icons[Data.CellKey(3, 1)].wanted = false
+            CV:ApplyLayout()
+            assertSame(DisplayRows(CV, Data, 1, { 2, 4 }), { 2, 3 },
+                "rows did not close the gap left by an empty row")
+        end },
+
+        { "a row with anything live does not vacate", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse, profile.collapseDirection = "rows", "left"
+            Data.SetPlacement(profile, 2, 1, 111, "cooldown")
+            Data.SetPlacement(profile, 3, 1, 222, "cooldown")
+            Data.SetPlacement(profile, 3, 2, 444, "cooldown")
+            Data.SetPlacement(profile, 4, 1, 333, "cooldown")
+            CV:Rebuild()
+
+            CV.icons[Data.CellKey(3, 1)].wanted = false
+            CV:ApplyLayout()
+            assertSame(DisplayRows(CV, Data, 1, { 2, 4 }), { 2, 4 },
+                "a row that still had a live icon was vacated")
+        end },
+
+        -- "both": a row pass then a column pass, closing on each axis.
+        { "both closes an empty row and an empty column", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse, profile.collapseDirection = "both", "topleft"
+            -- A 3x3 block starting at row 2, col 2.
+            for row = 2, 4 do
+                for col = 2, 4 do
+                    Data.SetPlacement(profile, row, col, 100 + row * 10 + col, "cooldown")
+                end
+            end
+            CV:Rebuild()
+            assertSame(DisplayRows(CV, Data, 2, { 2, 3, 4 }), { 2, 3, 4 },
+                "full-strength block moved vertically")
+            assertSame(DisplayCols(CV, Data, 2, { 2, 3, 4 }), { 2, 3, 4 },
+                "full-strength block moved horizontally")
+
+            -- Spend the whole middle row and the whole middle column.
+            for col = 2, 4 do CV.icons[Data.CellKey(3, col)].wanted = false end
+            for row = 2, 4 do CV.icons[Data.CellKey(row, 3)].wanted = false end
+            CV:ApplyLayout()
+
+            -- What survives is the four corners, which must close into a 2x2
+            -- block flush at the original top-left.
+            local corners = {
+                { 2, 2, 2, 2 }, { 2, 4, 2, 3 },
+                { 4, 2, 3, 2 }, { 4, 4, 3, 3 },
+            }
+            for _, c in ipairs(corners) do
+                local icon = CV.icons[Data.CellKey(c[1], c[2])]
+                local cellW = (profile.iconSize or 32) + (profile.padding or 4)
+                local pad = profile.padding or 4
+                local gotRow = math.floor((-icon.__point[5] - pad / 2) / cellW + 0.5) + 1
+                local gotCol = math.floor((icon.__point[4] - pad / 2) / cellW + 0.5) + 1
+                assert(gotRow == c[3] and gotCol == c[4],
+                    ("corner %d,%d landed at %d,%d, wanted %d,%d")
+                        :format(c[1], c[2], gotRow, gotCol, c[3], c[4]))
+            end
+        end },
+
+        { "both packs toward the chosen corner", function()
+            local profile = Data.GetActiveProfile()
+            profile.collapseDirection = "bottomright"
+            for _, icon in pairs(CV.icons) do icon.wanted = true end
+            CV:ApplyLayout()
+            -- At full strength the block must still sit exactly where drawn,
+            -- whichever corner it packs toward.
+            assertSame(DisplayRows(CV, Data, 2, { 2, 3, 4 }), { 2, 3, 4 },
+                "full-strength block moved when packing bottom-right")
+            assertSame(DisplayCols(CV, Data, 2, { 2, 3, 4 }), { 2, 3, 4 },
+                "full-strength block moved when packing bottom-right")
+
+            for col = 2, 4 do CV.icons[Data.CellKey(3, col)].wanted = false end
+            CV:ApplyLayout()
+            -- Rows 2 and 4 survive; packing down means they end at rows 3 and 4.
+            assertSame(DisplayRows(CV, Data, 2, { 2, 4 }), { 3, 4 },
+                "rows did not close toward the bottom")
+        end },
+
         { "direction validity is per axis", function()
             assert(Data.IsDirectionValid("rows", "left"), "left should be valid for rows")
             assert(not Data.IsDirectionValid("rows", "up"), "up should be invalid for rows")
             assert(Data.IsDirectionValid("columns", "down"), "down should be valid for columns")
             assert(not Data.IsDirectionValid("columns", "right"), "right should be invalid for columns")
             assert(Data.IsDirectionValid("columns", "auto"), "auto should always be valid")
+            assert(Data.IsDirectionValid("both", "bottomright"), "corners are valid for both")
+            assert(not Data.IsDirectionValid("both", "left"), "an edge is not valid for both")
+        end },
+
+        { "both derives a corner from the anchor", function()
+            local profile = Data.GetActiveProfile()
+            profile.collapse, profile.collapseDirection = "both", "auto"
+            profile.anchorCol, profile.anchorRow = 0, 0
+            local right, down = Data.ResolveCollapseAxes(profile)
+            assert(not right and not down, "top-left anchor should pack up and left")
+
+            profile.anchorCol, profile.anchorRow = 10, 10
+            right, down = Data.ResolveCollapseAxes(profile)
+            assert(right and down, "bottom-right anchor should pack down and right")
         end },
 
         { "auto direction for columns reads the anchor row", function()

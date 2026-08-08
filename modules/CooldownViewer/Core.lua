@@ -282,111 +282,105 @@ function CV:ApplyLayout()
     local profile = CV:CurrentProfile()
     local cellW, cellH, _, pad = self:GetCellSize(profile)
 
-    local function Put(icon, col, row)
-        icon:ClearAllPoints()
-        icon:SetPoint("TOPLEFT", f, "TOPLEFT",
-            (col - 1) * cellW + pad / 2,
-            -((row - 1) * cellH + pad / 2))
+    local mode = profile.collapse or "none"
+
+    -- Working positions, seeded from where the icons were drawn. Passes read
+    -- and rewrite these rather than the placements, which is what lets "both"
+    -- run a second pass over the results of the first.
+    local pos = {}
+    for _, icon in pairs(self.icons) do
+        pos[icon] = { row = icon.row, col = icon.col }
     end
 
-    --- Bucket icons by one axis. `key` picks the bucket, `order` sorts within.
-    local function Bucket(key, order)
-        local buckets, keys = {}, {}
-        for _, icon in pairs(self.icons) do
-            local k = icon[key]
-            if not buckets[k] then
-                buckets[k] = {}
-                table.insert(keys, k)
-            end
-            table.insert(buckets[k], icon)
+    local function Commit()
+        for icon, p in pairs(pos) do
+            icon:ClearAllPoints()
+            icon:SetPoint("TOPLEFT", f, "TOPLEFT",
+                (p.col - 1) * cellW + pad / 2,
+                -((p.row - 1) * cellH + pad / 2))
         end
-        table.sort(keys)
-        for _, list in pairs(buckets) do
-            table.sort(list, function(a, b) return a[order] < b[order] end)
-        end
-        return buckets, keys
     end
 
-    --- The live icons of a list, in order.
-    local function Live(list)
-        local live = {}
-        for _, icon in ipairs(list) do
-            if icon.wanted then table.insert(live, icon) end
-        end
-        return live
+    if mode == "none" then
+        Commit()
+        return
     end
 
     --- Slot index for the i-th of n survivors packing between first and last.
-    --- Packing runs from the group's own outermost PLACED slot, never the grid
-    --- edge, so a group at full strength lands exactly where it was drawn.
+    --- Packing runs from the group's own outermost occupied slot, never the
+    --- grid edge, so a group at full strength lands exactly where it was drawn
+    --- and an icon never teleports across the shape.
     local function Slot(i, n, first, last, packHigh)
         if packHigh then return last - (n - i) end
         return first + i - 1
     end
 
-    local mode = profile.collapse or "none"
-
-    if mode == "none" then
-        for _, icon in pairs(self.icons) do
-            Put(icon, icon.col, icon.row)
-        end
-        return
-    end
-
-    if mode == "rows" then
-        -- One stage: each row compacts horizontally on its own, which is what
-        -- keeps an icon at a constant height no matter what is on cooldown.
-        local packRight = Data.ResolveCollapseDirection(profile) == "right"
-        local rows = Bucket("row", "col")
-
-        for _, list in pairs(rows) do
-            local first, last = list[1].col, list[#list].col
-            local live = Live(list)
-            for i, icon in ipairs(live) do
-                Put(icon, Slot(i, #live, first, last, packRight), icon.row)
+    --- One collapse pass. Rows and columns are mirror images of each other, so
+    --- both are this function with the axes swapped:
+    ---
+    ---   major  the axis icons are grouped BY   (rows mode: "row")
+    ---   minor  the axis icons slide ALONG      (rows mode: "col")
+    ---
+    --- Stage 1 compacts each group along `minor`. Stage 2 vacates any group
+    --- with nothing live left and closes the survivors along `major`.
+    local function Pass(major, minor, packMinorHigh, packMajorHigh)
+        local groups, majors = {}, {}
+        for icon in pairs(pos) do
+            local key = pos[icon][major]
+            if not groups[key] then
+                groups[key] = {}
+                table.insert(majors, key)
             end
+            table.insert(groups[key], icon)
         end
-        return
-    end
+        table.sort(majors)
 
-    if mode == "columns" then
-        -- Two stages.
-        --
-        -- Stage 1: each column compacts vertically within itself, so an icon
-        -- keeps its column and only slides along it.
-        --
-        -- Stage 2: a column with nothing live left vacates entirely, and the
-        -- surviving columns close horizontally into the gap. Without this a
-        -- spent column would leave a hole the width of an icon in the middle
-        -- of the shape, which is the whole thing collapse exists to avoid.
-        local packDown = Data.ResolveCollapseDirection(profile) == "down"
-        local packRight = Data.ResolveColumnShift(profile) == "right"
-
-        local columns, colNums = Bucket("col", "row")
-
-        local liveColumns = {}
-        for _, col in ipairs(colNums) do
-            if #Live(columns[col]) > 0 then
-                table.insert(liveColumns, col)
+        local liveGroups = {}
+        for _, key in ipairs(majors) do
+            table.sort(groups[key], function(a, b) return pos[a][minor] < pos[b][minor] end)
+            for _, icon in ipairs(groups[key]) do
+                if icon.wanted then
+                    table.insert(liveGroups, key)
+                    break
+                end
             end
         end
 
-        local firstCol, lastCol = colNums[1], colNums[#colNums]
+        local firstMajor, lastMajor = majors[1], majors[#majors]
 
-        for i, col in ipairs(liveColumns) do
-            local displayCol = Slot(i, #liveColumns, firstCol, lastCol, packRight)
+        for i, key in ipairs(liveGroups) do
+            local group = groups[key]
+            -- Stage 2: where this group sits along the major axis once any
+            -- fully-spent groups ahead of it have vacated.
+            local majorSlot = Slot(i, #liveGroups, firstMajor, lastMajor, packMajorHigh)
 
-            -- Each column keeps its own vertical origin as it shifts sideways,
-            -- so the shape's profile survives the move.
-            local list = columns[col]
-            local firstRow, lastRow = list[1].row, list[#list].row
-            local live = Live(list)
+            -- Stage 1: the group keeps its own span along the minor axis as it
+            -- moves, so the shape's profile survives the shift.
+            local firstMinor = pos[group[1]][minor]
+            local lastMinor = pos[group[#group]][minor]
+
+            local live = {}
+            for _, icon in ipairs(group) do
+                if icon.wanted then table.insert(live, icon) end
+            end
 
             for j, icon in ipairs(live) do
-                Put(icon, displayCol, Slot(j, #live, firstRow, lastRow, packDown))
+                pos[icon][major] = majorSlot
+                pos[icon][minor] = Slot(j, #live, firstMinor, lastMinor, packMinorHigh)
             end
         end
     end
+
+    local packRight, packDown = Data.ResolveCollapseAxes(profile)
+
+    if mode == "rows" or mode == "both" then
+        Pass("row", "col", packRight, packDown)
+    end
+    if mode == "columns" or mode == "both" then
+        Pass("col", "row", packDown, packRight)
+    end
+
+    Commit()
 end
 
 -- ----------------------------------------------------------------------------

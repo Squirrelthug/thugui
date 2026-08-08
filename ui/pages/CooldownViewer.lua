@@ -735,14 +735,18 @@ function Page:Refresh()
         :format(profile.anchorCol or 0, profile.anchorRow or 0))
 
     local mode = profile.collapse or "none"
+    local horizontal, vertical = Data.DescribeCollapse(profile)
+
     if mode == "rows" then
-        self.collapseNote:SetText(("Rows pack %s. Each row closes up on its own, so an icon "
-            .. "never changes row. A gap you left between clusters closes too.")
-            :format(Data.ResolveCollapseDirection(profile)))
+        self.collapseNote:SetText(("Rows pack %s. When a row empties, the rest close %s.")
+            :format(horizontal, vertical))
     elseif mode == "columns" then
-        self.collapseNote:SetText(("Columns pack %s. When a column empties, the rest slide "
-            .. "%s to fill the gap.")
-            :format(Data.ResolveCollapseDirection(profile), Data.ResolveColumnShift(profile)))
+        self.collapseNote:SetText(("Columns pack %s. When a column empties, the rest close %s.")
+            :format(vertical, horizontal))
+    elseif mode == "both" then
+        self.collapseNote:SetText(("Rows pack %s, then columns pack %s, so the shape stays as "
+            .. "tight as it can. Icons can change row and column.")
+            :format(horizontal, vertical))
     else
         self.collapseNote:SetText("Icons hold their cells. A spell on cooldown leaves a hole "
             .. "where it was.")

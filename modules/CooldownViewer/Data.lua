@@ -62,10 +62,15 @@ Data.MODES = {
 --              close horizontally into the gap. Two stages, where rows has
 --              one. This is the shape to pick when a layout is built up or
 --              down rather than across.
+--   both    -- a row pass followed by a column pass, so the shape closes on
+--              both axes and keeps the tightest footprint it can. Not a
+--              globally minimal repack: each group still packs within its own
+--              span, so an icon never teleports across the shape.
 Data.COLLAPSE_MODES = {
     { value = "none",    text = "Leave the gap" },
     { value = "rows",    text = "Rows collapse sideways" },
     { value = "columns", text = "Columns collapse vertically" },
+    { value = "both",    text = "Both — keep the smallest shape" },
 }
 
 -- Direction is per-axis: a row can only pack left or right, a column only up
@@ -81,6 +86,14 @@ local COLLAPSE_DIRECTIONS = {
         { value = "auto", text = "Auto (from anchor)" },
         { value = "up",   text = "Always up" },
         { value = "down", text = "Always down" },
+    },
+    -- Collapsing on both axes needs a corner, not an edge.
+    both = {
+        { value = "auto",        text = "Auto (from anchor)" },
+        { value = "topleft",     text = "Toward top-left" },
+        { value = "topright",    text = "Toward top-right" },
+        { value = "bottomleft",  text = "Toward bottom-left" },
+        { value = "bottomright", text = "Toward bottom-right" },
     },
 }
 
@@ -118,11 +131,46 @@ function Data.ResolveCollapseDirection(profile)
     return (profile.anchorCol or 0) > Data.GRID_COLS / 2 and "right" or "left"
 end
 
---- Columns mode only: which way surviving columns slide when one empties.
---- Always derived from the anchor rather than exposed as a setting -- it is
---- the second stage of one behaviour, not a separate choice to make.
-function Data.ResolveColumnShift(profile)
-    return (profile.anchorCol or 0) > Data.GRID_COLS / 2 and "right" or "left"
+--- Both axes at once, as booleans the layout code consumes directly.
+--- @return packRight boolean, packDown boolean
+---
+--- Every mode needs both: even single-axis modes use the other axis for their
+--- vacate stage (an emptied row has to close *somewhere*). Only the axis the
+--- player actually chose is configurable; the other is always derived from the
+--- anchor, because it is the second half of one behaviour rather than a
+--- separate decision.
+function Data.ResolveCollapseAxes(profile)
+    local mode = profile.collapse or "none"
+    local direction = profile.collapseDirection or "auto"
+
+    local autoRight = (profile.anchorCol or 0) > Data.GRID_COLS / 2
+    local autoDown  = (profile.anchorRow or 0) > Data.GRID_ROWS / 2
+
+    if mode == "both" then
+        if direction == "topleft"     then return false, false end
+        if direction == "topright"    then return true,  false end
+        if direction == "bottomleft"  then return false, true  end
+        if direction == "bottomright" then return true,  true  end
+        return autoRight, autoDown
+    end
+
+    if mode == "columns" then
+        local down = autoDown
+        if direction == "up" then down = false
+        elseif direction == "down" then down = true end
+        return autoRight, down
+    end
+
+    local right = autoRight
+    if direction == "left" then right = false
+    elseif direction == "right" then right = true end
+    return right, autoDown
+end
+
+--- Human-readable summary of where a mode packs, for the settings note.
+function Data.DescribeCollapse(profile)
+    local packRight, packDown = Data.ResolveCollapseAxes(profile)
+    return packRight and "right" or "left", packDown and "down" or "up"
 end
 
 function Data.ModeText(mode)
