@@ -47,6 +47,39 @@ Data.MODES = {
     { value = "aura",     text = "Show while buff active" },
 }
 
+-- What happens to the hole when an icon goes on cooldown.
+--   none -- the gap stays; every icon keeps the cell it was placed in.
+--   rows -- each row compacts horizontally on its own. Rows keep their row,
+--           so an icon never changes height and muscle memory survives.
+--
+-- Rows pack from the row's own outermost placed column rather than from the
+-- grid edge, so a row at full strength sits exactly where the editor drew it.
+-- Within a row the whole thing is treated as ONE run: a deliberate horizontal
+-- gap between two clusters does not survive a collapse. That is a chosen
+-- trade -- it keeps the rule "a row is never gappy" simple and total.
+Data.COLLAPSE_MODES = {
+    { value = "none", text = "Leave the gap" },
+    { value = "rows", text = "Rows collapse sideways" },
+}
+
+Data.COLLAPSE_DIRECTIONS = {
+    { value = "auto",  text = "Auto (from anchor)" },
+    { value = "left",  text = "Always left" },
+    { value = "right", text = "Always right" },
+}
+
+--- "left" or "right" -- the direction rows pack toward.
+function Data.ResolveCollapseDirection(profile)
+    local direction = profile.collapseDirection or "auto"
+    if direction == "left" or direction == "right" then return direction end
+
+    -- An anchor right of centre means the shape hangs to the LEFT of the
+    -- cursor, so its icons should pack rightwards, towards the cursor. Dead
+    -- centre is genuinely ambiguous; it falls to "left" and the explicit
+    -- override exists for exactly that case.
+    return (profile.anchorCol or 0) > Data.GRID_COLS / 2 and "right" or "left"
+end
+
 function Data.ModeText(mode)
     for _, m in ipairs(Data.MODES) do
         if m.value == mode then return m.text end
@@ -115,6 +148,8 @@ local function DefaultProfile()
         iconSize = 32,
         padding = 4,
         scale = 1.0,
+        collapse = "rows",
+        collapseDirection = "auto",
         -- Top-left intersection: the shape hangs down and to the right of the
         -- cursor, which is where the old bars sat by default.
         anchorCol = 0,

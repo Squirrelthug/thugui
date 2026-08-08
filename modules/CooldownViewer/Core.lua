@@ -205,23 +205,77 @@ function CV:Rebuild()
         local icon = AcquireIcon(f)
         icon:SetParent(f)
         icon:SetSize(iconSize, iconSize)
-        icon:ClearAllPoints()
-        icon:SetPoint("TOPLEFT", f, "TOPLEFT",
-            (placement.col - 1) * cellW + pad / 2,
-            -((placement.row - 1) * cellH + pad / 2))
 
         local texture = C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(placement.spellID)
         icon.tex:SetTexture(texture)
         icon.spellID = placement.spellID
         icon.mode = placement.mode
+        icon.row, icon.col = placement.row, placement.col
+        -- Resting state is "everything present". UpdateState corrects it, but
+        -- it early-returns while the container is hidden, so without this the
+        -- icons would sit unanchored until the first pass after they show.
+        icon.wanted = true
         icon.cooldown:Clear()
         icon.count:Hide()
 
         self.icons[placement.key] = icon
     end
 
+    self:ApplyLayout()
     self:UpdateVisibility()
     self:UpdateState()
+end
+
+--- Position every icon. Split out of Rebuild because with collapse enabled a
+--- position depends on which icons are currently live, so this has to re-run on
+--- every state update, not just on a layout edit.
+function CV:ApplyLayout()
+    local f = self.container
+    if not f then return end
+
+    local profile = CV:CurrentProfile()
+    local cellW, cellH, _, pad = self:GetCellSize(profile)
+
+    local function Put(icon, col)
+        icon:ClearAllPoints()
+        icon:SetPoint("TOPLEFT", f, "TOPLEFT",
+            (col - 1) * cellW + pad / 2,
+            -((icon.row - 1) * cellH + pad / 2))
+    end
+
+    if (profile.collapse or "none") ~= "rows" then
+        for _, icon in pairs(self.icons) do
+            Put(icon, icon.col)
+        end
+        return
+    end
+
+    -- Bucket by row; each row compacts independently, which is what keeps an
+    -- icon at a constant height no matter what else is on cooldown.
+    local rows = {}
+    for _, icon in pairs(self.icons) do
+        rows[icon.row] = rows[icon.row] or {}
+        table.insert(rows[icon.row], icon)
+    end
+
+    local packRight = Data.ResolveCollapseDirection(profile) == "right"
+
+    for _, list in pairs(rows) do
+        table.sort(list, function(a, b) return a.col < b.col end)
+
+        -- Pack from the row's own outermost PLACED column, not the grid edge:
+        -- a row at full strength must land exactly where the editor drew it.
+        local firstCol, lastCol = list[1].col, list[#list].col
+
+        local live = {}
+        for _, icon in ipairs(list) do
+            if icon.wanted then table.insert(live, icon) end
+        end
+
+        for i, icon in ipairs(live) do
+            Put(icon, packRight and (lastCol - (#live - i)) or (firstCol + i - 1))
+        end
+    end
 end
 
 -- ----------------------------------------------------------------------------
@@ -238,8 +292,13 @@ function CV:UpdateState()
         for _, icon in pairs(self.icons) do
             icon.cooldown:Clear()
             icon.count:Hide()
+            icon.wanted = true
             icon:Show()
         end
+        -- Laid out through the same path as combat, so preview shows the real
+        -- resting shape -- including the fact that with row collapse on, a
+        -- horizontal gap you drew is closed even at full strength.
+        self:ApplyLayout()
         return
     end
 
@@ -288,8 +347,11 @@ function CV:UpdateState()
             end
         end
 
+        icon.wanted = show
         icon:SetShown(show)
     end
+
+    self:ApplyLayout()
 end
 
 function CV:ShouldShow()

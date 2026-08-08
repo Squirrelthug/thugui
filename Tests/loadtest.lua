@@ -17,7 +17,17 @@ frameMT.__index = function(tbl, key)
     -- Every unknown method is a no-op that returns another frame, so long
     -- chains like f:CreateTexture():SetPoint() work without enumerating the API.
     local fn = function(...)
-        local a = select(1, ...)
+        local a, a1, a2, a3, a4, a5 = ...
+        -- Anchors are recorded, not discarded: the collapse tests read back
+        -- where an icon actually landed.
+        if key == "SetPoint" and type(a) == "table" then
+            a.__point = { a1, a2, a3, a4, a5 }
+            return
+        end
+        if key == "ClearAllPoints" and type(a) == "table" then
+            a.__point = nil
+            return
+        end
         if key:match("^Get") then
             if key == "GetWidth" or key == "GetHeight" or key == "GetStringWidth"
                 or key == "GetStringHeight" or key == "GetFrameLevel" or key == "GetScale" then
@@ -142,6 +152,33 @@ local function LoadTOC(path)
     return files
 end
 
+-- Turn a recorded x-offset back into the grid column an icon was drawn in,
+-- inverting the placement maths in CV:ApplyLayout.
+local function DisplayCols(CV, Data, row, placedCols)
+    local profile = Data.GetActiveProfile()
+    local cellW = (profile.iconSize or 32) + (profile.padding or 4)
+    local pad = profile.padding or 4
+
+    local out = {}
+    for i, col in ipairs(placedCols) do
+        local icon = CV.icons[Data.CellKey(row, col)]
+        assert(icon, ("no icon at row %d col %d"):format(row, col))
+        assert(icon.__point, ("icon at row %d col %d was never positioned"):format(row, col))
+        out[i] = math.floor((icon.__point[4] - pad / 2) / cellW + 0.5) + 1
+    end
+    return out
+end
+
+local function assertSame(got, want, message)
+    assert(#got == #want, ("%s (length %d, wanted %d)"):format(message, #got, #want))
+    for i = 1, #want do
+        if got[i] ~= want[i] then
+            error(("%s (position %d: got %s, wanted %s)")
+                :format(message, i, tostring(got[i]), tostring(want[i])), 2)
+        end
+    end
+end
+
 local failures = 0
 for _, file in ipairs(LoadTOC(addonPath)) do
     local chunk, err = loadfile(addonPath .. "/" .. file)
@@ -228,6 +265,79 @@ if failures == 0 and ThugUI.CooldownViewer then
         end },
         { "grid page refresh after edits", function()
             ThugUI.Window:SelectPage("cooldownviewer")
+        end },
+
+        -- Collapse: rows pack independently, from the row's own outermost
+        -- placed column, treating the row as one run.
+        { "collapse packs left from the row's own origin", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse, profile.collapseDirection = "rows", "left"
+            -- Row 2, columns 3/4/5 -- deliberately not starting at column 1.
+            Data.SetPlacement(profile, 2, 3, 111, "cooldown")
+            Data.SetPlacement(profile, 2, 4, 222, "cooldown")
+            Data.SetPlacement(profile, 2, 5, 333, "cooldown")
+            CV:Rebuild()
+
+            local cols = DisplayCols(CV, Data, 2, { 3, 4, 5 })
+            assertSame(cols, { 3, 4, 5 }, "full-strength row moved off its resting cells")
+
+            -- Middle one on cooldown: the tail slides in, the row's start holds.
+            CV.icons[Data.CellKey(2, 4)].wanted = false
+            CV.icons[Data.CellKey(2, 4)]:Hide()
+            CV:ApplyLayout()
+            cols = DisplayCols(CV, Data, 2, { 3, 5 })
+            assertSame(cols, { 3, 4 }, "row did not close up toward its origin")
+        end },
+
+        { "collapse packs right when told to", function()
+            local profile = Data.GetActiveProfile()
+            profile.collapseDirection = "right"
+            for _, icon in pairs(CV.icons) do icon.wanted = true end
+            CV:ApplyLayout()
+            local cols = DisplayCols(CV, Data, 2, { 3, 4, 5 })
+            assertSame(cols, { 3, 4, 5 }, "full-strength row moved when packing right")
+
+            CV.icons[Data.CellKey(2, 4)].wanted = false
+            CV:ApplyLayout()
+            cols = DisplayCols(CV, Data, 2, { 3, 5 })
+            assertSame(cols, { 4, 5 }, "row did not close up toward its right edge")
+        end },
+
+        { "collapse closes a gap between clusters", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse, profile.collapseDirection = "rows", "left"
+            Data.SetPlacement(profile, 1, 1, 111, "cooldown")
+            Data.SetPlacement(profile, 1, 2, 222, "cooldown")
+            Data.SetPlacement(profile, 1, 8, 333, "cooldown")
+            Data.SetPlacement(profile, 1, 9, 444, "cooldown")
+            CV:Rebuild()
+            for _, icon in pairs(CV.icons) do icon.wanted = true end
+            CV.icons[Data.CellKey(1, 2)].wanted = false
+            CV:ApplyLayout()
+            -- Whole row is one run, so the far cluster slides in to meet it.
+            assertSame(DisplayCols(CV, Data, 1, { 1, 8, 9 }), { 1, 2, 3 },
+                "clusters did not merge into one run")
+        end },
+
+        { "collapse none leaves the hole", function()
+            local profile = Data.GetActiveProfile()
+            profile.collapse = "none"
+            CV:ApplyLayout()
+            assertSame(DisplayCols(CV, Data, 1, { 1, 8, 9 }), { 1, 8, 9 },
+                "icons moved with collapse off")
+        end },
+
+        { "auto direction follows the anchor", function()
+            local profile = Data.GetActiveProfile()
+            profile.collapseDirection = "auto"
+            profile.anchorCol = 0
+            assert(Data.ResolveCollapseDirection(profile) == "left", "anchor 0 should pack left")
+            profile.anchorCol = 10
+            assert(Data.ResolveCollapseDirection(profile) == "right", "anchor 10 should pack right")
+            profile.anchorCol = 5
+            assert(Data.ResolveCollapseDirection(profile) == "left", "dead centre should fall to left")
         end },
     }
 

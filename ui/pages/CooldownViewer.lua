@@ -625,6 +625,29 @@ function Page:BuildInspector(host)
         end,
     }
 
+    panel:Section("Collapse")
+
+    panel:Dropdown{
+        options = Data.COLLAPSE_MODES,
+        width = 190,
+        get = function() return Profile().collapse or "none" end,
+        set = function(v) Profile().collapse = v; Apply(); Page:Refresh() end,
+    }
+
+    panel:Dropdown{
+        options = Data.COLLAPSE_DIRECTIONS,
+        width = 190,
+        get = function() return Profile().collapseDirection or "auto" end,
+        set = function(v) Profile().collapseDirection = v; Apply(); Page:Refresh() end,
+    }
+
+    -- Seeded at the longest wording it can hold, because Note reserves height
+    -- from the text present at build time.
+    self.collapseNote = panel:Note(
+        "Rows pack left. Icons close up as they go on cooldown, and a gap you "
+        .. "left between clusters closes too — tick preview to see the real shape.",
+        { width = 200 })
+
     panel:Section("Size and spacing")
 
     panel:Slider{
@@ -697,6 +720,15 @@ function Page:Refresh()
 
     self.anchorLabel:SetText(("Cursor holds the grid at column %d, row %d.")
         :format(profile.anchorCol or 0, profile.anchorRow or 0))
+
+    if (profile.collapse or "none") == "rows" then
+        self.collapseNote:SetText(("Rows pack %s. Icons close up as they go on cooldown, and "
+            .. "a gap you left between clusters closes too — tick preview to see the real shape.")
+            :format(Data.ResolveCollapseDirection(profile)))
+    else
+        self.collapseNote:SetText("Icons hold their cells. A spell on cooldown leaves a hole "
+            .. "where it was.")
+    end
 
     -- Inspector
     if self.selectedKey then
