@@ -181,6 +181,11 @@ function ER:GetConfig()
     return ThugUI_Config
 end
 
+-- Shared with modules/RaidFrames/Settings.lua so its panel is laid out with the
+-- same helpers as the rest of the ThugUI options, not a second set that drifts.
+ER.CreateScrollablePanel = CreateScrollablePanel
+ER.CreateSeparator = CreateSeparator
+
 -- ============================================================================
 -- MAIN SETTINGS PANEL (Info Page)
 -- ============================================================================
@@ -216,6 +221,8 @@ function ER:CreateSettingsPanel()
     local features = {
         {"|cffffffffCursor Rings|r", "Ring animations for GCD, casting, and reticle customization"},
         {"|cffffffffCooldown Viewer|r", "Essential spell cooldown bar showing ready abilities"},
+        {"|cffffffffRaid Frames|r", "ThugUI party/raid frames with tooltip-free, click-through auras"},
+        {"|cffffffffTarget of Target|r", "Your target's target on the full-size target frame art"},
         {"|cffffffffFrame Hider|r", "Hide unwanted default UI elements"},
     }
 
@@ -264,6 +271,10 @@ function ER:CreateSettingsPanel()
         -- Create sub-panels
         ER:CreateRingsPanel(category)
         ER:CreateECVPanel(category)
+        ER:CreateBCVPanel(category)
+        ER:CreateGCVPanel(category)
+        ER:CreateRaidFramesPanel(category)
+        ER:CreateTargetOfTargetPanel(category)
         ER:CreateFrameHiderPanel(category)
     else
         InterfaceOptions_AddCategory(panel)
@@ -1199,6 +1210,362 @@ function ER:CreateECVPanel(parentCategory)
 end
 
 -- ============================================================================
+-- BALANCE COOLDOWN VIEWER SUB-PANEL
+-- ============================================================================
+
+function ER:CreateBCVPanel(parentCategory)
+    local panel = CreateFrame("Frame", "ThugUI_BCVPanel")
+    panel.name = "Balance Cooldown Viewer"
+    function panel.OnCommit() end
+    function panel.OnDefault() end
+    function panel.OnRefresh() end
+
+    local content = CreateScrollablePanel(panel, 900)
+
+    local title = content:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("Balance Cooldown Viewer")
+
+    local desc = content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+    desc:SetText("A second bar of ready cooldowns, shown only in Balance spec.")
+
+    -- =====================
+    -- Settings
+    -- =====================
+    local settingsSeparator = CreateSeparator(content, "Settings", "TOPLEFT", desc, 0, -20)
+
+    local showBCVCheckbox = CreateFrame("CheckButton", "ThugUI_ShowBCVCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
+    showBCVCheckbox:SetPoint("TOPLEFT", settingsSeparator, "BOTTOMLEFT", 20, -15)
+    _G[showBCVCheckbox:GetName() .. "Text"]:SetText("Enable Balance Cooldown Viewer")
+    showBCVCheckbox:SetChecked(ThugUI_Config.showBCV or false)
+    showBCVCheckbox:SetScript("OnClick", function(self)
+        ThugUI_Config.showBCV = self:GetChecked()
+        ER:UpdateBCVVisibility()
+    end)
+
+    local bcvCombatCheckbox = CreateFrame("CheckButton", "ThugUI_BCVCombatCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
+    bcvCombatCheckbox:SetPoint("TOPLEFT", showBCVCheckbox, "BOTTOMLEFT", 0, -5)
+    _G[bcvCombatCheckbox:GetName() .. "Text"]:SetText("Show only during combat")
+    bcvCombatCheckbox:SetChecked(ThugUI_Config.bcvShowOnlyInCombat or false)
+    bcvCombatCheckbox:SetScript("OnClick", function(self)
+        ThugUI_Config.bcvShowOnlyInCombat = self:GetChecked()
+        ER:UpdateBCVVisibility()
+    end)
+
+    local bcvAnchorCheckbox = CreateFrame("CheckButton", "ThugUI_BCVAnchorCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
+    bcvAnchorCheckbox:SetPoint("TOPLEFT", bcvCombatCheckbox, "BOTTOMLEFT", 0, -5)
+    _G[bcvAnchorCheckbox:GetName() .. "Text"]:SetText("Follow cursor during combat")
+    bcvAnchorCheckbox:SetChecked(ThugUI_Config.anchorBCVToCursor or false)
+    bcvAnchorCheckbox:SetScript("OnClick", function(self)
+        ThugUI_Config.anchorBCVToCursor = self:GetChecked()
+        if not self:GetChecked() then
+            ER:ReleaseBCVAnchor()
+        end
+    end)
+
+    local bcvProcCheckbox = CreateFrame("CheckButton", "ThugUI_BCVProcCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
+    bcvProcCheckbox:SetPoint("TOPLEFT", bcvAnchorCheckbox, "BOTTOMLEFT", 0, -5)
+    _G[bcvProcCheckbox:GetName() .. "Text"]:SetText("Show free-cast proc buffs on the bar")
+    bcvProcCheckbox:SetChecked(ThugUI_Config.bcvShowStarsurgeProc)
+    bcvProcCheckbox:SetScript("OnClick", function(self)
+        ThugUI_Config.bcvShowStarsurgeProc = self:GetChecked()
+        if ER.UpdateBCVCooldowns then ER:UpdateBCVCooldowns() end
+    end)
+
+    local procNote = content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    procNote:SetPoint("TOPLEFT", bcvProcCheckbox, "BOTTOMLEFT", 20, -2)
+    procNote:SetText("Shows Starweaver's Weft (free Starsurge), Starweaver's Warp (free Starfall),\nand Touch the Cosmos as their own icons whenever those buffs are active.")
+
+    local posNote = content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    posNote:SetPoint("TOPLEFT", procNote, "BOTTOMLEFT", 0, -8)
+    posNote:SetText("Drag the bar to reposition when out of combat.")
+
+    -- =====================
+    -- Appearance
+    -- =====================
+    local appearSeparator = CreateSeparator(content, "Appearance", "TOPLEFT", posNote, -20, -20)
+
+    local bcvScaleLabel = content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    bcvScaleLabel:SetPoint("TOPLEFT", appearSeparator, "BOTTOMLEFT", 0, -15)
+    bcvScaleLabel:SetText("Bar Scale:")
+
+    local bcvScaleSlider = CreateFrame("Slider", "ThugUI_BCVScaleSlider", content, "OptionsSliderTemplate")
+    bcvScaleSlider:SetPoint("LEFT", bcvScaleLabel, "RIGHT", 15, 0)
+    bcvScaleSlider:SetMinMaxValues(0.5, 2.0)
+    bcvScaleSlider:SetValue(ThugUI_Config.bcvScale or 1.0)
+    bcvScaleSlider:SetValueStep(0.05)
+    bcvScaleSlider:SetObeyStepOnDrag(true)
+    bcvScaleSlider:SetWidth(150)
+    _G[bcvScaleSlider:GetName() .. "Low"]:SetText("0.5")
+    _G[bcvScaleSlider:GetName() .. "High"]:SetText("2.0")
+    _G[bcvScaleSlider:GetName() .. "Text"]:SetText("")
+
+    local bcvScaleValue = content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    bcvScaleValue:SetPoint("LEFT", bcvScaleSlider, "RIGHT", 10, 0)
+    bcvScaleValue:SetText(string.format("%.2f", ThugUI_Config.bcvScale or 1.0))
+
+    bcvScaleSlider:SetScript("OnValueChanged", function(self, value)
+        local rounded = math.floor(value * 20 + 0.5) / 20
+        bcvScaleValue:SetText(string.format("%.2f", rounded))
+        ThugUI_Config.bcvScale = rounded
+        if ER.bcvContainer then ER.bcvContainer:SetScale(rounded) end
+    end)
+
+    local bcvCornerLabel = content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    bcvCornerLabel:SetPoint("TOPLEFT", bcvScaleLabel, "BOTTOMLEFT", 0, -25)
+    bcvCornerLabel:SetText("Cursor Anchor Corner:")
+
+    local bcvCornerNote = content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    bcvCornerNote:SetPoint("TOPLEFT", bcvCornerLabel, "BOTTOMLEFT", 0, -3)
+    bcvCornerNote:SetText("Which corner of the bar attaches to the cursor when following.")
+
+    local bcvCornerDropdown = CreateFrame("Frame", "ThugUI_BCVCornerDropdown", content, "UIDropDownMenuTemplate")
+    bcvCornerDropdown:SetPoint("TOPLEFT", bcvCornerNote, "BOTTOMLEFT", -16, -5)
+    UIDropDownMenu_SetWidth(bcvCornerDropdown, 140)
+
+    local bcvCornerLabels = {TOPLEFT = "Top Left", TOPRIGHT = "Top Right", BOTTOMLEFT = "Bottom Left", BOTTOMRIGHT = "Bottom Right"}
+    local bcvCornerOrder = {"TOPLEFT", "TOPRIGHT", "BOTTOMLEFT", "BOTTOMRIGHT"}
+
+    UIDropDownMenu_Initialize(bcvCornerDropdown, function(self, level)
+        local info = UIDropDownMenu_CreateInfo()
+        for _, corner in ipairs(bcvCornerOrder) do
+            info.text = bcvCornerLabels[corner]
+            info.checked = (ThugUI_Config.bcvAnchorCorner == corner)
+            info.func = function()
+                ThugUI_Config.bcvAnchorCorner = corner
+                UIDropDownMenu_SetText(bcvCornerDropdown, bcvCornerLabels[corner])
+            end
+            UIDropDownMenu_AddButton(info)
+        end
+    end)
+    UIDropDownMenu_SetText(bcvCornerDropdown, bcvCornerLabels[ThugUI_Config.bcvAnchorCorner or "TOPLEFT"])
+
+    -- =====================
+    -- Tracked Spells
+    -- =====================
+    local spellsSeparator = CreateSeparator(content, "Tracked Spells", "TOPLEFT", bcvCornerDropdown, 0, -20)
+
+    local spellsNote = content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    spellsNote:SetPoint("TOPLEFT", spellsSeparator, "BOTTOMLEFT", 0, -10)
+    spellsNote:SetText("Fury of Elune, Force of Nature, Incarnation: Chosen of Elune, Eclipse,\nplus the Starsurge proc glow.")
+
+    local talentNote = content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    talentNote:SetPoint("TOPLEFT", spellsNote, "BOTTOMLEFT", 0, -8)
+    talentNote:SetText("Talent abilities only appear when actually talented. Each icon shows only\nwhile its ability is ready (Eclipse: while a charge is available).")
+
+    -- =====================
+    -- Reset
+    -- =====================
+    local resetSeparator = CreateSeparator(content, "Reset", "TOPLEFT", talentNote, 0, -20)
+
+    local resetButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+    resetButton:SetSize(240, 25)
+    resetButton:SetPoint("TOPLEFT", resetSeparator, "BOTTOMLEFT", 0, -10)
+    resetButton:SetText("Reset Balance Viewer Settings")
+    resetButton:SetScript("OnClick", function()
+        local bcvKeys = {
+            "showBCV", "bcvShowOnlyInCombat", "anchorBCVToCursor",
+            "bcvAnchorCorner", "bcvScale", "bcvPoint", "bcvShowStarsurgeProc",
+        }
+        for _, key in ipairs(bcvKeys) do
+            ThugUI_Config[key] = ER.defaults[key]
+        end
+
+        showBCVCheckbox:SetChecked(ThugUI_Config.showBCV or false)
+        bcvCombatCheckbox:SetChecked(ThugUI_Config.bcvShowOnlyInCombat or false)
+        bcvAnchorCheckbox:SetChecked(ThugUI_Config.anchorBCVToCursor or false)
+        bcvProcCheckbox:SetChecked(ThugUI_Config.bcvShowStarsurgeProc)
+        bcvScaleSlider:SetValue(ThugUI_Config.bcvScale or 1.0)
+        bcvScaleValue:SetText(string.format("%.2f", ThugUI_Config.bcvScale or 1.0))
+        UIDropDownMenu_SetText(bcvCornerDropdown, bcvCornerLabels[ThugUI_Config.bcvAnchorCorner or "TOPLEFT"])
+
+        if ER.bcvContainer then
+            ER.bcvContainer:ClearAllPoints()
+            ER.bcvContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 260)
+            ER.bcvContainer:SetScale(ThugUI_Config.bcvScale or 1.0)
+        end
+        ER:UpdateBCVVisibility()
+        print("|cff00ff00ThugUI:|r Balance viewer settings reset to defaults.")
+    end)
+
+    -- Register as subcategory
+    local subcategory = Settings.RegisterCanvasLayoutSubcategory(parentCategory, panel, panel.name)
+    subcategory.ID = "ThugUI_BalanceCooldownViewer"
+end
+
+-- ============================================================================
+-- GUARDIAN COOLDOWN VIEWER SUB-PANEL
+-- ============================================================================
+
+function ER:CreateGCVPanel(parentCategory)
+    local panel = CreateFrame("Frame", "ThugUI_GCVPanel")
+    panel.name = "Guardian Cooldown Viewer"
+    function panel.OnCommit() end
+    function panel.OnDefault() end
+    function panel.OnRefresh() end
+
+    local content = CreateScrollablePanel(panel, 900)
+
+    local title = content:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("Guardian Cooldown Viewer")
+
+    local desc = content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+    desc:SetText("A bar of ready cooldowns, shown only in Guardian spec.")
+
+    -- =====================
+    -- Settings
+    -- =====================
+    local settingsSeparator = CreateSeparator(content, "Settings", "TOPLEFT", desc, 0, -20)
+
+    local showGCVCheckbox = CreateFrame("CheckButton", "ThugUI_ShowGCVCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
+    showGCVCheckbox:SetPoint("TOPLEFT", settingsSeparator, "BOTTOMLEFT", 20, -15)
+    _G[showGCVCheckbox:GetName() .. "Text"]:SetText("Enable Guardian Cooldown Viewer")
+    showGCVCheckbox:SetChecked(ThugUI_Config.showGCV or false)
+    showGCVCheckbox:SetScript("OnClick", function(self)
+        ThugUI_Config.showGCV = self:GetChecked()
+        ER:UpdateGCVVisibility()
+    end)
+
+    local gcvCombatCheckbox = CreateFrame("CheckButton", "ThugUI_GCVCombatCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
+    gcvCombatCheckbox:SetPoint("TOPLEFT", showGCVCheckbox, "BOTTOMLEFT", 0, -5)
+    _G[gcvCombatCheckbox:GetName() .. "Text"]:SetText("Show only during combat")
+    gcvCombatCheckbox:SetChecked(ThugUI_Config.gcvShowOnlyInCombat or false)
+    gcvCombatCheckbox:SetScript("OnClick", function(self)
+        ThugUI_Config.gcvShowOnlyInCombat = self:GetChecked()
+        ER:UpdateGCVVisibility()
+    end)
+
+    local gcvAnchorCheckbox = CreateFrame("CheckButton", "ThugUI_GCVAnchorCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
+    gcvAnchorCheckbox:SetPoint("TOPLEFT", gcvCombatCheckbox, "BOTTOMLEFT", 0, -5)
+    _G[gcvAnchorCheckbox:GetName() .. "Text"]:SetText("Follow cursor during combat")
+    gcvAnchorCheckbox:SetChecked(ThugUI_Config.anchorGCVToCursor or false)
+    gcvAnchorCheckbox:SetScript("OnClick", function(self)
+        ThugUI_Config.anchorGCVToCursor = self:GetChecked()
+        if not self:GetChecked() then
+            ER:ReleaseGCVAnchor()
+        end
+    end)
+
+    local posNote = content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    posNote:SetPoint("TOPLEFT", gcvAnchorCheckbox, "BOTTOMLEFT", 20, -10)
+    posNote:SetText("Drag the bar to reposition when out of combat.")
+
+    -- =====================
+    -- Appearance
+    -- =====================
+    local appearSeparator = CreateSeparator(content, "Appearance", "TOPLEFT", posNote, -20, -20)
+
+    local gcvScaleLabel = content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    gcvScaleLabel:SetPoint("TOPLEFT", appearSeparator, "BOTTOMLEFT", 0, -15)
+    gcvScaleLabel:SetText("Bar Scale:")
+
+    local gcvScaleSlider = CreateFrame("Slider", "ThugUI_GCVScaleSlider", content, "OptionsSliderTemplate")
+    gcvScaleSlider:SetPoint("LEFT", gcvScaleLabel, "RIGHT", 15, 0)
+    gcvScaleSlider:SetMinMaxValues(0.5, 2.0)
+    gcvScaleSlider:SetValue(ThugUI_Config.gcvScale or 1.0)
+    gcvScaleSlider:SetValueStep(0.05)
+    gcvScaleSlider:SetObeyStepOnDrag(true)
+    gcvScaleSlider:SetWidth(150)
+    _G[gcvScaleSlider:GetName() .. "Low"]:SetText("0.5")
+    _G[gcvScaleSlider:GetName() .. "High"]:SetText("2.0")
+    _G[gcvScaleSlider:GetName() .. "Text"]:SetText("")
+
+    local gcvScaleValue = content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    gcvScaleValue:SetPoint("LEFT", gcvScaleSlider, "RIGHT", 10, 0)
+    gcvScaleValue:SetText(string.format("%.2f", ThugUI_Config.gcvScale or 1.0))
+
+    gcvScaleSlider:SetScript("OnValueChanged", function(self, value)
+        local rounded = math.floor(value * 20 + 0.5) / 20
+        gcvScaleValue:SetText(string.format("%.2f", rounded))
+        ThugUI_Config.gcvScale = rounded
+        if ER.gcvContainer then ER.gcvContainer:SetScale(rounded) end
+    end)
+
+    local gcvCornerLabel = content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    gcvCornerLabel:SetPoint("TOPLEFT", gcvScaleLabel, "BOTTOMLEFT", 0, -25)
+    gcvCornerLabel:SetText("Cursor Anchor Corner:")
+
+    local gcvCornerNote = content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    gcvCornerNote:SetPoint("TOPLEFT", gcvCornerLabel, "BOTTOMLEFT", 0, -3)
+    gcvCornerNote:SetText("Which corner of the bar attaches to the cursor when following.")
+
+    local gcvCornerDropdown = CreateFrame("Frame", "ThugUI_GCVCornerDropdown", content, "UIDropDownMenuTemplate")
+    gcvCornerDropdown:SetPoint("TOPLEFT", gcvCornerNote, "BOTTOMLEFT", -16, -5)
+    UIDropDownMenu_SetWidth(gcvCornerDropdown, 140)
+
+    local gcvCornerLabels = {TOPLEFT = "Top Left", TOPRIGHT = "Top Right", BOTTOMLEFT = "Bottom Left", BOTTOMRIGHT = "Bottom Right"}
+    local gcvCornerOrder = {"TOPLEFT", "TOPRIGHT", "BOTTOMLEFT", "BOTTOMRIGHT"}
+
+    UIDropDownMenu_Initialize(gcvCornerDropdown, function(self, level)
+        local info = UIDropDownMenu_CreateInfo()
+        for _, corner in ipairs(gcvCornerOrder) do
+            info.text = gcvCornerLabels[corner]
+            info.checked = (ThugUI_Config.gcvAnchorCorner == corner)
+            info.func = function()
+                ThugUI_Config.gcvAnchorCorner = corner
+                UIDropDownMenu_SetText(gcvCornerDropdown, gcvCornerLabels[corner])
+            end
+            UIDropDownMenu_AddButton(info)
+        end
+    end)
+    UIDropDownMenu_SetText(gcvCornerDropdown, gcvCornerLabels[ThugUI_Config.gcvAnchorCorner or "TOPLEFT"])
+
+    -- =====================
+    -- Tracked Spells
+    -- =====================
+    local spellsSeparator = CreateSeparator(content, "Tracked Spells", "TOPLEFT", gcvCornerDropdown, 0, -20)
+
+    local spellsNote = content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    spellsNote:SetPoint("TOPLEFT", spellsSeparator, "BOTTOMLEFT", 0, -10)
+    spellsNote:SetText("Mangle, Thrash, Convoke the Spirits, Lunar Beam, Red Moon.")
+
+    local talentNote = content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    talentNote:SetPoint("TOPLEFT", spellsNote, "BOTTOMLEFT", 0, -8)
+    talentNote:SetText("Talent abilities (Convoke, Lunar Beam, Red Moon) only appear when actually\ntalented. Each icon shows only while its ability is ready (off cooldown).")
+
+    -- =====================
+    -- Reset
+    -- =====================
+    local resetSeparator = CreateSeparator(content, "Reset", "TOPLEFT", talentNote, 0, -20)
+
+    local resetButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+    resetButton:SetSize(240, 25)
+    resetButton:SetPoint("TOPLEFT", resetSeparator, "BOTTOMLEFT", 0, -10)
+    resetButton:SetText("Reset Guardian Viewer Settings")
+    resetButton:SetScript("OnClick", function()
+        local gcvKeys = {
+            "showGCV", "gcvShowOnlyInCombat", "anchorGCVToCursor",
+            "gcvAnchorCorner", "gcvScale", "gcvPoint",
+        }
+        for _, key in ipairs(gcvKeys) do
+            ThugUI_Config[key] = ER.defaults[key]
+        end
+
+        showGCVCheckbox:SetChecked(ThugUI_Config.showGCV or false)
+        gcvCombatCheckbox:SetChecked(ThugUI_Config.gcvShowOnlyInCombat or false)
+        gcvAnchorCheckbox:SetChecked(ThugUI_Config.anchorGCVToCursor or false)
+        gcvScaleSlider:SetValue(ThugUI_Config.gcvScale or 1.0)
+        gcvScaleValue:SetText(string.format("%.2f", ThugUI_Config.gcvScale or 1.0))
+        UIDropDownMenu_SetText(gcvCornerDropdown, gcvCornerLabels[ThugUI_Config.gcvAnchorCorner or "TOPLEFT"])
+
+        if ER.gcvContainer then
+            ER.gcvContainer:ClearAllPoints()
+            ER.gcvContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 300)
+            ER.gcvContainer:SetScale(ThugUI_Config.gcvScale or 1.0)
+        end
+        ER:UpdateGCVVisibility()
+        print("|cff00ff00ThugUI:|r Guardian viewer settings reset to defaults.")
+    end)
+
+    -- Register as subcategory
+    local subcategory = Settings.RegisterCanvasLayoutSubcategory(parentCategory, panel, panel.name)
+    subcategory.ID = "ThugUI_GuardianCooldownViewer"
+end
+
+-- ============================================================================
 -- FRAME HIDER SUB-PANEL
 -- ============================================================================
 
@@ -1224,20 +1591,8 @@ function ER:CreateFrameHiderPanel(parentCategory)
     -- =====================
     local toggleSeparator = CreateSeparator(content, "Hidden Elements", "TOPLEFT", desc, 0, -20)
 
-    local hideOTCheckbox = CreateFrame("CheckButton", "ThugUI_HideOTCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
-    hideOTCheckbox:SetPoint("TOPLEFT", toggleSeparator, "BOTTOMLEFT", 20, -15)
-    _G[hideOTCheckbox:GetName() .. "Text"]:SetText("Hide Objective Tracker")
-    hideOTCheckbox:SetChecked(ThugUI_Config.hideObjectiveTracker)
-    hideOTCheckbox:SetScript("OnClick", function(self)
-        ThugUI_Config.hideObjectiveTracker = self:GetChecked()
-    end)
-
-    local hideOTNote = content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
-    hideOTNote:SetPoint("TOPLEFT", hideOTCheckbox, "BOTTOMLEFT", 20, -2)
-    hideOTNote:SetText("Permanently hides the quest/objective tracker frame.")
-
     local hideStanceCheckbox = CreateFrame("CheckButton", "ThugUI_HideStanceCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
-    hideStanceCheckbox:SetPoint("TOPLEFT", hideOTNote, "BOTTOMLEFT", -20, -10)
+    hideStanceCheckbox:SetPoint("TOPLEFT", toggleSeparator, "BOTTOMLEFT", 20, -15)
     _G[hideStanceCheckbox:GetName() .. "Text"]:SetText("Hide Stance Bar")
     hideStanceCheckbox:SetChecked(ThugUI_Config.hideStanceBar)
     hideStanceCheckbox:SetScript("OnClick", function(self)
@@ -1269,26 +1624,9 @@ function ER:CreateFrameHiderPanel(parentCategory)
     hideCharNote:SetText("Hides the player portrait, health, and mana frame.")
 
     -- =====================
-    -- Fixes
-    -- =====================
-    local fixesSeparator = CreateSeparator(content, "Fixes", "TOPLEFT", hideCharNote, -36, -20)
-
-    local fixTooltipCheckbox = CreateFrame("CheckButton", "ThugUI_FixTooltipCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
-    fixTooltipCheckbox:SetPoint("TOPLEFT", fixesSeparator, "BOTTOMLEFT", 20, -15)
-    _G[fixTooltipCheckbox:GetName() .. "Text"]:SetText("Fix party/raid aura tooltip anchoring")
-    fixTooltipCheckbox:SetChecked(ThugUI_Config.fixTooltipAnchor)
-    fixTooltipCheckbox:SetScript("OnClick", function(self)
-        ThugUI_Config.fixTooltipAnchor = self:GetChecked()
-    end)
-
-    local fixTooltipNote = content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
-    fixTooltipNote:SetPoint("TOPLEFT", fixTooltipCheckbox, "BOTTOMLEFT", 20, -2)
-    fixTooltipNote:SetText("Redirects aura tooltips on party/raid frames to use your\nEdit Mode tooltip position instead of cursor anchoring.")
-
-    -- =====================
     -- Movable Frames
     -- =====================
-    local movableSeparator = CreateSeparator(content, "Movable Frames", "TOPLEFT", fixTooltipNote, -36, -20)
+    local movableSeparator = CreateSeparator(content, "Movable Frames", "TOPLEFT", hideCharNote, -36, -20)
 
     local preyCrystalCheckbox = CreateFrame("CheckButton", "ThugUI_PreyCrystalCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
     preyCrystalCheckbox:SetPoint("TOPLEFT", movableSeparator, "BOTTOMLEFT", 20, -15)
@@ -1303,28 +1641,43 @@ function ER:CreateFrameHiderPanel(parentCategory)
     preyCrystalNote:SetText("Drag the Prey Crystal power bar to reposition it.\nPosition is saved across sessions. /reload to apply changes.")
 
     -- =====================
+    -- Debug
+    -- =====================
+    local debugSeparator = CreateSeparator(content, "Debug", "TOPLEFT", preyCrystalNote, -36, -20)
+
+    local debugModeCheckbox = CreateFrame("CheckButton", "ThugUI_DebugModeCheckbox", content, "InterfaceOptionsCheckButtonTemplate")
+    debugModeCheckbox:SetPoint("TOPLEFT", debugSeparator, "BOTTOMLEFT", 20, -15)
+    _G[debugModeCheckbox:GetName() .. "Text"]:SetText("Debug Mode")
+    debugModeCheckbox:SetChecked(ThugUI_Config.debugMode)
+    debugModeCheckbox:SetScript("OnClick", function(self)
+        ER:SetDebugMode(self:GetChecked())
+    end)
+    -- Let the slash command (/thugdebug) keep this checkbox in sync
+    ER.debugModeCheckbox = debugModeCheckbox
+
+    local debugModeNote = content:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    debugModeNote:SetPoint("TOPLEFT", debugModeCheckbox, "BOTTOMLEFT", 20, -2)
+    debugModeNote:SetText("Master switch for all ThugUI debug output: the aura query log\n(/thuglog) and init messages. Same as the /thugdebug command.")
+
+    -- =====================
     -- Reset
     -- =====================
-    local resetSeparator = CreateSeparator(content, "Reset", "TOPLEFT", preyCrystalNote, -36, -20)
+    local resetSeparator = CreateSeparator(content, "Reset", "TOPLEFT", debugModeNote, -36, -20)
 
     local resetButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     resetButton:SetSize(200, 25)
     resetButton:SetPoint("TOPLEFT", resetSeparator, "BOTTOMLEFT", 0, -10)
     resetButton:SetText("Reset Frame Hider Settings")
     resetButton:SetScript("OnClick", function()
-        ThugUI_Config.hideObjectiveTracker = ER.defaults.hideObjectiveTracker
         ThugUI_Config.hideStanceBar = ER.defaults.hideStanceBar
         ThugUI_Config.hideBagButtons = ER.defaults.hideBagButtons
         ThugUI_Config.hideCharacterFrame = ER.defaults.hideCharacterFrame
-        ThugUI_Config.fixTooltipAnchor = ER.defaults.fixTooltipAnchor
         ThugUI_Config.movePreyCrystal = ER.defaults.movePreyCrystal
         ThugUI_Config.preyCrystalPoint = ER.defaults.preyCrystalPoint
 
-        hideOTCheckbox:SetChecked(ThugUI_Config.hideObjectiveTracker)
         hideStanceCheckbox:SetChecked(ThugUI_Config.hideStanceBar)
         hideBagCheckbox:SetChecked(ThugUI_Config.hideBagButtons)
         hideCharCheckbox:SetChecked(ThugUI_Config.hideCharacterFrame)
-        fixTooltipCheckbox:SetChecked(ThugUI_Config.fixTooltipAnchor)
         preyCrystalCheckbox:SetChecked(ThugUI_Config.movePreyCrystal)
 
         print("|cff00ff00ThugUI:|r Frame hider settings reset to defaults. /reload to apply.")

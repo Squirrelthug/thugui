@@ -1,11 +1,38 @@
-## Interface: 120005
+## Interface: 120007
 ## Title: ThugUI
 ## Notes: Enhanced UI features including Essential Rings - cursor-centered cooldown tracking
 ## Author: Thug
 ## IconTexture: Interface\AddOns\ThugUI\media\ThugUI_Icon
-## SavedVariables: ThugUI_Config ThugUI_DebugLog
+## SavedVariables: ThugUI_Config ThugUI_DebugLog ThugUI_BCVDump ThugUIDB
 
 ThugUI.xml
+
+# core.lua MUST load before any module: it creates ThugUI.modules, defines
+# ThugUI:RegisterModule (called at file scope by OrbAnchors), and owns the
+# ADDON_LOADED handler that runs InitializeDB + every module's Initialize.
+# It assigns ThugUI.modules = {} unconditionally, so loading it after a module
+# has registered would wipe the registry.
+core.lua
+
+# oUF (MIT) - vendored unit frame framework, see libs\oUF\LICENSE.txt.
+# Embedded with no X-oUF metadata, so it exposes no global and is reached
+# through the addon namespace as ns.oUF. Must load before anything using it.
+libs\oUF\oUF.xml
+
 modules\EssentialRings.lua
 modules\EssentialRings_Settings.lua
+
+# Raid frames: Core defines ThugUI.RaidFrames, Settings hangs its panel off the
+# helpers exported by EssentialRings_Settings, so both come after those.
+modules\RaidFrames\Core.lua
+modules\RaidFrames\Settings.lua
+
+# Target of target, same arrangement: Core defines ThugUI.TargetOfTarget and
+# Settings hangs its panel off the EssentialRings_Settings helpers.
+modules\TargetOfTarget\Core.lua
+modules\TargetOfTarget\Settings.lua
+
 modules\FrameHider.lua
+options.lua
+modules\OrbAnchors.lua
+

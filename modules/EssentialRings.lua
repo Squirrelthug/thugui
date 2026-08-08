@@ -78,17 +78,29 @@ local function DumpAuraFields(auraData)
     return table.concat(parts, ", ")
 end
 
-SLASH_THUGDEBUG1 = "/thugdebug"
-SlashCmdList["THUGDEBUG"] = function()
-    DebugLog.enabled = not DebugLog.enabled
-    if DebugLog.enabled then
+-- Single switch that drives every ThugUI debug output: the aura DebugLog and
+-- init chatter. Tied to the "Debug Mode" checkbox and the /thugdebug command.
+function ER:SetDebugMode(enabled)
+    enabled = not not enabled
+    ThugUI_Config = ThugUI_Config or {}
+    ThugUI_Config.debugMode = enabled
+    DebugLog.enabled = enabled
+    if enabled then
         ThugUI_DebugLog = {}  -- clear on enable
         DebugLog.didCombatDump = false  -- reset one-time dump flag
-        print("|cff00ff00ThugUI Debug:|r Logging ON — aura queries will be logged.")
-        print("|cff00ff00ThugUI Debug:|r Enter combat with buffs, then /reload to save log.")
+        print("|cff00ff00ThugUI Debug:|r Debug mode ON — aura queries will be logged.")
+        print("|cff00ff00ThugUI Debug:|r Enter combat with buffs, then /reload to save log; /thuglog to view.")
     else
-        print("|cff00ff00ThugUI Debug:|r Logging OFF.")
+        print("|cff00ff00ThugUI Debug:|r Debug mode OFF.")
     end
+    if ER.debugModeCheckbox then
+        ER.debugModeCheckbox:SetChecked(enabled)
+    end
+end
+
+SLASH_THUGDEBUG1 = "/thugdebug"
+SlashCmdList["THUGDEBUG"] = function()
+    ER:SetDebugMode(not (ThugUI_Config and ThugUI_Config.debugMode))
 end
 
 SLASH_THUGLOG1 = "/thuglog"
@@ -103,6 +115,157 @@ SlashCmdList["THUGLOG"] = function(msg)
     for i = start, #ThugUI_DebugLog do
         print(ThugUI_DebugLog[i])
     end
+end
+
+-- ============================================================================
+-- BCV iteration dump — writes to the ThugUI_BCVDump SavedVariable (declared in
+-- the .toc) so the results can be read straight off disk after a /reload, with
+-- no copy/paste. Everything is stored via SafeStr (plain strings) so secret
+-- values from instanced combat can't break SavedVariables serialization.
+-- ============================================================================
+
+-- Probe one spell/aura by name or numeric ID. Returns a flat table of strings:
+-- whether the texture resolves, whether the player knows it, and the cooldown /
+-- charge data the game exposes (tells us how Eclipse etc. can be displayed).
+local function ProbeSpell(query)
+    local entry = { query = SafeStr(query) }
+
+    entry.texture = SafeStr(C_Spell.GetSpellTexture(query))
+
+    local info = C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(query)
+    if info then
+        entry.resolvedName = SafeStr(info.name)
+        entry.resolvedID = SafeStr(info.spellID)
+    else
+        entry.resolvedName = "nil"
+        entry.resolvedID = "nil"
+    end
+
+    local resolvedID = (info and info.spellID) or (type(query) == "number" and query) or nil
+    entry.known = resolvedID and SafeStr(IsPlayerSpell and IsPlayerSpell(resolvedID)) or "n/a"
+
+    local okC, cd = pcall(C_Spell.GetSpellCooldown, query)
+    if okC and cd then
+        entry.cdIsActive = SafeStr(cd.isActive)
+        entry.cdIsOnGCD  = SafeStr(cd.isOnGCD)
+        entry.cdStart    = SafeStr(cd.startTime)
+        entry.cdDuration = SafeStr(cd.duration)
+    else
+        entry.cooldown = okC and "nil" or ("pcall failed " .. SafeStr(cd))
+    end
+
+    local okCh, ch = pcall(C_Spell.GetSpellCharges, query)
+    if okCh and ch then
+        entry.chCurrent  = SafeStr(ch.currentCharges)
+        entry.chMax      = SafeStr(ch.maxCharges)
+        entry.chCdStart  = SafeStr(ch.cooldownStartTime)
+        entry.chCdLength = SafeStr(ch.cooldownDuration)
+    else
+        entry.charges = okCh and "nil (not a charge spell)" or ("pcall failed " .. SafeStr(ch))
+    end
+
+    return entry
+end
+
+-- The decisive in-combat test: does GetPlayerAuraBySpellID return a usable
+-- table for a known buff ID while in combat? Reports presence, whether the
+-- fields are secret, and whether the icon can even be compared (which is what
+-- the show/hide logic needs). Run /thugbcv WHILE the buff is up.
+local function TestAuraRead(id)
+    local r = { id = SafeStr(id) }
+    if not (C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID) then
+        r.result = "API missing"
+        return r
+    end
+    local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, id)
+    if not ok then
+        r.result = "pcall failed: " .. SafeStr(aura)
+        return r
+    end
+    if not aura then
+        r.result = "nil (not present, or blocked in combat)"
+        return r
+    end
+    r.result      = "TABLE returned"
+    r.nameSecret  = SafeStr(issecretvalue and issecretvalue(aura.name))
+    r.iconSecret  = SafeStr(issecretvalue and issecretvalue(aura.icon))
+    r.iconValue   = SafeStr(aura.icon)
+    -- Can we branch on the icon? (secret values error on comparison)
+    local eqOk = pcall(function() return aura.icon == 0 end)
+    r.iconComparable = eqOk and "yes" or "no (secret)"
+    return r
+end
+
+-- Buff IDs to test reads on. Includes the eclipse/proc IDs plus likely always-up
+-- control buffs (Mark of the Wild 1126, Moonkin Form 24858) so we get a signal
+-- even if the eclipse/proc buffs happen not to be up at capture time.
+local AURA_READ_IDS = { 48517, 48518, 393944, 393942, 450360, 1126, 24858 }
+
+-- Names/IDs auto-probed by /thugbcv so we capture Eclipse + the proc buffs in
+-- one shot without the user typing anything.
+local BCV_PROBE_LIST = {
+    "Eclipse", "Eclipse (Solar)", "Eclipse (Lunar)",
+    "Starweaver's Weft", "Starweaver's Warp", "Touch the Cosmos",
+    "Starsurge", "Starfall",
+    48517, 48518, 393944, 393942, 450360,
+}
+
+-- /thugbcv — capture all player buffs + auto-probe the Balance spells into the
+-- ThugUI_BCVDump SavedVariable. Run it with Eclipse active and the free-cast
+-- procs up, then /reload (or log out) to flush it to disk.
+SLASH_THUGBCV1 = "/thugbcv"
+SlashCmdList["THUGBCV"] = function()
+    ThugUI_BCVDump = {
+        capturedAt = date and date("%Y-%m-%d %H:%M:%S") or SafeStr(GetTime()),
+        inCombat = InCombatLockdown() and "yes" or "no",
+        buffs = {},
+        spellProbes = {},
+        auraReadTests = {},
+    }
+
+    -- 1) Every HELPFUL aura on the player
+    local i = 1
+    while i <= 40 do
+        local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
+        if not ok or not aura then break end
+        table.insert(ThugUI_BCVDump.buffs, {
+            index  = i,
+            name   = SafeStr(aura.name),
+            id     = SafeStr(aura.spellId),
+            icon   = SafeStr(aura.icon),
+            stacks = SafeStr(aura.applications),
+        })
+        i = i + 1
+    end
+
+    -- 2) Auto-probe Eclipse + proc spells/buffs
+    for _, q in ipairs(BCV_PROBE_LIST) do
+        table.insert(ThugUI_BCVDump.spellProbes, ProbeSpell(q))
+    end
+
+    -- 3) The decisive test: can we read a known buff by ID in combat?
+    for _, id in ipairs(AURA_READ_IDS) do
+        table.insert(ThugUI_BCVDump.auraReadTests, TestAuraRead(id))
+    end
+
+    print(string.format("|cff00ff00ThugUI BCV:|r captured %d buffs + %d probes to ThugUI_BCVDump. "
+        .. "Now /reload (or log out) to write it to disk.",
+        #ThugUI_BCVDump.buffs, #ThugUI_BCVDump.spellProbes))
+end
+
+-- /thugspell <name|id> — ad-hoc probe; appends one entry to ThugUI_BCVDump.
+SLASH_THUGSPELL1 = "/thugspell"
+SlashCmdList["THUGSPELL"] = function(msg)
+    msg = msg and msg:match("^%s*(.-)%s*$") or ""
+    if msg == "" then
+        print("|cff00ff00ThugUI Spell:|r usage — /thugspell <spell name or id>")
+        return
+    end
+    ThugUI_BCVDump = ThugUI_BCVDump or { buffs = {}, spellProbes = {} }
+    ThugUI_BCVDump.spellProbes = ThugUI_BCVDump.spellProbes or {}
+    local query = tonumber(msg) or msg
+    table.insert(ThugUI_BCVDump.spellProbes, ProbeSpell(query))
+    print("|cff00ff00ThugUI Spell:|r probed '" .. msg .. "' into ThugUI_BCVDump. /reload to flush.")
 end
 
 -- Spells shown in the ECV — looked up by name at runtime so the game
@@ -167,24 +330,149 @@ ER.defaults = {
     buffFrameCorner = "BOTTOMRIGHT",
     buffFrameScale = 1.0,
 
+    -- Balance Cooldown Viewer (second bar, Balance spec only) — its own
+    -- independent appearance/anchor settings, separate from the Resto bar.
+    showBCV = false,
+    bcvShowOnlyInCombat = false,
+    anchorBCVToCursor = false,
+    bcvAnchorCorner = "TOPLEFT",
+    bcvScale = 1.0,
+    bcvPoint = nil,  -- saved position {point, relPoint, x, y}
+    bcvShowStarsurgeProc = true,
+
+    -- Guardian Cooldown Viewer (Guardian spec only) — its own independent
+    -- appearance/anchor settings, separate from the Resto/Balance bars.
+    showGCV = false,
+    gcvShowOnlyInCombat = false,
+    anchorGCVToCursor = false,
+    gcvAnchorCorner = "TOPLEFT",
+    gcvScale = 1.0,
+    gcvPoint = nil,  -- saved position {point, relPoint, x, y}
+
     -- Test mode
     testMode = false,
 
+    -- Debug mode — single switch for all ThugUI debug output (aura logger,
+    -- init chatter). Toggled by the settings checkbox or /thugdebug.
+    debugMode = false,
+
     -- Frame Hider settings
-    hideObjectiveTracker = true,
+    -- (objective tracker visibility now belongs to the OrbAnchors module,
+    -- stored under ThugUIDB.OrbAnchors.objectivesOrb.visible)
     hideStanceBar = true,
     hideBagButtons = true,
     hideCharacterFrame = false,
-    fixTooltipAnchor = true,
 
     -- Prey Crystal (UIWidgetPowerBarContainerFrame)
     movePreyCrystal = true,
     preyCrystalPoint = nil,  -- saved position {point, relPoint, x, y}
+
+    -- Raid Frames (modules/RaidFrames, built on oUF)
+    -- Off by default: enabling replaces the Blizzard party/raid frames, which
+    -- should be an explicit choice rather than something an update does to you.
+    rfEnabled = false,
+    rfUnlocked = false,  -- shows the drag handle over the frames
+    rfPoint = nil,  -- saved position {point, relPoint, x, y}
+
+    -- Layout (changing any of these needs a /reload to rebuild the header)
+    rfWidth = 80,
+    rfHeight = 40,
+    rfSpacing = 3,
+    rfUnitsPerColumn = 5,
+    rfMaxColumns = 8,
+    rfGroupBy = "GROUP",  -- GROUP | ROLE | CLASS | NONE
+
+    -- Health
+    rfHealthColor = "class",  -- class | gradient | static
+    rfHealthStaticColor = { r = 0.25, g = 0.25, b = 0.25 },
+    rfShowPowerBar = false,
+    rfPowerBarHeight = 3,
+
+    -- Text
+    rfShowName = true,
+    rfNameLength = 6,
+
+    -- Buff Manager
+    rfShowBuffs = true,
+    rfBuffCount = 3,
+    rfBuffSize = 14,
+    rfBuffOnlyMine = true,
+    rfBuffHideTooltips = true,
+
+    -- Debuff Display
+    rfShowDebuffs = true,
+    rfDebuffCount = 3,
+    rfDebuffSize = 16,
+    rfDebuffDispellableOnly = false,
+    rfDebuffHideTooltips = true,
+
+    -- Behaviour
+    rfRangeAlpha = 0.4,
+    rfShowParty = true,
+    rfShowSolo = false,
+    rfShowPlayerInParty = true,
+    rfHideBlizzardRaidFrames = true,
+
+    -- Target of Target (modules/TargetOfTarget, built on oUF)
+    -- Off by default for the same reason as the raid frames: enabling it turns
+    -- off Blizzard's own target-of-target frame, which should be a choice.
+    totEnabled = false,
+    totUnlocked = false,  -- shows the drag handle over the frame
+    totPoint = nil,  -- saved position {point, relPoint, x, y}
+
+    -- Frame parts
+    totShowHealthBar = true,
+    totShowPowerBar = true,
+    totShowPortrait = true,
+    totShowName = true,
+    totShowReputation = true,
+
+    -- Appearance
+    totHealthColor = "blizzard",  -- blizzard | class | reaction
+    totScale = 1.0,
+
+    -- Behaviour
+    totHideBlizzardToT = true,
+    -- Set at runtime when we turn the showTargetOfTarget CVar off, so unticking
+    -- the option can give the player back the value they actually had.
+    totRestoreBlizzardToT = nil,
 }
 
 -- Returns true if actually in combat OR test mode is on
 function ER:IsInCombat()
     return InCombatLockdown() or (ThugUI_Config.testMode == true)
+end
+
+-- ============================================================================
+-- Druid spec gating
+-- The Essential (Resto) bar and the Balance bar are each tied to a single
+-- Druid specialization. GetSpecialization() returns the active spec index:
+--   1 = Balance, 2 = Feral, 3 = Guardian, 4 = Restoration
+-- ============================================================================
+local DRUID_SPEC_BALANCE = 1
+local DRUID_SPEC_GUARDIAN = 3
+local DRUID_SPEC_RESTORATION = 4
+
+function ER:IsDruid()
+    local _, class = UnitClass("player")
+    return class == "DRUID"
+end
+
+function ER:GetActiveSpecIndex()
+    if not GetSpecialization then return nil end
+    return GetSpecialization()
+end
+
+function ER:IsRestoSpec()
+    return ER:IsDruid() and ER:GetActiveSpecIndex() == DRUID_SPEC_RESTORATION
+end
+
+function ER:IsBalanceSpec()
+    return ER:IsDruid() and ER:GetActiveSpecIndex() == DRUID_SPEC_BALANCE
+end
+
+function ER:IsGuardianSpec()
+    return ER:IsDruid() and ER:GetActiveSpecIndex() == DRUID_SPEC_GUARDIAN
 end
 
 -- Cursor state tracking
@@ -343,6 +631,10 @@ function ER:OnUpdate(elapsed)
     ER:UpdateClearcastingPosition()
     -- Anchor Blizzard tracked buff frame to cursor
     ER:UpdateBuffFramePosition()
+    -- Balance bar follows cursor (Balance spec, in combat, if enabled)
+    ER:UpdateBCVPosition()
+    -- Guardian bar follows cursor (Guardian spec, in combat, if enabled)
+    ER:UpdateGCVPosition()
 
     -- Throttled ECV cooldown refresh — polls spell states every ~0.15s
     -- so the bar stays in sync even when event-based updates miss a frame
@@ -368,6 +660,8 @@ function ER:OnUpdate(elapsed)
         ER:UpdateAbundanceStacks()
         ER:UpdateReforestationStacks()
         ER:UpdateClearcastingTimer()
+        ER:UpdateBCVCooldowns()
+        ER:UpdateGCVCooldowns()
 
         -- Restore debug flag if we suppressed it
         if wasEnabled then DebugLog.enabled = true end
@@ -852,8 +1146,531 @@ function ER:UpdateClearcastingTimer()
         ER.CLEARCASTING_SPELL_ID, "Clearcasting", 136170)
 end
 
+-- ============================================================================
+-- BALANCE COOLDOWN VIEWER (BCV)
+-- A second cursor-anchored bar, shown only in Balance spec. Two display modes:
+--  * "cooldown" — the icon shows while the ability is usable (with a charge
+--    count for charge builds like Celestial Alignment) and hides once spent.
+--    Talent-gated so only the build you run resolves (Incarnation vs CA).
+--  * "buff" — the free-cast proc buffs (Starweaver's Weft, Starweaver's Warp,
+--    Touch the Cosmos) each show their own icon while that buff is active.
+-- NOTE: Eclipse itself has no cooldown/charge/cast data the API exposes, so it
+-- cannot be shown here and is intentionally not in the list.
+-- ============================================================================
+
+-- spellID drives the talent (IsPlayerSpell) gate and texture lookup; the
+-- cooldown/charge state and aura presence resolve by NAME at runtime so they
+-- follow whatever version the player actually has talented.
+ER.bcvSpellDefs = {
+    { key = "furyofelune",   name = "Fury of Elune",                spellID = 202770, mode = "cooldown", talentGated = true },
+    { key = "forceofnature", name = "Force of Nature",              spellID = 205636, mode = "cooldown", talentGated = true },
+    -- The two builds of the big Balance cooldown. Each is talent-gated, so only
+    -- the one you actually run resolves and shows. Cooldown mode shows the icon
+    -- while usable (and the charge count if it's a charge build), hiding once
+    -- spent. (Eclipse itself has no cooldown/charge data, so it can't be shown
+    -- this way — removed.)
+    { key = "incarnation",        name = "Incarnation: Chosen of Elune", spellID = 102560, mode = "cooldown", talentGated = true, strictAvail = true },
+    { key = "celestialalignment", name = "Celestial Alignment",          spellID = 194223, mode = "cooldown", talentGated = true, strictAvail = true },
+    -- Free-cast proc buffs shown as their own icons while active (gated by the
+    -- "show procs" checkbox). Weft = free Starsurge, Warp = free Starfall,
+    -- Touch the Cosmos = next Starsurge/Starfall free & buffed.
+    { key = "starweaversweft", name = "Starweaver's Weft", spellID = 393944, mode = "buff", talentGated = false,
+      gateConfig = "bcvShowStarsurgeProc",
+      buffAuras = { { name = "Starweaver's Weft", id = 393944, icon = 429383 } } },
+    { key = "starweaverswarp", name = "Starweaver's Warp", spellID = 393942, mode = "buff", talentGated = false,
+      gateConfig = "bcvShowStarsurgeProc",
+      buffAuras = { { name = "Starweaver's Warp", id = 393942, icon = 1052602 } } },
+    { key = "touchthecosmos",  name = "Touch the Cosmos",  spellID = 450360, mode = "buff", talentGated = false,
+      gateConfig = "bcvShowStarsurgeProc",
+      buffAuras = { { name = "Touch the Cosmos", id = 450360, icon = 1120185 } } },
+}
+
+local BCV_ICON_SIZE = 32
+local BCV_PADDING = 4
+
+-- Resolve a def's numeric spell ID. Defs normally hardcode one, but an entry
+-- may omit it (spell added in a patch we haven't pinned an ID for yet); in that
+-- case ask the game by name. C_Spell.GetSpellInfo only resolves names the
+-- player actually has, so a nil return also means "not talented".
+local function ResolveDefSpellID(def)
+    if def.spellID then return def.spellID end
+    local ok, info = pcall(C_Spell.GetSpellInfo, def.name)
+    return (ok and info and info.spellID) or nil
+end
+
+-- Is a (talented) spell currently available to the player?
+local function IsSpellAvailable(spellID)
+    if not spellID then return true end
+    if IsPlayerSpell and IsPlayerSpell(spellID) then return true end
+    if IsSpellKnownOrOverridesKnown and IsSpellKnownOrOverridesKnown(spellID) then return true end
+    if C_SpellBook and C_SpellBook.IsSpellKnown and C_SpellBook.IsSpellKnown(spellID) then return true end
+    return false
+end
+
+-- Create the container once. Icons are created lazily (EnsureBCVIcons) so that
+-- Balance spells resolve correctly even if you logged in as another spec.
+function ER:CreateBCV()
+    if ER.bcvContainer then return end
+
+    local f = CreateFrame("Frame", "ThugUI_BalanceCooldownViewer", UIParent)
+    f:SetFrameStrata("HIGH")
+    f:SetFrameLevel(10)
+    ER.bcvContainer = f
+    ER.bcvIcons = {}
+    ER.bcvIconsByKey = {}
+
+    local saved = ThugUI_Config.bcvPoint
+    if saved then
+        f:SetPoint(saved.point, UIParent, saved.relPoint, saved.x, saved.y)
+    else
+        f:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 260)
+    end
+
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function(self)
+        if not InCombatLockdown() then self:StartMoving() end
+    end)
+    f:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        local point, _, relPoint, x, y = self:GetPoint()
+        ThugUI_Config.bcvPoint = { point = point, relPoint = relPoint, x = x, y = y }
+    end)
+
+    f:SetScale(ThugUI_Config.bcvScale or 1.0)
+
+    ER:EnsureBCVIcons()
+    ER:UpdateBCVVisibility()
+end
+
+-- Create any not-yet-created icons whose texture now resolves. Idempotent.
+function ER:EnsureBCVIcons()
+    if not ER.bcvContainer then return end
+    ER.bcvIconsByKey = ER.bcvIconsByKey or {}
+
+    for _, def in ipairs(ER.bcvSpellDefs) do
+        if not ER.bcvIconsByKey[def.key] then
+            local texture = (def.spellID and C_Spell.GetSpellTexture(def.spellID))
+                or C_Spell.GetSpellTexture(def.name)
+            if texture then
+                local icon = CreateFrame("Frame", "ThugUI_BCV_" .. def.key, ER.bcvContainer)
+                icon:SetSize(BCV_ICON_SIZE, BCV_ICON_SIZE)
+
+                local bg = icon:CreateTexture(nil, "BACKGROUND")
+                bg:SetPoint("TOPLEFT", -1, 1)
+                bg:SetPoint("BOTTOMRIGHT", 1, -1)
+                bg:SetColorTexture(0, 0, 0, 0.8)
+
+                local tex = icon:CreateTexture(nil, "ARTWORK")
+                tex:SetAllPoints()
+                tex:SetTexture(texture)
+                tex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+                icon.tex = tex
+                icon.baseTexture = texture  -- remembered so buff-mode art can swap and restore
+
+                -- Cooldown sweep, used by "buff" mode to show time remaining.
+                -- Harmless/unused for cooldown & proc modes.
+                local cd = CreateFrame("Cooldown", "ThugUI_BCV_" .. def.key .. "Cooldown", icon, "CooldownFrameTemplate")
+                cd:SetAllPoints()
+                cd:SetDrawEdge(true)
+                cd:SetHideCountdownNumbers(false)
+                icon.cooldown = cd
+
+                -- Charge-count text (bottom-right), shown for charge-build
+                -- cooldowns like Celestial Alignment when current charges read.
+                local count = icon:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+                count:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", -2, 2)
+                count:Hide()
+                icon.count = count
+
+                icon.def = def
+                icon:Hide()
+                ER.bcvIconsByKey[def.key] = icon
+                table.insert(ER.bcvIcons, icon)
+            end
+        end
+    end
+end
+
+-- For "buff" mode (Eclipse, free-cast procs): find the first active buff in def.buffAuras.
+-- Returns found, expirationTime, and the matched aura entry (so the caller can
+-- swap to that buff's art, e.g. Solar vs Lunar).
+local function GetBCVBuff(def)
+    if not def.buffAuras then return false, 0, nil end
+    for _, aura in ipairs(def.buffAuras) do
+        local _, expTime, found = GetTrackerAura(aura.id, aura.name, aura.icon)
+        if found then return true, expTime, aura end
+    end
+    return false, 0, nil
+end
+
+function ER:UpdateBCVCooldowns()
+    if not ER.bcvContainer or not ER.bcvContainer:IsShown() then return end
+    ER.bcvIconsByKey = ER.bcvIconsByKey or {}
+
+    local visibleIndex = 0
+    for _, def in ipairs(ER.bcvSpellDefs) do
+        local icon = ER.bcvIconsByKey[def.key]
+        if icon then
+            local show = false
+
+            -- strictAvail (Incarnation / Celestial Alignment override each
+            -- other) gates on IsPlayerSpell only, so the replaced base spell
+            -- doesn't also report as available and double up.
+            local available
+            if not def.talentGated then
+                available = true
+            elseif def.strictAvail then
+                available = (IsPlayerSpell and IsPlayerSpell(def.spellID)) or false
+            else
+                available = IsSpellAvailable(def.spellID)
+            end
+
+            if not available then
+                show = false
+            elseif def.mode == "buff" then
+                -- Buff icon (free-cast procs): show while the aura is up, with
+                -- the remaining-time sweep. Optional config gate.
+                local gated = def.gateConfig and not ThugUI_Config[def.gateConfig]
+                local found, expTime, aura = false, 0, nil
+                if not gated then
+                    found, expTime, aura = GetBCVBuff(def)
+                end
+                show = found
+                if show then
+                    if aura and aura.id and icon.tex then
+                        local art = C_Spell.GetSpellTexture(aura.id)
+                        icon.tex:SetTexture(art or icon.baseTexture)
+                    end
+                    local cd = icon.cooldown
+                    if cd then
+                        -- secret-safe, mirrors UpdateTrackerIcon
+                        local setOk = pcall(function()
+                            if expTime > 0 then
+                                local now = GetTime()
+                                local duration = expTime - now
+                                if duration > 0 then
+                                    cd:SetCooldown(now, duration)
+                                    cd:Show()
+                                else
+                                    cd:Hide()
+                                end
+                            else
+                                cd:Hide()
+                            end
+                        end)
+                        if not setOk then
+                            pcall(function() cd:SetCooldown(GetTime(), expTime - GetTime()) end)
+                        end
+                    end
+                elseif icon.cooldown then
+                    icon.cooldown:Hide()
+                end
+            else
+                -- cooldown / charge mode: show while usable, with a charge count
+                -- if this is a charge build (e.g. Celestial Alignment) and the
+                -- current charges are readable (not a secret value in combat).
+                show = IsSpellReady(def.name)
+                if show and icon.count then
+                    local ok, ch = pcall(C_Spell.GetSpellCharges, def.name)
+                    local cur = ok and ch and ch.currentCharges
+                    local maxc = ok and ch and ch.maxCharges
+                    if cur ~= nil and maxc and maxc > 1
+                        and not (issecretvalue and issecretvalue(cur)) then
+                        icon.count:SetText(cur)
+                        icon.count:Show()
+                    else
+                        icon.count:Hide()
+                    end
+                elseif icon.count then
+                    icon.count:Hide()
+                end
+            end
+
+            if show then
+                icon:Show()
+                icon:ClearAllPoints()
+                icon:SetPoint("TOPLEFT", ER.bcvContainer, "TOPLEFT",
+                    visibleIndex * (BCV_ICON_SIZE + BCV_PADDING), 0)
+                visibleIndex = visibleIndex + 1
+            else
+                icon:Hide()
+            end
+        end
+    end
+
+    local totalW = math.max(visibleIndex * (BCV_ICON_SIZE + BCV_PADDING) - BCV_PADDING, 1)
+    ER.bcvContainer:SetSize(totalW, BCV_ICON_SIZE)
+end
+
+function ER:UpdateBCVVisibility(inCombat)
+    if not ER.bcvContainer then return end
+
+    if not ThugUI_Config.showBCV or not ER:IsBalanceSpec() then
+        ER.bcvContainer:Hide()
+        return
+    end
+
+    -- Make sure Balance icons exist now that we're in Balance spec.
+    ER:EnsureBCVIcons()
+
+    if ThugUI_Config.bcvShowOnlyInCombat then
+        if inCombat == nil then inCombat = ER:IsInCombat() end
+        if not inCombat then
+            ER.bcvContainer:Hide()
+            return
+        end
+    end
+
+    ER.bcvContainer:Show()
+    ER:UpdateBCVCooldowns()
+end
+
+function ER:UpdateBCVPosition()
+    if not ThugUI_Config.anchorBCVToCursor then return end
+    if not ER:IsBalanceSpec() then return end
+    if not ER:IsInCombat() then return end
+
+    local f = ER.bcvContainer
+    if not f or not f:IsShown() then return end
+
+    local cursorX, cursorY = GetCursorPosition()
+    local uiScale = UIParent:GetEffectiveScale()
+    local scale = f:GetScale()
+    local scaledX = cursorX / uiScale / scale
+    local scaledY = cursorY / uiScale / scale
+
+    local corner = ThugUI_Config.bcvAnchorCorner or "TOPLEFT"
+    local gap = 8 / scale
+    local ofsX, ofsY = 0, 0
+    if corner == "TOPLEFT" then
+        ofsX, ofsY = gap, -gap
+    elseif corner == "TOPRIGHT" then
+        ofsX, ofsY = -gap, -gap
+    elseif corner == "BOTTOMLEFT" then
+        ofsX, ofsY = gap, gap
+    elseif corner == "BOTTOMRIGHT" then
+        ofsX, ofsY = -gap, gap
+    end
+
+    f:ClearAllPoints()
+    f:SetPoint(corner, UIParent, "BOTTOMLEFT", scaledX + ofsX, scaledY + ofsY)
+end
+
+-- Restore the bar to its saved (Edit Mode / dragged) position when it stops
+-- following the cursor (combat ended).
+function ER:ReleaseBCVAnchor()
+    if not ER.bcvContainer then return end
+    local saved = ThugUI_Config.bcvPoint
+    ER.bcvContainer:ClearAllPoints()
+    if saved then
+        ER.bcvContainer:SetPoint(saved.point, UIParent, saved.relPoint, saved.x, saved.y)
+    else
+        ER.bcvContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 260)
+    end
+end
+
+-- ============================================================================
+-- GUARDIAN COOLDOWN VIEWER (GCV)
+-- A cursor-anchored bar shown only in Guardian spec. Every entry is a plain
+-- "cooldown" tracker: the icon shows while the ability is ready and hides once
+-- it goes on cooldown — the same behaviour as the ECV/BCV cooldown icons.
+-- spellID drives the texture lookup and (for talents) the IsPlayerSpell gate;
+-- the cooldown state resolves BY NAME so it follows whatever the player has.
+-- ============================================================================
+ER.gcvSpellDefs = {
+    { key = "mangle",    name = "Mangle",              spellID = 33917,  talentGated = false },
+    { key = "thrash",    name = "Thrash",              spellID = 77758,  talentGated = false },
+    { key = "convoke",   name = "Convoke the Spirits", spellID = 391528, talentGated = true },
+    { key = "lunarbeam", name = "Lunar Beam",          spellID = 204066, talentGated = true },
+    -- spellID intentionally omitted — resolved by name at runtime (see
+    -- ResolveDefSpellID). Pin the number here once /thugspell reports it.
+    { key = "redmoon",   name = "Red Moon",                              talentGated = true },
+}
+
+-- Create the container once. Icons are created lazily (EnsureGCVIcons) so that
+-- Guardian spells resolve correctly even if you logged in as another spec.
+function ER:CreateGCV()
+    if ER.gcvContainer then return end
+
+    local f = CreateFrame("Frame", "ThugUI_GuardianCooldownViewer", UIParent)
+    f:SetFrameStrata("HIGH")
+    f:SetFrameLevel(10)
+    ER.gcvContainer = f
+    ER.gcvIcons = {}
+    ER.gcvIconsByKey = {}
+
+    local saved = ThugUI_Config.gcvPoint
+    if saved then
+        f:SetPoint(saved.point, UIParent, saved.relPoint, saved.x, saved.y)
+    else
+        f:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 300)
+    end
+
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function(self)
+        if not InCombatLockdown() then self:StartMoving() end
+    end)
+    f:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        local point, _, relPoint, x, y = self:GetPoint()
+        ThugUI_Config.gcvPoint = { point = point, relPoint = relPoint, x = x, y = y }
+    end)
+
+    f:SetScale(ThugUI_Config.gcvScale or 1.0)
+
+    ER:EnsureGCVIcons()
+    ER:UpdateGCVVisibility()
+end
+
+-- Create any not-yet-created icons whose texture now resolves. Idempotent.
+function ER:EnsureGCVIcons()
+    if not ER.gcvContainer then return end
+    ER.gcvIconsByKey = ER.gcvIconsByKey or {}
+
+    for _, def in ipairs(ER.gcvSpellDefs) do
+        if not ER.gcvIconsByKey[def.key] then
+            local texture = (def.spellID and C_Spell.GetSpellTexture(def.spellID))
+                or C_Spell.GetSpellTexture(def.name)
+            if texture then
+                local icon = CreateFrame("Frame", "ThugUI_GCV_" .. def.key, ER.gcvContainer)
+                icon:SetSize(BCV_ICON_SIZE, BCV_ICON_SIZE)
+
+                local bg = icon:CreateTexture(nil, "BACKGROUND")
+                bg:SetPoint("TOPLEFT", -1, 1)
+                bg:SetPoint("BOTTOMRIGHT", 1, -1)
+                bg:SetColorTexture(0, 0, 0, 0.8)
+
+                local tex = icon:CreateTexture(nil, "ARTWORK")
+                tex:SetAllPoints()
+                tex:SetTexture(texture)
+                tex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+                icon.tex = tex
+
+                icon.def = def
+                icon:Hide()
+                ER.gcvIconsByKey[def.key] = icon
+                table.insert(ER.gcvIcons, icon)
+            end
+        end
+    end
+end
+
+function ER:UpdateGCVCooldowns()
+    if not ER.gcvContainer or not ER.gcvContainer:IsShown() then return end
+    ER.gcvIconsByKey = ER.gcvIconsByKey or {}
+
+    local visibleIndex = 0
+    for _, def in ipairs(ER.gcvSpellDefs) do
+        local icon = ER.gcvIconsByKey[def.key]
+        if icon then
+            -- Talent abilities only show when actually talented; baseline
+            -- spells (Mangle, Thrash) are always available. A def with no
+            -- hardcoded spellID resolves one by name — if nothing resolves,
+            -- the player doesn't have the talent.
+            local available
+            if not def.talentGated then
+                available = true
+            else
+                local spellID = ResolveDefSpellID(def)
+                available = (spellID ~= nil) and IsSpellAvailable(spellID)
+            end
+            local show = available and IsSpellReady(def.name)
+
+            if show then
+                icon:Show()
+                icon:ClearAllPoints()
+                icon:SetPoint("TOPLEFT", ER.gcvContainer, "TOPLEFT",
+                    visibleIndex * (BCV_ICON_SIZE + BCV_PADDING), 0)
+                visibleIndex = visibleIndex + 1
+            else
+                icon:Hide()
+            end
+        end
+    end
+
+    local totalW = math.max(visibleIndex * (BCV_ICON_SIZE + BCV_PADDING) - BCV_PADDING, 1)
+    ER.gcvContainer:SetSize(totalW, BCV_ICON_SIZE)
+end
+
+function ER:UpdateGCVVisibility(inCombat)
+    if not ER.gcvContainer then return end
+
+    if not ThugUI_Config.showGCV or not ER:IsGuardianSpec() then
+        ER.gcvContainer:Hide()
+        return
+    end
+
+    -- Make sure Guardian icons exist now that we're in Guardian spec.
+    ER:EnsureGCVIcons()
+
+    if ThugUI_Config.gcvShowOnlyInCombat then
+        if inCombat == nil then inCombat = ER:IsInCombat() end
+        if not inCombat then
+            ER.gcvContainer:Hide()
+            return
+        end
+    end
+
+    ER.gcvContainer:Show()
+    ER:UpdateGCVCooldowns()
+end
+
+function ER:UpdateGCVPosition()
+    if not ThugUI_Config.anchorGCVToCursor then return end
+    if not ER:IsGuardianSpec() then return end
+    if not ER:IsInCombat() then return end
+
+    local f = ER.gcvContainer
+    if not f or not f:IsShown() then return end
+
+    local cursorX, cursorY = GetCursorPosition()
+    local uiScale = UIParent:GetEffectiveScale()
+    local scale = f:GetScale()
+    local scaledX = cursorX / uiScale / scale
+    local scaledY = cursorY / uiScale / scale
+
+    local corner = ThugUI_Config.gcvAnchorCorner or "TOPLEFT"
+    local gap = 8 / scale
+    local ofsX, ofsY = 0, 0
+    if corner == "TOPLEFT" then
+        ofsX, ofsY = gap, -gap
+    elseif corner == "TOPRIGHT" then
+        ofsX, ofsY = -gap, -gap
+    elseif corner == "BOTTOMLEFT" then
+        ofsX, ofsY = gap, gap
+    elseif corner == "BOTTOMRIGHT" then
+        ofsX, ofsY = -gap, gap
+    end
+
+    f:ClearAllPoints()
+    f:SetPoint(corner, UIParent, "BOTTOMLEFT", scaledX + ofsX, scaledY + ofsY)
+end
+
+-- Restore the bar to its saved (Edit Mode / dragged) position when it stops
+-- following the cursor (combat ended).
+function ER:ReleaseGCVAnchor()
+    if not ER.gcvContainer then return end
+    local saved = ThugUI_Config.gcvPoint
+    ER.gcvContainer:ClearAllPoints()
+    if saved then
+        ER.gcvContainer:SetPoint(saved.point, UIParent, saved.relPoint, saved.x, saved.y)
+    else
+        ER.gcvContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 300)
+    end
+end
+
 function ER:UpdateECVVisibility(inCombat)
     if not ER.ecvContainer then return end
+    -- This bar tracks Restoration spells, so it is hidden entirely outside
+    -- Restoration spec (icons, cursor-follow, and all).
+    if not ER:IsRestoSpec() then
+        ER.ecvContainer:Hide()
+        return
+    end
     if not ThugUI_Config.showECV then
         ER.ecvContainer:Hide()
         return
@@ -1083,8 +1900,22 @@ function ER:UpdateVisibility(forceState)
         end
     end
 
-    -- Update ECV visibility (show-only-in-combat setting)
+    -- BCV follows the cursor per-frame in combat (UpdateBCVPosition); when
+    -- combat ends, snap it back to its saved position.
+    if ThugUI_Config.anchorBCVToCursor and not inCombat then
+        ER:ReleaseBCVAnchor()
+    end
+
+    -- GCV follows the cursor per-frame in combat (UpdateGCVPosition); when
+    -- combat ends, snap it back to its saved position.
+    if ThugUI_Config.anchorGCVToCursor and not inCombat then
+        ER:ReleaseGCVAnchor()
+    end
+
+    -- Update ECV / BCV / GCV visibility (show-only-in-combat setting)
     ER:UpdateECVVisibility(inCombat)
+    ER:UpdateBCVVisibility(inCombat)
+    ER:UpdateGCVVisibility(inCombat)
 end
 
 function ER:ResetCooldownFrames()
@@ -1250,6 +2081,12 @@ function ER:SetupUI()
     -- Build the Essential Cooldown Viewer
     ER:CreateECV()
 
+    -- Build the Balance Cooldown Viewer (second bar)
+    ER:CreateBCV()
+
+    -- Build the Guardian Cooldown Viewer
+    ER:CreateGCV()
+
     TrackerFrame:UnregisterEvent("PLAYER_ENTERING_WORLD")
 end
 
@@ -1260,6 +2097,10 @@ function ER:OnInitialize()
     TrackerFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
     TrackerFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
     TrackerFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+    -- Re-evaluate which bar (Resto vs Balance) is shown when spec/talents change
+    TrackerFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+    TrackerFrame:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")
+    TrackerFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
 
     TrackerFrame:SetScript("OnEvent", function(self, event, ...)
         if event == "PLAYER_ENTERING_WORLD" then
@@ -1286,6 +2127,15 @@ function ER:OnInitialize()
             ER:UpdateVisibility(false)
         elseif event == "SPELL_UPDATE_COOLDOWN" then
             ER:UpdateECVCooldowns()
+            ER:UpdateBCVCooldowns()
+            ER:UpdateGCVCooldowns()
+        elseif event == "PLAYER_SPECIALIZATION_CHANGED"
+            or event == "ACTIVE_TALENT_GROUP_CHANGED"
+            or event == "TRAIT_CONFIG_UPDATED" then
+            -- Spec/talent change: refresh all bars and their spec gating.
+            ER:EnsureBCVIcons()
+            ER:EnsureGCVIcons()
+            ER:UpdateVisibility()
         end
     end)
 
@@ -1297,17 +2147,35 @@ function ER:OnInitialize()
 end
 
 LoaderFrame:SetScript("OnEvent", function(self, event, addon)
-    print("ThugUI: ADDON_LOADED fired for: " .. tostring(addon))
+    if ThugUI_Config and ThugUI_Config.debugMode then
+        print("ThugUI: ADDON_LOADED fired for: " .. tostring(addon))
+    end
     if event == "ADDON_LOADED" and addon == "ThugUI" then
         ThugUI_DebugLog = ThugUI_DebugLog or {}
-        print("ThugUI: Initializing Essential Rings...")
         ER:OnInitialize()
         ER:InitializeSettings()
+        -- Sync the runtime debug flag with the saved checkbox state
+        DebugLog.enabled = ThugUI_Config.debugMode and true or false
+        if ThugUI_Config.debugMode then
+            print("ThugUI: Initializing Essential Rings...")
+        end
         ER:CreateSettingsPanel()
         if ThugUI.FrameHider then
             ThugUI.FrameHider:ApplyAll()
         end
-        print("ThugUI: Initialization complete!")
+        -- Raid frames wait on PLAYER_ENTERING_WORLD internally: the secure
+        -- header must not be spawned before the roster exists.
+        if ThugUI.RaidFrames then
+            ThugUI.RaidFrames:Initialize()
+        end
+        -- Same deal as the raid frames: the unit button is protected, so it
+        -- waits on PLAYER_ENTERING_WORLD internally rather than spawning here.
+        if ThugUI.TargetOfTarget then
+            ThugUI.TargetOfTarget:Initialize()
+        end
+        if ThugUI_Config.debugMode then
+            print("ThugUI: Initialization complete!")
+        end
         self:UnregisterAllEvents()
     end
 end)

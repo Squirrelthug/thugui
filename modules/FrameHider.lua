@@ -16,26 +16,10 @@ FrameHider.applied = {}
 -- HIDE FUNCTIONS
 -- ============================================================================
 
--- Permanently disable the Objective Tracker frame
-function FrameHider:HideObjectiveTracker()
-    if self.applied.objectiveTracker then return end
-    if not ObjectiveTrackerFrame then return end
-
-    ObjectiveTrackerFrame:UnregisterAllEvents()
-    ObjectiveTrackerFrame.Show = function() end
-    ObjectiveTrackerFrame:Hide()
-    ObjectiveTrackerFrame:SetAlpha(0)
-    ObjectiveTrackerFrame:EnableMouse(false)
-    ObjectiveTrackerFrame:SetClampedToScreen(false)
-    ObjectiveTrackerFrame:SetPoint("TOPLEFT", -5000, -5000)
-
-    if ObjectiveTrackerFrame.AccountSettings then
-        ObjectiveTrackerFrame.AccountSettings.allowDrag = false
-        ObjectiveTrackerFrame.AccountSettings.enabled = false
-    end
-
-    self.applied.objectiveTracker = true
-end
+-- NOTE: Objective Tracker visibility and anchoring belong to the OrbAnchors
+-- module now (modules/OrbAnchors.lua), which toggles it from the Objectives orb
+-- and persists the state in ThugUIDB. The empty HideObjectiveTracker stub that
+-- used to sit here has been removed -- nothing called it.
 
 -- Hide the stance bar via state driver
 function FrameHider:HideStanceBar()
@@ -64,57 +48,28 @@ function FrameHider:HideBagButtons()
 end
 
 -- Hide the player character frame (portrait, health, mana)
+--
+-- PlayerFrame is a SecureUnitButton. Overwriting a method on it (the old
+-- `PlayerFrame.Show = function() end`) or repositioning it taints the frame,
+-- and that taint surfaces later as "Interface action failed because of an
+-- AddOn: ThugUI" the first time Blizzard touches PlayerFrame in combat.
+--
+-- The secure route is the visibility state driver. Unregistering the frame's
+-- events first stops PlayerFrame_Update from calling Show() between state
+-- evaluations, so the two together keep it down without ever tainting it.
 function FrameHider:HideCharacterFrame()
     if self.applied.characterFrame then return end
     if not PlayerFrame then return end
 
     PlayerFrame:UnregisterAllEvents()
-    PlayerFrame.Show = function() end
-    PlayerFrame:Hide()
-    PlayerFrame:SetAlpha(0)
-    PlayerFrame:EnableMouse(false)
-    PlayerFrame:SetClampedToScreen(false)
-    PlayerFrame:SetPoint("TOPLEFT", -5000, -5000)
+    RegisterStateDriver(PlayerFrame, "visibility", "hide")
 
     self.applied.characterFrame = true
 end
 
--- Fix tooltip anchoring for compact unit frame (party/raid) auras
--- Redirects cursor-anchored tooltips to the Edit Mode anchor position
-function FrameHider:FixTooltipAnchor()
-    if self.applied.tooltipAnchor then return end
-    if not GameTooltip then return end
-
-    local origSetOwner = GameTooltip.SetOwner
-    local redirecting = false
-
-    local function IsCompactFrameChild(frame)
-        local parent = frame and frame:GetParent()
-        for i = 1, 5 do
-            if not parent then return false end
-            if parent.displayedUnit then return true end
-            parent = parent:GetParent()
-        end
-        return false
-    end
-
-    GameTooltip.SetOwner = function(tip, owner, anchor, ofsX, ofsY)
-        if not redirecting
-           and owner
-           and anchor
-           and anchor ~= "ANCHOR_NONE"
-           and IsCompactFrameChild(owner)
-        then
-            redirecting = true
-            GameTooltip_SetDefaultAnchor(tip, owner)
-            redirecting = false
-            return
-        end
-        return origSetOwner(tip, owner, anchor, ofsX, ofsY)
-    end
-
-    self.applied.tooltipAnchor = true
-end
+-- NOTE: The raid-frame aura tooltip anchor fix that used to live here has been
+-- removed. ThugUI now ships its own raid frames (modules/RaidFrames), which own
+-- their aura icons outright and simply never wire a tooltip to them.
 
 -- Make the Prey Crystal frame (UIWidgetPowerBarContainerFrame) draggable
 -- and persist its position across sessions via ThugUI_Config.preyCrystalPoint
@@ -189,9 +144,6 @@ end
 -- ============================================================================
 
 function FrameHider:ApplyAll()
-    if ThugUI_Config.hideObjectiveTracker then
-        self:HideObjectiveTracker()
-    end
     if ThugUI_Config.hideStanceBar then
         self:HideStanceBar()
     end
@@ -200,9 +152,6 @@ function FrameHider:ApplyAll()
     end
     if ThugUI_Config.hideCharacterFrame then
         self:HideCharacterFrame()
-    end
-    if ThugUI_Config.fixTooltipAnchor then
-        self:FixTooltipAnchor()
     end
     if ThugUI_Config.movePreyCrystal then
         self:MakePreyCrystalMovable()
