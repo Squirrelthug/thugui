@@ -168,9 +168,13 @@ local function Store()
 end
 
 --- The profile for a spec, created on demand. Never returns nil.
+---
+--- A missing or zero specID means spec data has not loaded yet. That gets a
+--- detached scratch profile which is deliberately NOT stored: persisting it
+--- writes a junk `[0]` profile that collects edits nobody ever sees again.
 function Data.GetProfile(specID)
     specID = specID or Data.GetActiveSpecID()
-    if not specID then return DefaultProfile() end
+    if not specID or specID == 0 then return DefaultProfile() end
 
     local store = Store()
     local profile = store.profiles[specID]
@@ -423,11 +427,14 @@ local function CornerToIntersection(corner, count)
     return 0, 0  -- TOPLEFT
 end
 
-local function MigrateBar(specID, spellIDs, legacy)
-    if #spellIDs == 0 then return end
+local function MigrateBar(specID, spellIDs, legacy, force)
+    if #spellIDs == 0 then return false end
 
     local profile = Data.GetProfile(specID)
-    if next(profile.placements) then return end  -- already laid out; leave it
+    if next(profile.placements) and not force then
+        return false  -- already laid out; leave it alone
+    end
+    wipe(profile.placements)
 
     for i, spellID in ipairs(spellIDs) do
         if i <= Data.GRID_COLS then
@@ -442,36 +449,50 @@ local function MigrateBar(specID, spellIDs, legacy)
     profile.point        = legacy.point
     profile.anchorCol, profile.anchorRow =
         CornerToIntersection(legacy.corner, math.min(#spellIDs, Data.GRID_COLS))
+
+    return true
 end
 
-function Data.MigrateLegacyBars()
-    local store = Store()
-    if store.migrated then return end
-    store.migrated = true
+-- The ECV stores spell NAMES, not IDs. C_Spell.GetSpellInfo resolves a name
+-- only for a spell the player currently HAS -- which is the whole point when
+-- following talent overrides, but means the Restoration list resolves to
+-- nothing at all unless you are actually in Restoration spec at the time.
+--
+-- The original one-shot migration ran once, on whatever spec happened to be
+-- active, and set a global "migrated" flag. Log in as Guardian and the
+-- Restoration bar silently migrated to an empty list and was never retried.
+-- Hence the ID fallback below, and the per-spec retry in MigrateSpec.
+local ECV_FALLBACK_IDS = {
+    ["Wild Growth"]          = 48438,
+    ["Swiftmend"]            = 18562,
+    ["Nature's Swiftness"]   = 132158,
+    ["Ironbark"]             = 102342,
+    ["Convoke the Spirits"]  = 391528,
+    ["Tranquility"]          = 740,
+}
 
-    local cfg = ThugUI_Config
-    local ER = ThugUI.EssentialRings
-    if not ER then return end
-
-    -- Restoration: the ECV list is spell NAMES, resolved to IDs here.
-    local ecvIDs = {}
+local function ResolveECVSpellIDs(ER)
+    local ids = {}
     for _, name in ipairs(ER.ecvSpellNames or {}) do
         local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(name)
-        if info and info.spellID then table.insert(ecvIDs, info.spellID) end
+        local id = (info and info.spellID) or ECV_FALLBACK_IDS[name]
+        if id then table.insert(ids, id) end
     end
-    MigrateBar(DRUID_SPEC_IDS.restoration, ecvIDs, {
-        show = cfg.showECV, onlyInCombat = cfg.ecvShowOnlyInCombat,
-        follow = cfg.anchorECVToCursor, scale = cfg.ecvScale,
-        corner = cfg.ecvAnchorCorner, point = cfg.ecvPoint,
-    })
+    return ids
+end
+
+--- Legacy bar definition for one spec, or nil if that spec never had one.
+local function LegacyBarFor(specID)
+    local cfg = ThugUI_Config
+    local ER = ThugUI.EssentialRings
+    if not ER then return nil end
 
     -- Balance and Guardian carry spell DEFS, which already hold IDs and modes.
     local function IDsAndModes(defs)
         local ids, modes = {}, {}
         for _, def in ipairs(defs or {}) do
-            local id = def.spellID
-            if id then
-                table.insert(ids, id)
+            if def.spellID then
+                table.insert(ids, def.spellID)
                 -- The old "buff" mode is this module's "aura" mode.
                 table.insert(modes, def.mode == "buff" and "aura" or "cooldown")
             end
@@ -479,19 +500,82 @@ function Data.MigrateLegacyBars()
         return ids, modes
     end
 
-    local bcvIDs, bcvModes = IDsAndModes(ER.bcvSpellDefs)
-    MigrateBar(DRUID_SPEC_IDS.balance, bcvIDs, {
-        show = cfg.showBCV, onlyInCombat = cfg.bcvShowOnlyInCombat,
-        follow = cfg.anchorBCVToCursor, scale = cfg.bcvScale,
-        corner = cfg.bcvAnchorCorner, point = cfg.bcvPoint, modes = bcvModes,
-    })
+    if specID == DRUID_SPEC_IDS.restoration then
+        return ResolveECVSpellIDs(ER), {
+            show = cfg.showECV, onlyInCombat = cfg.ecvShowOnlyInCombat,
+            follow = cfg.anchorECVToCursor, scale = cfg.ecvScale,
+            corner = cfg.ecvAnchorCorner, point = cfg.ecvPoint,
+        }
+    end
 
-    local gcvIDs, gcvModes = IDsAndModes(ER.gcvSpellDefs)
-    MigrateBar(DRUID_SPEC_IDS.guardian, gcvIDs, {
-        show = cfg.showGCV, onlyInCombat = cfg.gcvShowOnlyInCombat,
-        follow = cfg.anchorGCVToCursor, scale = cfg.gcvScale,
-        corner = cfg.gcvAnchorCorner, point = cfg.gcvPoint, modes = gcvModes,
-    })
+    if specID == DRUID_SPEC_IDS.balance then
+        local ids, modes = IDsAndModes(ER.bcvSpellDefs)
+        return ids, {
+            show = cfg.showBCV, onlyInCombat = cfg.bcvShowOnlyInCombat,
+            follow = cfg.anchorBCVToCursor, scale = cfg.bcvScale,
+            corner = cfg.bcvAnchorCorner, point = cfg.bcvPoint, modes = modes,
+        }
+    end
+
+    if specID == DRUID_SPEC_IDS.guardian then
+        local ids, modes = IDsAndModes(ER.gcvSpellDefs)
+        return ids, {
+            show = cfg.showGCV, onlyInCombat = cfg.gcvShowOnlyInCombat,
+            follow = cfg.anchorGCVToCursor, scale = cfg.gcvScale,
+            corner = cfg.gcvAnchorCorner, point = cfg.gcvPoint, modes = modes,
+        }
+    end
+
+    return nil
 end
+
+--- Import one spec's legacy bar into its grid profile.
+--- @param force boolean? overwrite a profile that already has icons
+--- @return boolean whether anything was written
+function Data.MigrateSpec(specID, force)
+    if not specID or specID == 0 then return false end
+
+    local store = Store()
+    store.migratedSpecs = store.migratedSpecs or {}
+    if store.migratedSpecs[specID] and not force then return false end
+
+    local spellIDs, legacy = LegacyBarFor(specID)
+    if not spellIDs then
+        store.migratedSpecs[specID] = true  -- no legacy bar; never ask again
+        return false
+    end
+
+    local wrote = MigrateBar(specID, spellIDs, legacy, force)
+    -- Only marked done once something was actually written, so a spec whose
+    -- spells could not be resolved yet gets another go next login.
+    if wrote then store.migratedSpecs[specID] = true end
+    return wrote
+end
+
+--- Attempt migration for every spec that had a legacy bar. Safe to re-run.
+function Data.MigrateLegacyBars()
+    local store = Store()
+    store.migratedSpecs = store.migratedSpecs or {}
+
+    -- The old global flag meant "the one-shot pass already ran". Specs it
+    -- actually populated are detected below by their placements, so the flag
+    -- itself is no longer consulted for anything but not re-reading history.
+    for _, specID in pairs(DRUID_SPEC_IDS) do
+        local profile = Store().profiles[specID]
+        if profile and next(profile.placements) then
+            store.migratedSpecs[specID] = true
+        end
+    end
+
+    for _, specID in pairs(DRUID_SPEC_IDS) do
+        Data.MigrateSpec(specID)
+    end
+
+    -- A junk profile under specID 0 could be written before spec data loaded.
+    -- GetProfile refuses to create one now; this clears any already saved.
+    if Store().profiles[0] then Store().profiles[0] = nil end
+end
+
+Data.DRUID_SPEC_IDS = DRUID_SPEC_IDS
 
 return Data

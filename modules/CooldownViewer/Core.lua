@@ -587,9 +587,16 @@ driver:SetScript("OnEvent", function(_, event, arg1)
         -- Spec change swaps the whole profile, so the icon set is rebuilt from
         -- scratch rather than re-pointed. The settings page follows along:
         -- clearing editSpecID makes it re-default to the spec now active.
-        if event == "PLAYER_SPECIALIZATION_CHANGED" and CV.Page then
-            CV.Page.editSpecID = nil
-            CV.Page.selectedKey = nil
+        if event == "PLAYER_SPECIALIZATION_CHANGED" then
+            -- Retry migration for the spec just switched TO. The ECV list is
+            -- spell names, and names only resolve for a spec you are actually
+            -- in -- which is why the original one-shot pass silently produced
+            -- an empty Restoration bar when it happened to run as Guardian.
+            Data.MigrateSpec(Data.GetActiveSpecID())
+            if CV.Page then
+                CV.Page.editSpecID = nil
+                CV.Page.selectedKey = nil
+            end
         end
         CV:Rebuild()
         if ThugUI.Window then ThugUI.Window:RefreshActivePage() end
@@ -635,6 +642,33 @@ SlashCmdList["THUGCV"] = function(msg)
             print("|cff00ff00ThugUI:|r cooldown viewer switched to the |cff00ffccgrid|r engine.")
         end
         if ER and ER.UpdateVisibility then ER:UpdateVisibility() end
+        return
+    end
+
+    -- Pull the current spec's old ECV/BCV/GCV bar onto the grid. "import force"
+    -- overwrites a layout that already has icons; plain "import" refuses, so a
+    -- fat-fingered command cannot wipe a grid you spent time on.
+    if msg == "import" or msg == "import force" then
+        local force = (msg == "import force")
+        local specID = Data.GetActiveSpecID()
+        local profile = Data.GetProfile(specID)
+
+        if next(profile.placements) and not force then
+            print("|cff00ff00ThugUI:|r " .. Data.GetSpecName(specID)
+                .. " already has a layout. |cffffd100/thugcv import force|r to replace it.")
+            return
+        end
+
+        if Data.MigrateSpec(specID, true) then
+            CV:Rebuild()
+            if ThugUI.Window then ThugUI.Window:RefreshActivePage() end
+            print("|cff00ff00ThugUI:|r imported the old bar for "
+                .. Data.GetSpecName(specID) .. ".")
+        else
+            print("|cff00ff00ThugUI:|r no old bar exists for "
+                .. Data.GetSpecName(specID) .. " (only Balance, Guardian and "
+                .. "Restoration ever had one).")
+        end
         return
     end
 

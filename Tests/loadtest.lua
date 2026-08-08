@@ -296,8 +296,43 @@ if failures == 0 and ThugUI.CooldownViewer then
 
     local steps = {
         { "initialize", function() CV:Initialize() end },
-        { "migration ran", function()
-            assert(ThugUI_Config.cv and ThugUI_Config.cv.migrated, "migrated flag not set")
+        { "migration is tracked per spec", function()
+            assert(ThugUI_Config.cv and ThugUI_Config.cv.migratedSpecs,
+                "per-spec migration table not created")
+        end },
+
+        -- Regression: the Restoration bar is stored as spell NAMES, which only
+        -- resolve while in that spec. A one-shot pass run as another spec
+        -- produced an empty bar and never retried.
+        { "restoration imports even when its names do not resolve", function()
+            local RESTO = Data.DRUID_SPEC_IDS.restoration
+            -- Simulate being in another spec: none of the Resto names resolve.
+            for _, name in ipairs(ThugUI.EssentialRings.ecvSpellNames or {}) do
+                _G.__unknownNames[name] = true
+            end
+
+            ThugUI_Config.cv.migratedSpecs[RESTO] = nil
+            wipe(Data.GetProfile(RESTO).placements)
+            assert(Data.MigrateSpec(RESTO, true), "restoration import returned false")
+
+            local placed = Data.GetPlacements(Data.GetProfile(RESTO))
+            assert(#placed > 0, "restoration imported an empty bar")
+
+            for _, name in ipairs(ThugUI.EssentialRings.ecvSpellNames or {}) do
+                _G.__unknownNames[name] = nil
+            end
+        end },
+
+        { "a spec with no legacy bar imports nothing", function()
+            assert(not Data.MigrateSpec(Data.DRUID_SPEC_IDS.feral, true),
+                "feral claimed to import a bar that never existed")
+        end },
+
+        { "no junk profile under specID 0", function()
+            Data.GetProfile(0)
+            Data.GetProfile(nil)
+            assert(not ThugUI_Config.cv.profiles[0],
+                "a profile was stored under specID 0")
         end },
         { "place + rebuild", function()
             local profile = Data.GetActiveProfile()
