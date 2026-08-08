@@ -62,30 +62,53 @@ local function IsSpellKnown(spellID)
     return false
 end
 
---- start, duration, ready, charges -- nil start means no cooldown data.
-local function GetCooldown(spellID)
-    if not C_Spell or not C_Spell.GetSpellCooldown then return nil end
-    local info = C_Spell.GetSpellCooldown(spellID)
-    if not info then return nil end
-
-    local charges
-    if C_Spell.GetSpellCharges then
-        local chargeInfo = C_Spell.GetSpellCharges(spellID)
-        if chargeInfo and chargeInfo.maxCharges and chargeInfo.maxCharges > 1 then
-            charges = chargeInfo.currentCharges
-        end
-    end
-
-    -- A charge build is "ready" whenever a charge is banked, even though the
+--- Is the spell usable right now? Returns ready, charges.
+---
+--- Readiness is derived from `isActive` and `isOnGCD`, NEVER from startTime or
+--- duration, for two independent reasons:
+---
+---  1. The global cooldown is a running cooldown. Judging by duration means
+---     every icon on the grid vanishes the moment you cast anything, because
+---     during the GCD every spell reports a cooldown. `isOnGCD` marks exactly
+---     that case so it can be ignored.
+---  2. In 12.x startTime/duration are *secret values*. Comparing them does not
+---     yield a usable boolean -- the result is itself secret, and feeding that
+---     to SetShown hides the icon. `isActive`/`isOnGCD` were added non-secret
+---     in 12.0.1 for this.
+---
+--- This mirrors IsSpellReady in modules/EssentialRings.lua, which is the logic
+--- the original druid bars have been running on all along.
+local function IsSpellReady(spellID)
+    -- Charge builds are ready whenever a charge is banked, even though the
     -- recharge timer is always running.
-    local ready
-    if charges then
-        ready = charges >= 1
-    else
-        ready = (info.duration or 0) <= 0 or (info.startTime or 0) == 0
+    local ok, chargeInfo = pcall(C_Spell.GetSpellCharges, spellID)
+    if ok and chargeInfo and chargeInfo.maxCharges and chargeInfo.maxCharges > 1 then
+        local current = chargeInfo.currentCharges
+        if current ~= nil and not (issecretvalue and issecretvalue(current)) then
+            return current > 0, current
+        end
+        -- Charges are secret this tick; fall through to the isActive path.
     end
 
-    return info.startTime, info.duration, ready, charges, info.modRate
+    local ok2, cdInfo = pcall(C_Spell.GetSpellCooldown, spellID)
+    if ok2 and cdInfo then
+        if cdInfo.isOnGCD then return true end
+        if cdInfo.isActive then return false end
+    end
+
+    return true
+end
+
+--- Drive an icon's sweep for "always" mode. start/duration are passed straight
+--- to SetCooldown without ever being compared here -- handing secret values to
+--- Blizzard's own API is fine, inspecting them is not.
+local function ApplySweep(icon, spellID)
+    local ok, cdInfo = pcall(C_Spell.GetSpellCooldown, spellID)
+    if ok and cdInfo and cdInfo.isActive and not cdInfo.isOnGCD then
+        icon.cooldown:SetCooldown(cdInfo.startTime, cdInfo.duration, cdInfo.modRate)
+    else
+        icon.cooldown:Clear()
+    end
 end
 
 local function GetAura(spellID)
@@ -323,15 +346,11 @@ function CV:UpdateState()
                 icon.count:Hide()
             end
         else
-            local start, duration, ready, charges, modRate = GetCooldown(spellID)
+            local ready, charges = IsSpellReady(spellID)
 
             if icon.mode == "always" then
                 show = true
-                if start and duration and duration > 0 then
-                    icon.cooldown:SetCooldown(start, duration, modRate)
-                else
-                    icon.cooldown:Clear()
-                end
+                ApplySweep(icon, spellID)
             else
                 -- "cooldown" mode: the icon IS the readiness signal, so there is
                 -- nothing to sweep -- it simply disappears once spent.

@@ -28,18 +28,28 @@ frameMT.__index = function(tbl, key)
             a.__point = nil
             return
         end
+        -- Shown-state is modelled, not stubbed away: several code paths early-
+        -- return on IsShown, so a stub that always says false silently skips
+        -- the very logic under test.
+        if type(a) == "table" then
+            if key == "Show" then a.__shown = true return end
+            if key == "Hide" then a.__shown = false return end
+            if key == "SetShown" then a.__shown = a1 and true or false return end
+            if key == "IsShown" then return a.__shown == true end
+        end
         if key:match("^Get") then
             if key == "GetWidth" or key == "GetHeight" or key == "GetStringWidth"
-                or key == "GetStringHeight" or key == "GetFrameLevel" or key == "GetScale" then
+                or key == "GetStringHeight" or key == "GetFrameLevel" then
                 return 100
             end
+            if key == "GetScale" or key == "GetEffectiveScale" then return 1 end
             if key == "GetPoint" then return "TOPLEFT", nil, "TOPLEFT", 0, 0 end
             if key == "GetChildren" or key == "GetRegions" then return end
             if key == "GetText" then return "" end
             if key == "GetObjectType" then return "Frame" end
             if key == "GetCenter" then return 0, 0 end
         end
-        if key == "IsShown" or key == "IsMouseOver" or key == "GetChecked" then return false end
+        if key == "IsMouseOver" or key == "GetChecked" then return false end
         return setmetatable({}, frameMT)
     end
     rawset(tbl, key, fn)
@@ -121,9 +131,22 @@ C_Spell = {
         return { spellID = id, name = "Spell " .. id, iconID = 999 }
     end,
     GetSpellTexture = function() return 999 end,
-    GetSpellCooldown = function() return { startTime = 0, duration = 0 } end,
+    -- Cooldown state is per-spell and settable by the tests. The defaults
+    -- mirror a ready spell. startTime/duration are deliberately given
+    -- nonsense values: in 12.x they are secret, and nothing in the addon is
+    -- allowed to derive readiness from them, so a test that starts passing
+    -- because of them is a test that has caught a real regression.
+    GetSpellCooldown = function(id)
+        local state = _G.__cooldownState and _G.__cooldownState[id]
+        return {
+            isActive = state and state.isActive or false,
+            isOnGCD = state and state.isOnGCD or false,
+            startTime = -1, duration = -1, modRate = 1,
+        }
+    end,
     GetSpellCharges = function() return nil end,
 }
+_G.__cooldownState = {}
 C_UnitAuras = { GetPlayerAuraBySpellID = function() return nil end }
 C_CooldownViewer = {
     GetCooldownViewerCategorySet = function() return { 1, 2, 3 } end,
@@ -327,6 +350,37 @@ if failures == 0 and ThugUI.CooldownViewer then
             CV:ApplyLayout()
             assertSame(DisplayCols(CV, Data, 1, { 1, 8, 9 }), { 1, 8, 9 },
                 "icons moved with collapse off")
+        end },
+
+        -- Regression: the grid used to vanish wholesale in combat because
+        -- readiness was derived from duration, and during the GCD every spell
+        -- reports a running cooldown.
+        { "global cooldown does not hide icons", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 555, "cooldown")
+            Data.SetPlacement(profile, 1, 2, 666, "cooldown")
+            CV:Rebuild()
+
+            -- Everything on the GCD, nothing on a real cooldown.
+            _G.__cooldownState[555] = { isOnGCD = true, isActive = true }
+            _G.__cooldownState[666] = { isOnGCD = true, isActive = true }
+            CV.container.__shown = true
+            CV:UpdateState()
+
+            assert(CV.icons[Data.CellKey(1, 1)].wanted, "GCD hid an icon")
+            assert(CV.icons[Data.CellKey(1, 2)].wanted, "GCD hid an icon")
+        end },
+
+        { "a real cooldown does hide its icon", function()
+            _G.__cooldownState[555] = { isOnGCD = false, isActive = true }
+            _G.__cooldownState[666] = { isOnGCD = false, isActive = false }
+            CV:UpdateState()
+
+            assert(not CV.icons[Data.CellKey(1, 1)].wanted, "spent spell stayed visible")
+            assert(CV.icons[Data.CellKey(1, 2)].wanted, "ready spell was hidden")
         end },
 
         { "auto direction follows the anchor", function()
