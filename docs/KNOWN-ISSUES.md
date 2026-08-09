@@ -108,9 +108,27 @@ a real global in 12.x, so the guard in `Mine()` meant to accept an unreadable
 source is live rather than silently skipped — if the aura is being refused, it
 is being refused for some other reason.
 
-**Next step:** the stage-level log added in `13f852f` records whether the API
-threw, returned nothing, or was refused by the source check. It has not been
-captured yet — the session that would have produced it predated the commit.
+**Narrowed to the API call itself, 2026-08-09.** In combat, with the buff up,
+`C_UnitAuras.GetUnitAuraBySpellID("player", <linked id>)` returns **nothing**.
+It does not throw, and the aura is not refused by the source check — both of
+those are separate logged outcomes and neither appeared. Out of combat, the
+same call on the same buff returns it:
+
+```
+[00:59:39] CV: buff icon Roll the Bones: hidden  (combat=true)   <- buff was up
+[00:59:47] AURA: lookup for 1214934: found (combat=false)        <- same buff
+```
+
+This is by elimination rather than a direct in-combat line: the first version
+of the stage log keyed only on spell and stage, so an out-of-combat
+"api-returned-nothing" logged while no buff was up suppressed the in-combat
+one. Fixed — combat state is now part of the key — so the next capture states
+it outright rather than implying it. **The conclusion is not in serious doubt,
+but it has not yet been read directly.**
+
+That the call returns empty rather than erroring is what makes taint the
+leading explanation: a tainted addon is handed nothing instead of a secret it
+could at least detect.
 
 ---
 

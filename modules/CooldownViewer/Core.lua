@@ -163,12 +163,18 @@ local function GetPlayerCastAura(spellID)
     -- did not draw" has three causes that are identical from outside: the API
     -- threw, it returned no aura at all, or it returned one that Mine()
     -- refused. Guessing between them has already cost several round trips.
+    --- Combat is part of the KEY, not just the message. The first version left
+    --- it out, and the out-of-combat "api-returned-nothing" logged while no
+    --- buff was up then suppressed the in-combat one -- the single line the
+    --- whole capture existed to produce. The difference between the two states
+    --- is the entire question here, so it cannot share a key.
     local function Note(stage)
         if ThugUI.Diagnostics then
+            local inCombat = InCombat()
             ThugUI.Diagnostics:LogOnce(
-                ("aura-%s-%s"):format(tostring(spellID), stage),
+                ("aura-%s-%s-%s"):format(tostring(spellID), stage, tostring(inCombat)),
                 "AURA", "lookup for %s: %s (combat=%s)",
-                tostring(spellID), stage, tostring(InCombat()))
+                tostring(spellID), stage, tostring(inCombat))
         end
     end
 
