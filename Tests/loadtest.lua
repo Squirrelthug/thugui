@@ -228,6 +228,17 @@ C_UnitAuras = {
         return _G.__auras[spellID]
     end,
     GetPlayerAuraBySpellID = function(spellID) return _G.__auras[spellID] end,
+    -- The list walk the by-ID lookups fall back to. Ordered by spell ID so a
+    -- test can rely on the sequence; the real client's order is arbitrary,
+    -- which is exactly why the code matches on fields rather than position.
+    GetAuraDataByIndex = function(unit, index, filter)
+        if unit ~= "player" or filter ~= "HELPFUL" then return nil end
+        local ids = {}
+        for id in pairs(_G.__auras) do ids[#ids + 1] = id end
+        table.sort(ids)
+        local id = ids[index]
+        return id and _G.__auras[id] or nil
+    end,
 }
 
 -- Entry 3 models an entry defined only by its linked buffs.
@@ -913,6 +924,34 @@ if failures == 0 and ThugUI.CooldownViewer then
             assert(CV.icons[Data.CellKey(1, 1)].wanted,
                 "a buff whose source could not be read was rejected")
             wipe(_G.__auras)
+        end },
+
+        -- The failure that made tracked buffs never work in combat. Both by-ID
+        -- lookups return nil in instanced combat -- recorded at
+        -- modules/EssentialRings.lua:980 from an earlier investigation, and
+        -- matching the logs exactly: the same buff resolves out of combat and
+        -- returns nothing during it. Walking the aura list is a different code
+        -- path, not the same query retried, which is the whole point.
+        { "the aura is still found when both by-ID lookups return nil", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            wipe(_G.__auras)
+            _G.__auras[9003] = { spellId = 9003, name = "Linked Three" }
+
+            local realByID = C_UnitAuras.GetUnitAuraBySpellID
+            local realPlayer = C_UnitAuras.GetPlayerAuraBySpellID
+            C_UnitAuras.GetUnitAuraBySpellID = function() return nil end
+            C_UnitAuras.GetPlayerAuraBySpellID = function() return nil end
+
+            CV:UpdateState()
+            local foundByIndex = icon.wanted
+
+            C_UnitAuras.GetUnitAuraBySpellID = realByID
+            C_UnitAuras.GetPlayerAuraBySpellID = realPlayer
+            wipe(_G.__auras)
+
+            assert(foundByIndex,
+                "the buff was missed once the by-ID lookups stopped answering")
         end },
 
         { "a missing sourceUnit is accepted", function()

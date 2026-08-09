@@ -135,7 +135,7 @@ end
 --- GetUnitAuraBySpellID plus a sourceUnit == "player" check, so this matches
 --- it: a tracked buff should mean YOUR buff, not the same-named one somebody
 --- else put on you.
-local function GetPlayerCastAura(spellID)
+local function GetPlayerCastAura(spellID, spellName)
     if not spellID or not C_UnitAuras then return nil end
 
     -- Blizzard's own tracker requires sourceUnit == "player", but engine code
@@ -194,11 +194,45 @@ local function GetPlayerCastAura(spellID)
 
     if C_UnitAuras.GetPlayerAuraBySpellID then
         local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, spellID)
-        if ok then
-            local mine = Mine(aura)
-            Note(mine and "found-via-fallback" or "fallback-empty")
-            return mine
+        if ok and Mine(aura) then
+            Note("found-via-fallback")
+            return Mine(aura)
         end
+        Note("fallback-empty")
+    end
+
+    -- Both by-ID lookups return nil in instanced combat. That is not a guess:
+    -- modules/EssentialRings.lua:980 records it from an earlier investigation,
+    -- and it matches what the log shows here exactly -- the same buff resolves
+    -- out of combat and returns nothing during it.
+    --
+    -- Walking the aura list is a genuinely different code path rather than the
+    -- same query retried, which is the point. Matching is pcall'd per field
+    -- because spellId and name can both be secret values in combat, and a
+    -- comparison against a secret never yields a usable boolean.
+    if C_UnitAuras.GetAuraDataByIndex then
+        local name = spellName
+        if not name and C_Spell and C_Spell.GetSpellInfo then
+            local infoOK, info = pcall(C_Spell.GetSpellInfo, spellID)
+            name = infoOK and info and info.name or nil
+        end
+
+        for i = 1, 40 do
+            local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
+            if not ok or not aura then break end
+
+            local idOK, idMatch = pcall(function() return aura.spellId == spellID end)
+            local nameOK, nameMatch = false, false
+            if name then
+                nameOK, nameMatch = pcall(function() return aura.name == name end)
+            end
+
+            if ((idOK and idMatch) or (nameOK and nameMatch)) and Mine(aura) then
+                Note("found-by-index")
+                return aura
+            end
+        end
+        Note("index-scan-empty")
     end
     return nil
 end
@@ -284,7 +318,7 @@ end
 ---
 --- @return auraData, spellID that produced it
 local function ResolveAura(icon)
-    local aura = GetPlayerCastAura(icon.spellID)
+    local aura = GetPlayerCastAura(icon.spellID, icon.spellName)
     if aura then return aura, icon.spellID end
 
     for _, linkedID in ipairs(icon.linkedSpellIDs or {}) do
