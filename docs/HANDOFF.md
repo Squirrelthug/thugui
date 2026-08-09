@@ -45,12 +45,12 @@ wrong" from "they were on an older build".
 | Druid migration (Balance 102, Guardian 104, Resto 105) | **Verified** — player confirmed |
 | Rows collapse | **Verified** |
 | Proc glow + `proc` mode | **Verified** — "pistol shot is working" |
-| Roll the Bones via `linkedSpellIDs` | **Code verified by replay, NOT verified in game** |
-| Taint fix (ToT mover deferral) | **Unverified** — the big one, see §3 |
-| Resource ring showing at all | **Unverified** — depends on the taint fix |
+| Roll the Bones via `linkedSpellIDs` | **Verified in game** 2026-08-09 — `4 linked, active via 1214933` |
+| Taint fix (ToT mover deferral) | **Verified INSUFFICIENT** 2026-08-09 — taint persists, see §3 |
+| Resource ring showing at all | **Still blocked** — `UnitPower` is secret again |
 | Columns / both collapse | **Unverified in game** |
 | Window layout reorganisation | **Unverified visually** |
-| Always-on diagnostics | **Unverified** — first logout will show |
+| Always-on diagnostics | **Verified, after two faults were fixed** — see §3a |
 
 Everything unverified has test coverage; tests prove it does not error and the
 logic is right, not that it looks right on screen.
@@ -73,14 +73,41 @@ mover while the protected oUF unit button was anchored to it, which is blocked
 in combat, and the block taints the addon for the session. Both mover paths now
 defer out of combat.
 
-**To find out whether that worked:** play a fight, log out, then read
-`ThugUI_DebugLog.events`.
+**Answered 2026-08-09: it did not work.** The line is present, 5 seconds into a
+fresh session, before any combat:
 
-- If `RING: UnitPower unreadable (secret value)` is **absent** → taint is gone,
-  the resource ring should be tracking, and **combo point pips are unblocked**.
-- If it is **present** → there is another taint source. Look for
-  `ADDON_ACTION_BLOCKED` in BugGrabber; the oUF portrait element has also
-  reported "tainted by ThugUI".
+```
+[00:34:46] RING: UnitPower unreadable (secret value) for ENERGY
+           — addon is tainted; resource level cannot be computed
+```
+
+So the ToT mover deferral was **not** the only taint source, and the ring and
+the combo point pips both stay blocked. What the evidence now says:
+
+- It taints within seconds of login, with no combat and no mover resize, so the
+  remaining source is on a **login path**, not a combat one.
+- `ADDON_ACTION_BLOCKED` for `ThugUI_TargetOfTargetMover:SetSize()` has **not**
+  recurred since session 82 — that fix did hold, it just was not sufficient.
+- The oUF `portrait.lua:46` "tainted by ThugUI" error recurred in session 90.
+  oUF is vendored under our name, so anything it touches is attributed to us.
+  **That is the next thread to pull**, not the mover.
+
+### 3a. The diagnostics themselves were broken until 2026-08-09
+
+Worth knowing, because it invalidates earlier conclusions drawn from silence:
+
+- The state snapshot was taken **only at `PLAYER_LOGOUT`**, when
+  `GetSpecializationInfo` already returns 0. Every snapshot ever written
+  described an empty `Spec 0` profile with no icons, so `linked=N` — the field
+  this page calls load-bearing — had never once been recorded. Now captured on
+  `PLAYER_REGEN_ENABLED` / `PLAYER_ENTERING_WORLD`, and a capture with an
+  unreadable spec cannot overwrite a good one.
+- `/thugcv status` printed to chat only. WoW's `/chatlog` does **not** capture
+  it: that logs chat *events*, and `print()` writes to the frame without firing
+  one. Status output now also goes to `ThugUI_DebugLog`.
+
+An empty `ThugUI_DebugLog` before this date means "not loaded or not captured",
+never "nothing happened".
 
 Do not build anything that depends on reading a power value until this is
 settled. See `KNOWN-ISSUES.md`.

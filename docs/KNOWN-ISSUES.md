@@ -12,13 +12,23 @@ checklist).
 
 ## Resource ring cannot show an exact level in combat
 
-**Status: awaiting verification, 2026-08-08.** Originally parked. A taint
-source was then found and fixed, and since the secrecy appears to follow taint
-rather than being unconditional, this may already be resolved.
+**Status: still open, checked 2026-08-09.** The ring is now switched **on**
+(`showResourceRing = true`, visibility `"combat"`), so this is live, not
+hypothetical.
 
-**How to check:** play a fight, log out, read `ThugUI_DebugLog.events`. If
-`RING: UnitPower unreadable (secret value)` is absent, it is fixed — update
-this entry. If present, another taint source remains. See `HANDOFF.md` §3.
+**Checked and answered.** The ToT mover deferral was not sufficient. The log
+shows, five seconds into a fresh session and before any combat:
+
+```
+[00:34:46] RING: UnitPower unreadable (secret value) for ENERGY
+```
+
+Two things follow. It taints on a **login** path, not a combat one — no mover
+resize and no fight had happened yet. And `ADDON_ACTION_BLOCKED` for the ToT
+mover has not recurred since session 82, so that fix held; it simply was not
+the whole story. The oUF `portrait.lua` element — vendored under our name, so
+anything it touches is attributed to us, and reporting "tainted by ThugUI" as
+recently as session 90 — is the next thread. See `HANDOFF.md` §3.
 
 The analysis below stands regardless, since it describes what happens *while*
 tainted.
