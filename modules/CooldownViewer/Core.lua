@@ -968,6 +968,29 @@ SlashCmdList["THUGCV"] = function(msg)
     -- possible causes and no visible difference between them; this prints
     -- which one is actually firing.
     if msg == "status" then
+        -- Everything status prints also goes into ThugUI_DebugLog, so one
+        -- /reload puts the whole readout on disk. Copying it out of the chat
+        -- frame by hand was costing a round trip per question, and WoW's own
+        -- /chatlog does not help: it records chat EVENTS, and print() writes
+        -- straight to the frame without firing one.
+        --
+        -- Deliberately shadows the global print for this block, so no call site
+        -- below can be missed and later drift back to chat-only.
+        local print = function(...)
+            local parts = {}
+            for i = 1, select("#", ...) do
+                parts[#parts + 1] = tostring((select(i, ...)))
+            end
+            local line = table.concat(parts, " ")
+            _G.print(line)
+            if ThugUI.Diagnostics then
+                -- Colour escapes are for the chat frame; they make the saved
+                -- variable unreadable. Strip them on the way to disk.
+                ThugUI.Diagnostics:Log("STATUS", "%s",
+                    line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+            end
+        end
+
         local specID = Data.GetActiveSpecID()
         local profile = Data.GetActiveProfile()
         local placed = 0

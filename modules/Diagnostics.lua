@@ -83,7 +83,12 @@ local function CaptureProfiles()
 
     local out = {}
     local specID = Data.GetActiveSpecID()
-    if not specID then return out end
+    -- Zero is as useless as nil here, and it is what PLAYER_LOGOUT actually
+    -- hands back: by then GetSpecializationInfo has stopped resolving, so
+    -- GetProfile(0) correctly returns a throwaway default and the snapshot
+    -- describes an empty profile for a spec that does not exist. Refusing it
+    -- is what lets CaptureState keep the last good snapshot instead.
+    if not specID or specID == 0 then return nil end
 
     local profile = Data.GetProfile(specID)
     local icons = {}
@@ -116,8 +121,18 @@ local function CaptureProfiles()
     return out
 end
 
---- Take a snapshot of what the addon currently believes. Called at logout, so
---- it reflects the session that just ran rather than a fresh login.
+--- Take a snapshot of what the addon currently believes.
+---
+--- Taken at several points, NOT only at logout. Logout looked like the obvious
+--- moment -- it reflects the whole session -- but the spec has already stopped
+--- resolving by then, so every snapshot ever written described an empty
+--- "Spec 0" profile with no icons in it. The per-icon linked-spell count, which
+--- is the entire reason this exists, was never once recorded.
+---
+--- So: capture whenever the state is real, and treat logout as a last stamp
+--- rather than the only chance. Leaving combat is the most valuable moment --
+--- it describes the fight that just happened, which is when something looking
+--- wrong is what prompts the question.
 function D:CaptureState()
     local store = Store()
     local _, class = UnitClass("player")
@@ -126,12 +141,19 @@ function D:CaptureState()
     store.interface = select(4, GetBuildInfo())
     store.lastUpdated = Stamp("%Y-%m-%d %H:%M:%S")
 
-    store.state = {
-        class = class,
-        legacyCooldownViewer = ThugUI_Config and ThugUI_Config.cvUseLegacy or false,
-        resourceRing = ThugUI_Config and ThugUI_Config.showResourceRing or false,
-        profiles = CaptureProfiles(),
-    }
+    local profiles = CaptureProfiles()
+
+    store.state = store.state or {}
+    store.state.class = class
+    store.state.legacyCooldownViewer = ThugUI_Config and ThugUI_Config.cvUseLegacy or false
+    store.state.resourceRing = ThugUI_Config and ThugUI_Config.showResourceRing or false
+
+    -- Only overwrite with something real. A capture taken when the spec is
+    -- unreadable must not destroy the good one taken while it was.
+    if profiles then
+        store.state.profiles = profiles
+        store.state.profilesCapturedAt = Stamp("%Y-%m-%d %H:%M:%S")
+    end
 end
 
 -- ----------------------------------------------------------------------------
@@ -142,6 +164,11 @@ local driver = CreateFrame("Frame", "ThugUI_DiagnosticsDriver")
 driver:RegisterEvent("PLAYER_LOGIN")
 driver:RegisterEvent("PLAYER_LOGOUT")
 driver:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+-- Leaving combat is the snapshot that matters: it describes the fight that
+-- just happened. PLAYER_ENTERING_WORLD covers the case of a session that never
+-- sees combat at all, so there is always something better than nothing.
+driver:RegisterEvent("PLAYER_REGEN_ENABLED")
+driver:RegisterEvent("PLAYER_ENTERING_WORLD")
 
 driver:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
@@ -164,9 +191,15 @@ driver:SetScript("OnEvent", function(_, event)
         return
     end
 
+    if event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_ENTERING_WORLD" then
+        pcall(function() D:CaptureState() end)
+        return
+    end
+
     if event == "PLAYER_LOGOUT" then
-        -- Fires before the saved variables are written, which is exactly when
-        -- a snapshot of the finished session is worth taking.
+        -- Fires before the saved variables are written. The spec no longer
+        -- resolves this late, so this pass refreshes the timestamps and the
+        -- flags and leaves the last real profile snapshot alone.
         pcall(function() D:CaptureState() end)
     end
 end)

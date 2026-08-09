@@ -547,6 +547,33 @@ if failures == 0 and ThugUI.CooldownViewer then
                 "snapshot did not record the resolved linked-spell count: " .. entry.icons[1])
         end },
 
+        -- Regression: the snapshot was only taken at PLAYER_LOGOUT, and by then
+        -- GetSpecializationInfo returns 0. Every snapshot ever written was for
+        -- an empty "Spec 0" profile, so the linked-spell count -- the whole
+        -- point of the thing -- had never once been recorded.
+        { "a logout-time capture cannot destroy a good snapshot", function()
+            local D = ThugUI.Diagnostics
+            local specID = Data.GetActiveSpecID()
+
+            -- A real capture first, exactly as leaving combat would take it.
+            D:CaptureState()
+            local good = ThugUI_DebugLog.state.profiles[specID]
+            assert(good and #good.icons > 0, "setup: no real snapshot to protect")
+
+            -- Now capture the way PLAYER_LOGOUT does, with the spec gone.
+            local realInfo = GetSpecializationInfo
+            GetSpecializationInfo = function() return 0 end
+            D:CaptureState()
+            GetSpecializationInfo = realInfo
+
+            assert(not ThugUI_DebugLog.state.profiles[0],
+                "a spec-0 capture wrote a junk profile over the snapshot")
+            assert(ThugUI_DebugLog.state.profiles[specID],
+                "the good snapshot was destroyed by the logout capture")
+            assert(#ThugUI_DebugLog.state.profiles[specID].icons > 0,
+                "the surviving snapshot lost its icons")
+        end },
+
         -- Collapse: rows pack independently, from the row's own outermost
         -- placed column, treating the row as one run.
         { "collapse packs left from the row's own origin", function()
