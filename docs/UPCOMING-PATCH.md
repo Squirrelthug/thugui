@@ -8,8 +8,13 @@ scramble.
 `docs/DECISIONS.md` or into code comments, delete this file, and start a fresh
 one for the patch after.
 
-Every entry needs a **source** — datamining, the API docs generated into
-`Gethe/wow-ui-source`, or a PTR build. Do not record rumours.
+Every entry needs a **source**. See `docs/SOURCES.md` for the vetted list; the
+two that matter most here are townlong-yak's build **Compare** view (diff the
+live build against the PTR one directly) and the `ptr` branch of
+`Gethe/wow-ui-source`. Do not record rumours.
+
+As of 2026-08-08 townlong-yak carries **build 69189 (12.1.0) PTR**, so the diff
+against live is already available — that is the fastest way to extend this file.
 
 ---
 
@@ -100,4 +105,5 @@ gh api "repos/Gethe/wow-ui-source/contents/Interface/AddOns/Blizzard_CooldownVie
       (`DECISIONS.md` §5 — the whole readiness path rests on this)
 - [ ] Read `CooldownViewerSecure.lua` for protected-path changes
 - [ ] Iterate the category enum rather than naming categories
+- [ ] Re-check every entry in `docs/SOURCES.md` and update its last-checked date
 - [ ] Move anything still true into `DECISIONS.md`, delete this file, start 12.2

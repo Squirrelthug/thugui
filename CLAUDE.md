@@ -48,8 +48,11 @@ place, and it cannot verify which events the client actually delivers.
 
 ### Verify against Blizzard's source, do not guess
 
-warcraft.wiki.gg documents API *signatures* but often not *semantics*. The real
-answer is Blizzard's own Lua, mirrored at `Gethe/wow-ui-source`:
+**`docs/SOURCES.md` is the list of trustworthy sources** — read it, use it, and
+add to it when you find something good. Reliable WoW addon information is hard
+to find and most search results are noise.
+
+The short version: **wiki for signatures, Blizzard's own Lua for semantics.**
 
 ```sh
 gh api "repos/Gethe/wow-ui-source/git/trees/live?recursive=1" \
@@ -57,9 +60,9 @@ gh api "repos/Gethe/wow-ui-source/git/trees/live?recursive=1" \
 gh api "repos/Gethe/wow-ui-source/contents/<path>?ref=live" --jq .content   # base64
 ```
 
-Branches: `live`, `beta`, `ptr`. This is how the Roll the Bones buff tracking
-was solved after the wiki turned out to document the fields and none of the
-behaviour.
+Branches: `live`, `beta`, `ptr`. Or use townlong-yak's build **Compare** view for
+patch diffs. This is how the Roll the Bones buff tracking was solved after the
+wiki turned out to document the fields and none of the behaviour.
 
 **Never invent a spell ID.** Verify it, or resolve it at runtime from the game.
 
@@ -148,6 +151,7 @@ Ones that actually apply here:
 |---|---|
 | `CLAUDE.md` | This. How to work on the addon |
 | `docs/DECISIONS.md` | Why the addon is built the way it is. The reasoning log |
+| `docs/SOURCES.md` | Where trustworthy information comes from, with last-checked dates |
 | `docs/UPCOMING-PATCH.md` | What we know about the *next* game patch, accrued before it ships |
 | `Tests/README.md` | What the harness covers and what it cannot |
 
