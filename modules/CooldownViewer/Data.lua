@@ -498,7 +498,7 @@ end
 
 --- The Cooldown Manager entry a placed spell belongs to, or nil.
 --- This is where linkedSpellIDs comes from -- the set of buffs a single
---- tracked entry can show, e.g. the six Roll the Bones outcomes.
+--- tracked entry can show, e.g. the Roll the Bones outcomes.
 function Data.GetCooldownInfoForSpell(spellID)
     if not spellID then return nil end
 

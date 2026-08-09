@@ -33,6 +33,13 @@ frameMT.__index = function(tbl, key)
             a.__cooldown = { a1, a2, a3 }
             return
         end
+        -- Modelled rather than swallowed, so a test can tell "the sweep was
+        -- cleared" apart from "the sweep was left alone" -- which is exactly
+        -- the distinction the pooled-icon staleness bug turned on.
+        if key == "Clear" and type(a) == "table" then
+            a.__cooldown = nil
+            return
+        end
         -- Shown-state is modelled, not stubbed away: several code paths early-
         -- return on IsShown, so a stub that always says false silently skips
         -- the very logic under test.
@@ -839,6 +846,37 @@ if failures == 0 and ThugUI.CooldownViewer then
             CV:UpdateState()
             assert(CV.icons[Data.CellKey(1, 1)].wanted,
                 "a buff with no source field was rejected")
+            wipe(_G.__auras)
+        end },
+
+        -- Regression: `local ok = pcall(f)` captures pcall's SUCCESS status, not
+        -- f's return. Both the sweep and the stack read did that, so they scored
+        -- a hit whenever the call merely did not throw -- including the cases
+        -- their inner `if` deliberately skips. Clear/Hide were then never
+        -- reached, and because icons are POOLED, one could show the previous
+        -- occupant's sweep and stack count over an unrelated buff.
+        { "a buff with no duration and no stacks leaves nothing stale", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            -- First: a timed, stacked buff, so there is something to go stale.
+            wipe(_G.__auras)
+            _G.__auras[9003] = {
+                spellId = 9003, expirationTime = 100, duration = 10, applications = 3,
+            }
+            CV:UpdateState()
+            assert(icon.cooldown.__cooldown, "setup: sweep was not recorded")
+            assert(icon.count.__shown, "setup: stack count was not shown")
+
+            -- Now the same icon, a buff that is neither timed nor stacked.
+            wipe(_G.__auras)
+            _G.__auras[9003] = { spellId = 9003, applications = 1 }
+            CV:UpdateState()
+
+            assert(icon.wanted, "the buff itself stopped being found")
+            assert(not icon.cooldown.__cooldown,
+                "sweep from the previous buff was left on the icon")
+            assert(not icon.count.__shown,
+                "stack count from the previous buff was left on the icon")
             wipe(_G.__auras)
         end },
 

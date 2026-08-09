@@ -244,7 +244,7 @@ end
 --- The aura an icon should be showing, and which spell it came from.
 ---
 --- Some Cooldown Manager entries stand for a SET of possible buffs rather than
---- one: Roll the Bones grants one or more of six, and Blizzard's tracker walks
+--- one: Roll the Bones is four on this build, and Blizzard's tracker walks
 --- cooldownInfo.linkedSpellIDs to find whichever is live, then draws that
 --- buff's icon and timer instead of the base spell's. Without walking the
 --- linked list, tracking Roll the Bones as a buff finds nothing at all,
@@ -381,8 +381,8 @@ function CV:Rebuild()
         icon.baseTexture = texture
         icon.spellID = placement.spellID
 
-        -- The set of buffs this entry can stand for, e.g. the six Roll the
-        -- Bones outcomes. Resolved here rather than stored in the placement,
+        -- The set of buffs this entry can stand for, e.g. the Roll the Bones
+        -- outcomes. Resolved here rather than stored in the placement,
         -- so it follows talent changes and survives a patch renumbering
         -- cooldown IDs.
         local cooldownInfo = Data.GetCooldownInfoForSpell(placement.spellID)
@@ -573,24 +573,38 @@ function CV:UpdateState()
             -- Aura timing is secret-guarded: a comparison against a secret
             -- number does not yield a usable boolean, so the whole read is
             -- wrapped rather than trusted.
+            -- pcall returns its SUCCESS status first and the wrapped function's
+            -- own returns after it. Capturing only the first value made these
+            -- read true whenever the call merely did not throw -- including the
+            -- cases the inner `if` deliberately skips, an aura with no duration
+            -- and an aura with no stacks. The Clear/Hide below were then skipped
+            -- too, and since icons are pooled, one could keep the previous
+            -- occupant's sweep and stack count. Take both values.
             local swept = false
             if aura then
-                swept = pcall(function()
+                local ok, didSweep = pcall(function()
                     if aura.expirationTime and aura.duration and aura.duration > 0 then
                         icon.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration)
                         return true
                     end
+                    return false
                 end)
+                swept = ok and didSweep
             end
-            if not swept or not aura then icon.cooldown:Clear() end
+            if not swept then icon.cooldown:Clear() end
 
-            local stacked = aura and pcall(function()
-                if aura.applications and aura.applications > 1 then
-                    icon.count:SetText(aura.applications)
-                    icon.count:Show()
-                    return true
-                end
-            end)
+            local stacked = false
+            if aura then
+                local ok, didStack = pcall(function()
+                    if aura.applications and aura.applications > 1 then
+                        icon.count:SetText(aura.applications)
+                        icon.count:Show()
+                        return true
+                    end
+                    return false
+                end)
+                stacked = ok and didStack
+            end
             if not stacked then icon.count:Hide() end
         else
             local ready, charges = IsSpellReady(spellName)

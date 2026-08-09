@@ -198,8 +198,22 @@ category contents.)*
 ### Entries that stand for a set of spells
 
 Some entries represent several possible buffs rather than one aura. Roll the
-Bones grants one of six outcomes and **has no base `spellID` of its own** — it is
-defined purely by `linkedSpellIDs`.
+Bones grants one of a set of outcomes and **has no base `spellID` of its own** —
+it is defined purely by `linkedSpellIDs`.
+
+**How many outcomes is a per-build fact, not a constant.** This file used to say
+six, from the classic Broadside / Grand Melee / Ruthless Precision / Skull and
+Crossbones / True Bearing / Buried Treasure. On 12.0.7 the probe dump reports
+**four**, and none of the classic six appear anywhere in it:
+
+```
+TrackedBar  cooldownID 42743  spellID 1214909  hasAura=false  selfAura=true
+  1214933 One of a Kind   1214934 Double Trouble
+  1214935 Triple Threat   1214937 Jackpot
+```
+
+Never hardcode the count or the IDs — walk `linkedSpellIDs` and let the game
+say. The stale "six" cost a round of hunting for IDs that no longer exist.
 
 Blizzard resolves this in `CooldownViewerItemDataMixin`:
 
