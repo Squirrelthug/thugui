@@ -112,6 +112,16 @@ never "nothing happened".
 Do not build anything that depends on reading a power value until this is
 settled. See `KNOWN-ISSUES.md`.
 
+## 3b. Buff icons do not draw in combat — probably the same bug
+
+Tracked in `KNOWN-ISSUES.md`. Recorded here because it changes what §3 is
+worth: the taint is no longer just blocking the resource ring and the combo
+point pips, it is the leading explanation for `aura`-mode icons never drawing
+in combat either.
+
+If that holds, untainting fixes **three** features at once, and it stops being
+a nice-to-have. Chase the oUF `portrait.lua` lead before building anything new.
+
 ## 4. Queued work
 
 **Combo point pips** — design agreed with the player, not started.

@@ -68,6 +68,63 @@ combat and extrapolating, or reading it from a Blizzard frame's displayed text.
 
 ---
 
+## Buff (aura) icons never draw in combat
+
+**Status: root cause identified 2026-08-09, not yet fixed.** Almost certainly
+the same underlying fault as the resource ring entry above.
+
+An `aura`-mode icon resolves and draws correctly out of combat and never draws
+in combat. Twelve logged transitions in one session, no exceptions:
+
+```
+00:46:53  SHOWN  at cell 4:3 (combat=false)
+00:46:59  hidden at cell 4:3 (combat=true)
+00:47:09  SHOWN  at cell 5:3 (combat=false)
+00:47:31  hidden at cell 4:3 (combat=true)
+```
+
+**Ruled out, with evidence — do not re-investigate these:**
+
+- *The linked-spell lookup.* `/thugcv status` reports `4 linked, active via
+  1214933`, and the snapshot shows `linked=4 cat=3`. Resolution is correct.
+- *Cursor anchoring.* Tested with `followCursor = false`; still never draws in
+  combat. The two had been confounded because `onlyInCombat` was also on.
+- *An error being swallowed.* BugGrabber sessions 91–95 are clean.
+- *The set-vs-outcome distinction.* Placing an individual outcome buff
+  directly behaves the same way.
+
+**Reading the log correctly matters here.** A `SHOWN ... (combat=true)` line
+followed by a `hidden` in the same second is **not** a flicker: `Rebuild` seeds
+every icon `wanted = true` and `UpdateState` immediately corrects it. Each pair
+follows a cooldown-cache rebuild — `SPELLS_CHANGED` firing as the buff lands,
+visible as the entry count moving 62↔63. Only `combat=false` SHOWN lines are
+real.
+
+**Leading explanation:** aura fields are secret values to a *tainted* addon,
+and combat is when that applies. ThugUI is provably tainted every session
+(see the resource ring entry). That would make these one bug, not two, and it
+predicts that untainting fixes both. `issecretvalue` has been confirmed to be
+a real global in 12.x, so the guard in `Mine()` meant to accept an unreadable
+source is live rather than silently skipped — if the aura is being refused, it
+is being refused for some other reason.
+
+**Next step:** the stage-level log added in `13f852f` records whether the API
+threw, returned nothing, or was refused by the source check. It has not been
+captured yet — the session that would have produced it predated the commit.
+
+---
+
+## "Follow cursor" off still tracks the cursor, at an offset
+
+**Status: noted 2026-08-09, not investigated.** Reported by the player.
+
+With the follow-cursor option unchecked, the grid still moves with the mouse,
+just offset from it rather than centred on it. Low priority — it was noticed
+while testing something else and is not in anyone's way — but it means the
+setting does not currently do what it says.
+
+---
+
 ## Two ThugUI category entries in the Blizzard addon list
 
 **Status:** deliberate, not a bug. See `DECISIONS.md`.
