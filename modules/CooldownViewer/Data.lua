@@ -379,10 +379,22 @@ Data.SOURCES = {
     { value = "all",        text = "Everything" },
 }
 
-local CATEGORY_BY_SOURCE = {
-    essential = "Essential",
-    utility   = "Utility",
-    buffs     = "TrackedBuff",
+-- TrackedBuff and TrackedBar are ONE pool from the player's side: the same
+-- tracked spells, shown either as a row of icons or a stack of timer bars.
+-- They are emphatically not the same DATA, though, and reading only
+-- TrackedBuff loses entries outright.
+--
+-- Roll the Bones is the proof. It appears twice on an Outlaw rogue:
+--   Essential   cooldownID 11860, linkedSpellIDs = {}
+--   TrackedBar  cooldownID 42743, linkedSpellIDs = One of a Kind, Double
+--                                  Trouble, Triple Threat, Jackpot
+-- Only the TrackedBar entry knows which buffs the spell can grant, so with
+-- TrackedBar unread the outcome buffs were unreachable no matter what the
+-- player picked.
+local CATEGORIES_BY_SOURCE = {
+    essential = { "Essential" },
+    utility   = { "Utility" },
+    buffs     = { "TrackedBuff", "TrackedBar" },
 }
 
 --- Spell IDs from one Cooldown Manager category. Returns an empty list on any
@@ -427,6 +439,27 @@ end
 -- Rebuilt on demand because talents change what is in each category.
 local cooldownInfoCache, cooldownInfoCacheSpec
 
+--- Which of two entries sharing a spell ID should own it.
+---
+--- The same spell can appear in more than one category, and only one of those
+--- entries may know about the buffs it can grant -- Roll the Bones is listed
+--- under Essential with no linked spells AND under TrackedBar with all four
+--- outcomes. Keeping whichever was scanned first meant the empty one won and
+--- the buffs were unreachable. Prefer the entry that actually carries linked
+--- spells, then one that has an aura at all.
+local function Preferred(existing, candidate)
+    if not existing then return candidate end
+
+    local have = existing.linkedSpellIDs and #existing.linkedSpellIDs or 0
+    local want = candidate.linkedSpellIDs and #candidate.linkedSpellIDs or 0
+    if want ~= have then
+        return want > have and candidate or existing
+    end
+
+    if candidate.hasAura and not existing.hasAura then return candidate end
+    return existing
+end
+
 local function BuildCooldownInfoCache()
     local cache = {}
     if not C_CooldownViewer or not C_CooldownViewer.GetCooldownViewerCategorySet then
@@ -443,13 +476,17 @@ local function BuildCooldownInfoCache()
                     if infoOK and info then
                         -- Indexed under every ID that could name this entry, so
                         -- a placement made from any of them finds it again.
-                        for _, id in ipairs({
+                        local ids = {
                             info.spellID, info.overrideSpellID, info.overrideTooltipSpellID,
-                        }) do
-                            if id and not cache[id] then cache[id] = info end
-                        end
+                        }
                         for _, id in ipairs(info.linkedSpellIDs or {}) do
-                            if id and not cache[id] then cache[id] = info end
+                            table.insert(ids, id)
+                        end
+
+                        for _, id in ipairs(ids) do
+                            if id then
+                                cache[id] = Preferred(cache[id], info)
+                            end
                         end
                     end
                 end
@@ -568,13 +605,16 @@ function Data.BuildSpellList(source, search)
     if source == "spellbook" then
         collect(SpellbookSpellIDs())
     elseif source == "all" then
-        for _, categoryName in pairs(CATEGORY_BY_SOURCE) do
-            collect(CooldownViewerSpellIDs(categoryName))
+        for _, categoryNames in pairs(CATEGORIES_BY_SOURCE) do
+            for _, categoryName in ipairs(categoryNames) do
+                collect(CooldownViewerSpellIDs(categoryName))
+            end
         end
         collect(SpellbookSpellIDs())
     else
-        local categoryName = CATEGORY_BY_SOURCE[source]
-        if categoryName then collect(CooldownViewerSpellIDs(categoryName)) end
+        for _, categoryName in ipairs(CATEGORIES_BY_SOURCE[source] or {}) do
+            collect(CooldownViewerSpellIDs(categoryName))
+        end
         -- A spec Blizzard has not categorised would otherwise show an empty
         -- picker with no hint that another source would work.
         if #ids == 0 then collect(SpellbookSpellIDs()) end

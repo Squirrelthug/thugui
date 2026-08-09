@@ -49,9 +49,10 @@ Two cautions:
   rather than spells. They may have no usable spellID at all — the same shape
   of problem that hid Roll the Bones. Check `Data.PickerSpellIDFor` handles
   them before exposing those categories.
-- **Do not add `TrackedBar` as a picker source** even though it looks like a
-  gap. Tracked bars are drawn from the same pool as tracked buffs; it would
-  duplicate the list. See `DECISIONS.md` §8.
+- `TrackedBuff` and `TrackedBar` are already read **together** as the one
+  "Tracked buffs" source — they are one pool to the player but not the same
+  data. Keep any new category paired with the source it belongs to rather than
+  adding a menu entry per enum value. See `DECISIONS.md` §8.
 
 ## Cooldown Manager — new cooldown fields
 

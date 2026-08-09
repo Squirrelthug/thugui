@@ -167,9 +167,33 @@ strategy and it should stay that way.
 returns nothing, we fall back to a spellbook scan so the picker is never
 mysteriously empty.
 
-**`TrackedBar` is deliberately not a separate source.** Tracked bars are drawn
-from the same pool as tracked buffs — the same spells, presented either as an
-icon row or as a stack of timer bars. Adding it would duplicate the list.
+**`TrackedBuff` and `TrackedBar` are read together as one "Tracked buffs"
+source.** From the player's side they are one pool — the same tracked spells,
+shown either as a row of icons or a stack of timer bars — so they are not
+offered as two menu entries.
+
+They are **not** the same data, though, and reading only `TrackedBuff` loses
+entries outright. Roll the Bones on an Outlaw rogue is listed twice:
+
+```
+Essential   cooldownID 11860  linkedSpellIDs = {}
+TrackedBar  cooldownID 42743  linkedSpellIDs = One of a Kind, Double Trouble,
+                                               Triple Threat, Jackpot
+```
+
+Only the `TrackedBar` entry knows which buffs the spell can grant. With
+`TrackedBar` unread, those outcome buffs were unreachable no matter what the
+player selected.
+
+**A spell can appear in more than one category, and the entries differ.** When
+two share a spell ID, the cache keeps the *richer* one — most linked spells,
+then `hasAura` — because keeping whichever was scanned first let the empty
+Essential entry win and silently hid the buffs.
+
+*(An earlier version of this file asserted the opposite — that TrackedBar was a
+pure duplicate and must not be read. That was wrong, and the probe dump
+disproved it. Verify against `/thugcv probe` before trusting a claim about
+category contents.)*
 
 ### Entries that stand for a set of spells
 

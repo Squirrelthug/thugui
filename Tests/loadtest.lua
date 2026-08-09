@@ -218,15 +218,32 @@ C_UnitAuras = {
     GetPlayerAuraBySpellID = function(spellID) return _G.__auras[spellID] end,
 }
 
--- Cooldown entry 3 models Roll the Bones: no base spellID of its own, just a
--- set of possible buffs in linkedSpellIDs.
+-- Entry 3 models an entry defined only by its linked buffs.
+--
+-- Entries 4 and 5 model Roll the Bones as it really appears on an Outlaw
+-- rogue: the SAME spellID listed twice, once under Essential with no linked
+-- spells and once under TrackedBar carrying all four outcome buffs. Whichever
+-- of the two wins the cache decides whether the buffs are reachable at all.
 _G.__cooldownEntries = {
     [1] = { cooldownID = 1, spellID = 1001 },
     [2] = { cooldownID = 2, spellID = 1002 },
     [3] = { cooldownID = 3, spellID = nil, linkedSpellIDs = { 9001, 9002, 9003 } },
+    [4] = { cooldownID = 4, spellID = 5000, linkedSpellIDs = {} },
+    [5] = { cooldownID = 5, spellID = 5000, linkedSpellIDs = { 5101, 5102, 5103, 5104 } },
+}
+_G.__categorySets = {
+    Essential   = { 1, 2, 4 },
+    Utility     = {},
+    TrackedBuff = { 3 },
+    TrackedBar  = { 5 },
 }
 C_CooldownViewer = {
-    GetCooldownViewerCategorySet = function() return { 1, 2, 3 } end,
+    GetCooldownViewerCategorySet = function(category)
+        for name, value in pairs(Enum.CooldownViewerCategory) do
+            if value == category then return _G.__categorySets[name] or {} end
+        end
+        return {}
+    end,
     GetCooldownViewerCooldownInfo = function(id) return _G.__cooldownEntries[id] end,
 }
 C_SpellBook = {
@@ -661,6 +678,27 @@ if failures == 0 and ThugUI.CooldownViewer then
                 if entry.spellID == 9001 then found = true end
             end
             assert(found, "an entry defined only by linkedSpellIDs was dropped from the picker")
+        end },
+
+        -- Regression: Roll the Bones is listed under Essential with no linked
+        -- spells AND under TrackedBar with its four outcomes. Reading only
+        -- TrackedBuff missed the second entry entirely, and keeping whichever
+        -- was scanned first let the empty one win.
+        { "tracked buffs source includes tracked bars", function()
+            Data.InvalidateCooldownInfoCache()
+            local found = false
+            for _, entry in ipairs(Data.BuildSpellList("buffs", nil)) do
+                if entry.spellID == 5000 then found = true end
+            end
+            assert(found, "a TrackedBar entry was missing from the tracked buffs source")
+        end },
+
+        { "the richer of two entries sharing a spell ID wins", function()
+            Data.InvalidateCooldownInfoCache()
+            local info = Data.GetCooldownInfoForSpell(5000)
+            assert(info, "no cooldown entry found for a spell listed twice")
+            assert(info.linkedSpellIDs and #info.linkedSpellIDs == 4,
+                "the entry with no linked spells won the cache, hiding the buffs")
         end },
 
         { "aura mode finds a linked buff and shows its icon", function()
