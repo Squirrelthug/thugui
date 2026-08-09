@@ -104,11 +104,17 @@ function RR:EnsureFrame()
     if self.frame then return self.frame end
     if not ThugUI_CursorFrame then return nil end
 
-    local f = CreateFrame("Cooldown", "ThugUI_RESOURCE_RING", ThugUI_CursorFrame)
+    -- Parented to UIParent, ANCHORED to the cursor frame. Not parented to it:
+    -- a child of a hidden frame never draws, and the cursor rings are usually
+    -- set to combat-only -- which would make an "always show" resource ring
+    -- impossible. Anchors still resolve against a hidden frame, and
+    -- ER:OnUpdate repositions the cursor frame every frame regardless of
+    -- visibility, so this tracks the cursor either way.
+    local f = CreateFrame("Cooldown", "ThugUI_RESOURCE_RING", UIParent)
     f:SetPoint("CENTER", ThugUI_CursorFrame, "CENTER")
-    -- Below the cast ring (level 3) so the cast sweep reads over the top of it,
-    -- above the background rings (level 2 at a smaller size).
-    f:SetFrameLevel(2)
+    -- A strata below the cursor frame's HIGH, so the cast sweep always draws
+    -- over the top of this rather than fighting it on frame level.
+    f:SetFrameStrata("MEDIUM")
     f:SetSwipeTexture("Interface\\AddOns\\ThugUI\\media\\Ring_Main")
     f:SetHideCountdownNumbers(true)
     f:SetDrawEdge(false)
@@ -144,9 +150,23 @@ end
 -- Update
 -- ----------------------------------------------------------------------------
 
+--- Combat, or test mode standing in for it.
+local function InCombat()
+    local ER = ThugUI.EssentialRings
+    if ER and ER.IsInCombat then return ER:IsInCombat() end
+    return InCombatLockdown()
+end
+
 function RR:ShouldShow()
     if not ThugUI_Config.showResourceRing then return false end
-    if not ThugUI_CursorFrame or not ThugUI_CursorFrame:IsShown() then return false end
+    if not ThugUI_CursorFrame then return false end
+
+    -- Its own visibility rule rather than the cursor rings'. Riding the rings
+    -- meant a combat-only ring setting silently made the resource ring
+    -- combat-only too, which is not what "always show my energy" means.
+    local mode = ThugUI_Config.resourceRingVisibility or "always"
+    if mode == "rings" then return ThugUI_CursorFrame:IsShown() end
+    if mode == "combat" then return InCombat() end
     return true
 end
 
@@ -180,7 +200,18 @@ function RR:Update()
             local r, g, b = self:GetColor(powerToken)
             f:SetSwipeColor(r, g, b, ThugUI_Config.resourceRingAlpha or 0.55)
         end
-        f:SetShown(self.lastFraction ~= nil)
+        -- Never read a value yet: draw the ring full rather than hiding it.
+        -- Hiding here meant that once taint made UnitPower permanently secret,
+        -- lastFraction stayed nil forever and the ring simply never appeared —
+        -- which looks identical to the feature being broken. A full ring is
+        -- visibly wrong, which is the honest failure.
+        if self.lastFraction == nil then
+            f:SetCooldown(GetTime(), ARC_DURATION)
+            if f.Pause then pcall(f.Pause, f) end
+            self.lastFraction = 1
+        end
+
+        f:Show()
         return
     end
 

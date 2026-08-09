@@ -357,6 +357,10 @@ ER.defaults = {
     resourceRingColorMode = "power",  -- power | class | custom
     resourceRingCustomColor = {r = 0.3, g = 0.5, b = 0.9},
     resourceRingAlpha = 0.55,
+    -- always | combat | rings. Its own rule rather than the cursor rings',
+    -- which are usually combat-only — that is not what "always show my
+    -- resource" should mean.
+    resourceRingVisibility = "always",
 
     -- Test mode
     testMode = false,

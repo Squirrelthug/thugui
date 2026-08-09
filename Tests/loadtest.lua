@@ -991,6 +991,35 @@ if failures == 0 and ThugUI.ResourceRing then
             assert(not RR.frame:IsShown(), "resource ring showed with zero max power")
             _G.__powerMax = 100
         end },
+
+        -- Regression: once taint made UnitPower permanently secret, the guard
+        -- left lastFraction nil forever and the ring never appeared at all,
+        -- which is indistinguishable from the feature being broken.
+        { "a secret power value does not hide the ring forever", function()
+            ThugUI_Config.showResourceRing = true
+            ThugUI_Config.resourceRingVisibility = "always"
+            RR.lastFraction = nil
+            _G.__power = _G.__SECRET
+            RR:Update()
+            assert(RR.frame:IsShown(), "an unreadable power value hid the ring")
+            _G.__power = 50
+        end },
+
+        { "visibility is its own setting, not the rings'", function()
+            ThugUI_Config.showResourceRing = true
+            ThugUI_CursorFrame:Hide()
+
+            ThugUI_Config.resourceRingVisibility = "always"
+            RR:Update()
+            assert(RR.frame:IsShown(), "always mode followed the hidden cursor rings")
+
+            ThugUI_Config.resourceRingVisibility = "rings"
+            RR:Update()
+            assert(not RR.frame:IsShown(), "rings mode ignored the hidden cursor rings")
+
+            ThugUI_CursorFrame:Show()
+            ThugUI_Config.resourceRingVisibility = "always"
+        end },
     }
 
     for _, step in ipairs(steps) do

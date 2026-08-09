@@ -148,6 +148,20 @@ function Page:Build(host, panel)
     }
 
     panel:Dropdown{
+        label = "Show:", width = 170,
+        options = {
+            { value = "always", text = "Always" },
+            { value = "combat", text = "Only in combat" },
+            { value = "rings",  text = "With the cursor rings" },
+        },
+        get = function() return Cfg().resourceRingVisibility or "always" end,
+        set = function(v)
+            Cfg().resourceRingVisibility = v
+            if ThugUI.ResourceRing then ThugUI.ResourceRing:Update() end
+        end,
+    }
+
+    panel:Dropdown{
         label = "Colour:", width = 170,
         options = {
             { value = "power",  text = "Match the resource" },

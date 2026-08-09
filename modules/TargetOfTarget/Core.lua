@@ -400,8 +400,32 @@ function ToT:EnsureMover()
     return mover
 end
 
+--- True when touching the mover's geometry would be refused.
+---
+--- The mover itself is an ordinary frame, but the oUF unit button is ANCHORED
+--- to it, and that button is protected. The game will not let an addon move or
+--- resize a frame a protected frame depends on while in combat -- doing so
+--- through an anchor is the same as moving the protected frame directly.
+---
+--- This matters far beyond a mis-sized mover. The refusal does not merely fail:
+--- it raises ADDON_ACTION_BLOCKED and **taints ThugUI for the rest of the
+--- session**. Tainted execution then receives SECRET values from APIs such as
+--- UnitPower, which is how a mover resize during a pull ends up stopping the
+--- resource ring from being able to read your energy at all.
+---
+--- Before the unit frame is spawned nothing protected depends on the mover, so
+--- it is free to move.
+function ToT:MoverGeometryBlocked()
+    return self.frame ~= nil and InCombatLockdown()
+end
+
 function ToT:RestoreMoverPosition()
     if not self.mover then return end
+
+    if self:MoverGeometryBlocked() then
+        self.pendingApply = true
+        return
+    end
 
     local saved = ThugUI_Config.totPoint or DEFAULT_POINT
     self.mover:ClearAllPoints()
@@ -427,6 +451,13 @@ end
 
 function ToT:UpdateMoverGeometry()
     if not self.mover then return end
+
+    -- See MoverGeometryBlocked: this exact call is what BugGrabber caught
+    -- tainting the addon, and the taint is what turns UnitPower secret.
+    if self:MoverGeometryBlocked() then
+        self.pendingApply = true
+        return
+    end
 
     local scale = Cfg("totScale", 1.0)
     self.mover:SetSize(FRAME_W * scale, FRAME_H * scale)
