@@ -465,6 +465,23 @@ if failures == 0 and ThugUI.CooldownViewer then
             SlashCmdList["THUGCV"]("legacy")
             assert(not ThugUI_Config.cvUseLegacy, "legacy flag not cleared")
         end },
+
+        -- Regression: an unknown subcommand fell through to opening the config
+        -- window, so a typo was indistinguishable from the command working.
+        { "an unknown subcommand says so instead of opening the window", function()
+            local opened = false
+            local realToggle = ThugUI.ToggleOptions
+            ThugUI.ToggleOptions = function() opened = true end
+
+            SlashCmdList["THUGCV"]("diag")
+            assert(not opened, "an unknown subcommand silently opened the options window")
+
+            -- Bare /thugcv is still the way to open it.
+            SlashCmdList["THUGCV"]("")
+            assert(opened, "bare /thugcv stopped opening the options window")
+
+            ThugUI.ToggleOptions = realToggle
+        end },
         { "spell catalogue", function()
             for _, source in ipairs(Data.SOURCES) do
                 local list = Data.BuildSpellList(source.value, nil)

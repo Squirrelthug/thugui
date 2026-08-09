@@ -1052,6 +1052,19 @@ SlashCmdList["THUGCV"] = function(msg)
         return
     end
 
+    -- An unrecognised argument used to fall straight through to opening the
+    -- config window, so a mistyped subcommand was indistinguishable from a
+    -- working one -- /thugcv diag looked like it had run and just showed the
+    -- options menu. Bare /thugcv still opens the window; anything else has to
+    -- name itself or say why not.
+    if msg ~= "" then
+        print("|cff00ff00ThugUI:|r unknown /thugcv command '" .. msg .. "'. Try: "
+            .. "|cffffd100status|r (what the viewer thinks it is doing, including "
+            .. "buff-mode icons), |cffffd100probe|r, |cffffd100rebuild|r, "
+            .. "|cffffd100import|r, |cffffd100import force|r, |cffffd100legacy|r.")
+        return
+    end
+
     ThugUI:ToggleOptions("cooldownviewer")
 end
 
