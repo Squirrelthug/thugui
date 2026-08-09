@@ -243,6 +243,7 @@ local function DefaultProfile()
         scale = 1.0,
         collapse = "rows",
         collapseDirection = "auto",
+        showProcGlow = true,
         -- Top-left intersection: the shape hangs down and to the right of the
         -- cursor, which is where the old bars sat by default.
         anchorCol = 0,

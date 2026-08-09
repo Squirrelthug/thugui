@@ -105,5 +105,7 @@ gh api "repos/Gethe/wow-ui-source/contents/Interface/AddOns/Blizzard_CooldownVie
       (`DECISIONS.md` §5 — the whole readiness path rests on this)
 - [ ] Read `CooldownViewerSecure.lua` for protected-path changes
 - [ ] Iterate the category enum rather than naming categories
+- [ ] Re-check every entry in `docs/KNOWN-ISSUES.md` — especially whether
+      `UnitPower` still returns a secret number
 - [ ] Re-check every entry in `docs/SOURCES.md` and update its last-checked date
 - [ ] Move anything still true into `DECISIONS.md`, delete this file, start 12.2

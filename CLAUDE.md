@@ -152,6 +152,7 @@ Ones that actually apply here:
 | `CLAUDE.md` | This. How to work on the addon |
 | `docs/DECISIONS.md` | Why the addon is built the way it is. The reasoning log |
 | `docs/SOURCES.md` | Where trustworthy information comes from, with last-checked dates |
+| `docs/KNOWN-ISSUES.md` | Understood problems deliberately not fixed, and what would change that |
 | `docs/UPCOMING-PATCH.md` | What we know about the *next* game patch, accrued before it ships |
 | `Tests/README.md` | What the harness covers and what it cannot |
 

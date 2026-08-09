@@ -161,8 +161,31 @@ function RR:Update()
     end
 
     local powerType, powerToken = self:GetPowerType()
-    local current = UnitPower("player", powerType) or 0
-    local maximum = UnitPowerMax("player", powerType) or 0
+    local current = UnitPower("player", powerType)
+    local maximum = UnitPowerMax("player", powerType)
+
+    -- UnitPower returns a SECRET number while our execution is tainted -- the
+    -- max comes back plain, the current does not. Arithmetic on a secret
+    -- throws, and so does comparing one, so both have to be screened BEFORE
+    -- any use. This threw on every visibility update in combat, from inside
+    -- ER:UpdateVisibility, which is a path that has to stay clean.
+    local unreadable = issecretvalue and (issecretvalue(current) or issecretvalue(maximum))
+
+    if unreadable then
+        -- Keep drawing whatever was last resolved. A frozen ring beats an
+        -- error every frame, and the values are readable again out of combat.
+        -- Colour still tracks the power type, which is never secret.
+        if powerToken ~= self.lastPowerToken then
+            self.lastPowerToken = powerToken
+            local r, g, b = self:GetColor(powerToken)
+            f:SetSwipeColor(r, g, b, ThugUI_Config.resourceRingAlpha or 0.55)
+        end
+        f:SetShown(self.lastFraction ~= nil)
+        return
+    end
+
+    current = current or 0
+    maximum = maximum or 0
 
     if maximum <= 0 then
         f:Hide()

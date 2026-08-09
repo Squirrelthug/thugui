@@ -121,6 +121,11 @@ function GetTime() return 1000 end
 -- 12.x secret values. Anything carrying __secret stands in for a field the
 -- client will not let addon code read.
 function issecretvalue(v) return type(v) == "table" and v.__secret == true end
+
+_G.__overlayed = {}
+C_SpellActivationOverlay = {
+    IsSpellOverlayed = function(spellID) return _G.__overlayed[spellID] == true end,
+}
 local SECRET = { __secret = true }
 _G.__SECRET = SECRET
 
@@ -710,6 +715,55 @@ if failures == 0 and ThugUI.CooldownViewer then
             assert(CV.icons[Data.CellKey(1, 1)].wanted,
                 "a buff with no source field was rejected")
             wipe(_G.__auras)
+        end },
+
+        { "a proc glows, and stops glowing", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            profile.showProcGlow = true
+            Data.SetPlacement(profile, 1, 1, 777, "cooldown")
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            wipe(_G.__overlayed)
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
+            CV:UpdateState()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(not icon.glowing, "icon glowed with no proc active")
+
+            _G.__overlayed[777] = true
+            CV:UpdateState()
+            assert(icon.glowing, "icon did not glow on a proc")
+
+            wipe(_G.__overlayed)
+            CV:UpdateState()
+            assert(not icon.glowing, "glow did not clear when the proc ended")
+        end },
+
+        { "a hidden icon never keeps a glow", function()
+            local profile = Data.GetActiveProfile()
+            _G.__overlayed[777] = true
+            -- Spend the spell: it hides, and must drop the glow with it.
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = true }
+            CV:UpdateState()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(not icon.wanted, "spent spell stayed visible")
+            assert(not icon.glowing, "a hidden icon kept its glow")
+            wipe(_G.__overlayed)
+        end },
+
+        { "proc glow can be switched off", function()
+            local profile = Data.GetActiveProfile()
+            profile.showProcGlow = false
+            _G.__overlayed[777] = true
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
+            CV:UpdateState()
+            assert(not CV.icons[Data.CellKey(1, 1)].glowing,
+                "glow appeared while the setting was off")
+            profile.showProcGlow = true
+            wipe(_G.__overlayed)
         end },
 
         { "direction validity is per axis", function()

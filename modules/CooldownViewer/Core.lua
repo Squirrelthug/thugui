@@ -171,6 +171,76 @@ local function GetPlayerCastAura(spellID)
     return nil
 end
 
+-- ----------------------------------------------------------------------------
+-- Proc glow
+--
+-- The pulsing highlight an action button gets when a proc makes a spell free
+-- or empowered -- Opportunity on Pistol Shot being the case that prompted it.
+--
+-- Driven by C_SpellActivationOverlay.IsSpellOverlayed, which returns a PLAIN
+-- bool (per Blizzard's own SpellActivationOverlayDocumentation) and so is safe
+-- to branch on even when everything around it has gone secret.
+--
+-- The visual comes from ActionButtonSpellAlertManager, Blizzard's own alert
+-- pool, rather than a home-made approximation -- it is the same art the action
+-- bars use, so a glow here reads identically to a glow there. Its Default path
+-- only needs a frame with a size, and our icons have both; `actionButton.action`
+-- being nil short-circuits the assisted-combat branch it would otherwise take.
+-- ----------------------------------------------------------------------------
+
+local function IsOverlayed(spellID)
+    if not spellID or not C_SpellActivationOverlay then return false end
+    local ok, overlayed = pcall(C_SpellActivationOverlay.IsSpellOverlayed, spellID)
+    return ok and overlayed or false
+end
+
+--- Last-resort glow if Blizzard's alert pool refuses our frame. Deliberately
+--- plain: a static additive wash, not an imitation of the real animation.
+local function FallbackGlow(icon, shown)
+    if not shown and not icon.glowFallback then return end
+
+    if not icon.glowFallback then
+        local glow = icon:CreateTexture(nil, "OVERLAY")
+        glow:SetPoint("TOPLEFT", -3, 3)
+        glow:SetPoint("BOTTOMRIGHT", 3, -3)
+        glow:SetColorTexture(1, 0.85, 0.25, 0.35)
+        glow:SetBlendMode("ADD")
+        icon.glowFallback = glow
+    end
+    icon.glowFallback:SetShown(shown)
+end
+
+local function SetGlow(icon, shown)
+    if icon.glowing == shown then return end
+    icon.glowing = shown
+
+    local manager = ActionButtonSpellAlertManager
+    if shown then
+        if manager and pcall(manager.ShowAlert, manager, icon) then
+            FallbackGlow(icon, false)
+        else
+            FallbackGlow(icon, true)
+        end
+    else
+        if manager then pcall(manager.HideAlert, manager, icon) end
+        FallbackGlow(icon, false)
+    end
+end
+
+--- Does this icon's spell currently have a proc glow? Checks the stored ID and
+--- the currently-talented one, since a placement may hold either.
+local function ShouldGlow(icon)
+    if IsOverlayed(icon.spellID) then return true end
+
+    if icon.spellName then
+        local info = C_Spell.GetSpellInfo(icon.spellName)
+        if info and info.spellID ~= icon.spellID and IsOverlayed(info.spellID) then
+            return true
+        end
+    end
+    return false
+end
+
 --- The aura an icon should be showing, and which spell it came from.
 ---
 --- Some Cooldown Manager entries stand for a SET of possible buffs rather than
@@ -457,6 +527,8 @@ end
 function CV:UpdateState()
     if not self.container or not self.container:IsShown() then return end
 
+    local glowEnabled = CV:CurrentProfile().showProcGlow ~= false
+
     -- Preview is about seeing the SHAPE, so every icon draws flat: cooldown and
     -- aura state are irrelevant, and an off-spec layout would otherwise render
     -- completely empty because none of its spells are known right now.
@@ -466,6 +538,7 @@ function CV:UpdateState()
             icon.count:Hide()
             icon.wanted = true
             icon:Show()
+            SetGlow(icon, false)
         end
         -- Laid out through the same path as combat, so preview shows the real
         -- resting shape -- including the fact that with row collapse on, a
@@ -540,6 +613,10 @@ function CV:UpdateState()
 
         icon.wanted = show
         icon:SetShown(show)
+
+        -- Glow only on a visible icon; an alert left running on a hidden frame
+        -- keeps animating and pops back the next time the icon shows.
+        SetGlow(icon, show and glowEnabled and ShouldGlow(icon) or false)
     end
 
     self:ApplyLayout()
@@ -708,6 +785,10 @@ driver:RegisterEvent("SPELL_UPDATE_COOLDOWN")
 driver:RegisterEvent("SPELL_UPDATE_CHARGES")
 driver:RegisterEvent("SPELLS_CHANGED")
 driver:RegisterEvent("UNIT_AURA")
+-- Proc glows are synchronous events; polling alone would lag them by up to the
+-- update interval, which is exactly the window where a proc matters.
+driver:RegisterEvent("SPELL_ACTIVATION_OVERLAY_GLOW_SHOW")
+driver:RegisterEvent("SPELL_ACTIVATION_OVERLAY_GLOW_HIDE")
 driver:RegisterEvent("PLAYER_REGEN_DISABLED")
 driver:RegisterEvent("PLAYER_REGEN_ENABLED")
 

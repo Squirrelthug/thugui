@@ -661,6 +661,17 @@ function Page:BuildInspector(host)
         .. "left between clusters closes too — tick preview to see the real shape.",
         { width = 200 })
 
+    panel:Section("Procs")
+
+    panel:Checkbox{
+        label = "Show proc glow",
+        tooltip = "The same pulsing highlight an action button gets when a proc makes a "
+            .. "spell free or empowered — Opportunity on Pistol Shot, for instance. Uses "
+            .. "Blizzard's own alert art, so it reads identically to your action bars.",
+        get = function() return Profile().showProcGlow ~= false end,
+        set = function(v) Profile().showProcGlow = v; Apply() end,
+    }
+
     panel:Section("Size and spacing")
 
     panel:Slider{
