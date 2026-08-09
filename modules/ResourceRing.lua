@@ -192,6 +192,15 @@ function RR:Update()
     local unreadable = issecretvalue and (issecretvalue(current) or issecretvalue(maximum))
 
     if unreadable then
+        -- Once a session: this condition repeats every update, and the first
+        -- occurrence is the whole story. It also names the likely cause, since
+        -- secret power values follow taint rather than being unconditional.
+        if ThugUI.Diagnostics then
+            ThugUI.Diagnostics:LogOnce("power-secret", "RING",
+                "UnitPower unreadable (secret value) for %s — addon is tainted; "
+                .. "resource level cannot be computed", tostring(powerToken))
+        end
+
         -- Keep drawing whatever was last resolved. A frozen ring beats an
         -- error every frame, and the values are readable again out of combat.
         -- Colour still tracks the power type, which is never secret.

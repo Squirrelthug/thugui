@@ -15,6 +15,10 @@ ThugUI.xml
 # has registered would wipe the registry.
 core.lua
 
+# Diagnostics loads early so every module below can call ThugUI.Diagnostics:Log
+# without guarding for load order. Always on, silent, writes to ThugUI_DebugLog.
+modules\Diagnostics.lua
+
 # oUF (MIT) - vendored unit frame framework, see libs\oUF\LICENSE.txt.
 # Embedded with no X-oUF metadata, so it exposes no global and is reached
 # through the addon namespace as ns.oUF. Must load before anything using it.

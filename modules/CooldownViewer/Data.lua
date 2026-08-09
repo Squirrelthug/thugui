@@ -506,6 +506,16 @@ function Data.GetCooldownInfoForSpell(spellID)
     if not cooldownInfoCache or cooldownInfoCacheSpec ~= specID then
         cooldownInfoCache = BuildCooldownInfoCache()
         cooldownInfoCacheSpec = specID
+
+        -- Recorded because the entry count is direct evidence that the
+        -- Cooldown Manager was readable at all -- a zero here explains an
+        -- empty picker without anyone having to reproduce it.
+        local count = 0
+        for _ in pairs(cooldownInfoCache) do count = count + 1 end
+        if ThugUI.Diagnostics then
+            ThugUI.Diagnostics:Log("CV", "cooldown cache built for %s: %d indexed spell ids",
+                Data.GetSpecName(specID), count)
+        end
     end
     return cooldownInfoCache[spellID]
 end
@@ -797,6 +807,12 @@ function Data.MigrateSpec(specID, force)
     -- Only marked done once something was actually written, so a spec whose
     -- spells could not be resolved yet gets another go next login.
     if wrote then store.migratedSpecs[specID] = true end
+
+    if ThugUI.Diagnostics then
+        ThugUI.Diagnostics:Log("MIGRATE", "%s: %d legacy spell(s) resolved, %s",
+            Data.GetSpecName(specID), #spellIDs,
+            wrote and "imported" or "nothing written")
+    end
     return wrote
 end
 

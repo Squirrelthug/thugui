@@ -416,7 +416,14 @@ end
 --- Before the unit frame is spawned nothing protected depends on the mover, so
 --- it is free to move.
 function ToT:MoverGeometryBlocked()
-    return self.frame ~= nil and InCombatLockdown()
+    local blocked = self.frame ~= nil and InCombatLockdown()
+    if blocked and ThugUI.Diagnostics then
+        -- Once a session. If this ever appears alongside a taint symptom, the
+        -- deferral is working and the taint came from somewhere else.
+        ThugUI.Diagnostics:LogOnce("mover-deferred", "TOT",
+            "mover geometry deferred out of combat (would have tainted the addon)")
+    end
+    return blocked
 end
 
 function ToT:RestoreMoverPosition()

@@ -875,6 +875,10 @@ SlashCmdList["THUGCV"] = function(msg)
     if msg == "legacy" then
         ThugUI_Config.cvUseLegacy = not ThugUI_Config.cvUseLegacy
         local ER = ThugUI.EssentialRings
+        if ThugUI.Diagnostics then
+            ThugUI.Diagnostics:Log("CV", "legacy bars %s",
+                ThugUI_Config.cvUseLegacy and "ENABLED" or "disabled")
+        end
         if ThugUI_Config.cvUseLegacy then
             if CV.container then CV.container:Hide() end
             print("|cff00ff00ThugUI:|r cooldown viewer switched to the |cffffd100legacy|r ECV/BCV/GCV bars.")

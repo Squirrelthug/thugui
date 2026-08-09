@@ -121,6 +121,7 @@ function IsPlayerSpell() return true end
 function IsSpellKnownOrOverridesKnown() return true end
 function RegisterStateDriver() end
 function GetTime() return 1000 end
+date = os.date  -- WoW provides this as a global
 
 -- 12.x secret values. Anything carrying __secret stands in for a field the
 -- client will not let addon code read.
@@ -465,6 +466,61 @@ if failures == 0 and ThugUI.CooldownViewer then
         end },
         { "grid page refresh after edits", function()
             ThugUI.Window:SelectPage("cooldownviewer")
+        end },
+
+        -- Diagnostics are always on, so they must be safe to call from
+        -- anywhere and must never grow without bound.
+        { "diagnostics record without being switched on", function()
+            local D = ThugUI.Diagnostics
+            assert(D, "diagnostics module missing")
+            assert(ThugUI_DebugLog and ThugUI_DebugLog.events,
+                "nothing was recorded without a command being run")
+            assert(#ThugUI_DebugLog.events > 0, "no events captured")
+        end },
+
+        { "the event log is capped", function()
+            local D = ThugUI.Diagnostics
+            for i = 1, 500 do D:Log("TEST", "entry %d", i) end
+            assert(#ThugUI_DebugLog.events <= 300,
+                ("event log grew to %d, unbounded"):format(#ThugUI_DebugLog.events))
+            -- The tail is what explains a failure, so it must be the tail
+            -- that survives.
+            assert(ThugUI_DebugLog.events[#ThugUI_DebugLog.events]:find("entry 500"),
+                "the newest entry was dropped instead of the oldest")
+        end },
+
+        { "LogOnce really only logs once", function()
+            local D = ThugUI.Diagnostics
+            for _ = 1, 20 do D:LogOnce("test-key", "TEST", "repeated condition") end
+
+            -- Counted rather than measured by log length: the cap means the
+            -- log can be full, and then adding entries does not grow it.
+            local count = 0
+            for _, line in ipairs(ThugUI_DebugLog.events) do
+                if line:find("repeated condition", 1, true) then count = count + 1 end
+            end
+            assert(count == 1, ("a once-only condition appeared %d times"):format(count))
+        end },
+
+        { "a snapshot records linked-spell counts", function()
+            local D = ThugUI.Diagnostics
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            Data.SetPlacement(profile, 1, 1, 5000, "aura")
+            Data.InvalidateCooldownInfoCache()
+            CV:Rebuild()
+
+            D:CaptureState()
+            local state = ThugUI_DebugLog.state
+            assert(state and state.profiles, "no state captured")
+
+            local specID = Data.GetActiveSpecID()
+            local entry = state.profiles[specID]
+            assert(entry and entry.icons and #entry.icons > 0, "no icons recorded")
+            -- This is the field that proves the linked-buff lookup ran, which
+            -- no version string can tell you from the outside.
+            assert(entry.icons[1]:find("linked=4"),
+                "snapshot did not record the resolved linked-spell count: " .. entry.icons[1])
         end },
 
         -- Collapse: rows pack independently, from the row's own outermost

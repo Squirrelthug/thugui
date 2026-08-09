@@ -66,14 +66,27 @@ wiki turned out to document the fields and none of the behaviour.
 
 **Never invent a spell ID.** Verify it, or resolve it at runtime from the game.
 
-### Read the error before theorising
+### Read the evidence before theorising
 
-Runtime errors are on disk:
-`_retail_/WTF/Account/SQUAZZIL/SavedVariables/!BugGrabber.lua`
+Two files, both on disk, both only flushed on `/reload` or logout:
 
-It only flushes on `/reload` or logout, so an error from the current session is
-not there yet. Ask for a reload rather than guessing — two rounds of speculation
-cost more than one reload.
+| File | What |
+|---|---|
+| `WTF/Account/SQUAZZIL/SavedVariables/!BugGrabber.lua` | Runtime errors, with stacks and locals |
+| `WTF/Account/SQUAZZIL/SavedVariables/ThugUI.lua` | Settings, plus `ThugUI_DebugLog` — **always-on** diagnostics |
+
+`ThugUI_DebugLog` needs no command. `events` is a per-session log; `state` is a
+snapshot taken at logout, listing every placed icon with its resolved
+linked-spell count. **That count is evidence of which code actually ran** —
+more reliable than a version string, and it exists because a fix was once
+pushed, not loaded, and the resulting behaviour was indistinguishable from the
+fix not working.
+
+An error from a session still in progress is not on disk yet. Ask for a
+reload — one reload beats two rounds of speculation.
+
+`Tests/replay_probe.lua` runs a real `/thugcv probe` dump through the live
+code, which separates "our logic is wrong" from "they were on an older build".
 
 ### Never break the fallback
 
