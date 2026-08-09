@@ -196,8 +196,25 @@ Two traps this caused:
 - Taking only `overrideSpellID or spellID` **drops** an entry with no base
   spell. That is the entire reason Roll the Bones was missing from the picker
   while everything else appeared.
-- Require `sourceUnit == "player"` on **every** lookup path. A fallback that
-  re-fetches without it silently re-admits another player's same-named buff.
+- Apply the same source check on **every** lookup path. A fallback that
+  re-fetches without it silently re-admits what the first check just refused.
+
+### Do not copy Blizzard's sourceUnit check verbatim
+
+Blizzard requires `auraData.sourceUnit == "player"`. Copying that exactly made
+the tracked buff never appear, because **engine code can read fields addon code
+cannot**: in 12.x aura fields come back as secret values, and comparing a secret
+string never yields a usable `true`.
+
+The rule is therefore: reject only a source we can actually *read* and that is
+not the player. Absent or unreadable is accepted, since the lookup is already
+scoped to auras on the player and self-buffs are what the mode is for. The cost
+— another player's same-named buff can slip through while the field is secret —
+is far smaller than showing nothing.
+
+**Generalise: any check copied from Blizzard's UI that reads aura or cooldown
+fields needs to tolerate secret values, because their code is not subject to the
+same restriction as ours.** See §5 for the same lesson on cooldown fields.
 
 Use `/thugcv probe` to dump what the Cooldown Manager actually reports.
 

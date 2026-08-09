@@ -138,12 +138,25 @@ end
 local function GetPlayerCastAura(spellID)
     if not spellID or not C_UnitAuras then return nil end
 
-    -- sourceUnit nil is allowed through: not every API path fills it in, and
-    -- rejecting on absence would hide legitimate buffs. Anything that names a
-    -- source other than the player is rejected on BOTH paths -- the fallback
-    -- must not quietly re-admit what the first check just refused.
+    -- Blizzard's own tracker requires sourceUnit == "player", but engine code
+    -- can read fields that addon code cannot: in 12.x aura fields come back as
+    -- SECRET values, and comparing a secret string never yields a usable true.
+    -- Copying that check verbatim rejected every aura and the tracked buff
+    -- simply never appeared.
+    --
+    -- So: reject only a source we can actually READ and that is not the player.
+    -- Unreadable or absent is accepted, because the lookup is already scoped to
+    -- auras on the player and self-buffs are what this mode is for. The cost is
+    -- that another player's same-named buff can slip through while the field is
+    -- secret, which is a far smaller failure than showing nothing at all.
     local function Mine(aura)
-        return aura and (aura.sourceUnit == nil or aura.sourceUnit == "player") and aura or nil
+        if not aura then return nil end
+
+        local source = aura.sourceUnit
+        if source == nil then return aura end
+        if issecretvalue and issecretvalue(source) then return aura end
+
+        return source == "player" and aura or nil
     end
 
     if C_UnitAuras.GetUnitAuraBySpellID then
@@ -893,6 +906,42 @@ SlashCmdList["THUGCV"] = function(msg)
                 .. "never draw: %s|r"):format(#unknown, table.concat(unknown, ", ")))
         end
         print("  container shown: " .. tostring(CV.container and CV.container:IsShown()))
+
+        -- Aura-mode icons get their own readout: "buff mode shows nothing" has
+        -- three distinct causes -- the entry was not found, it has no linked
+        -- spells, or no linked buff is currently up -- and they look identical
+        -- on screen.
+        local auraIcons = {}
+        for _, icon in pairs(CV.icons) do
+            if icon.mode == "aura" then table.insert(auraIcons, icon) end
+        end
+
+        if #auraIcons > 0 then
+            print("  |cff00ffccbuff-mode icons|r")
+            for _, icon in ipairs(auraIcons) do
+                local spellInfo = C_Spell.GetSpellInfo(icon.spellID)
+                local linked = icon.linkedSpellIDs or {}
+                local aura, auraSpellID = ResolveAura(icon)
+
+                print(("    %s (%d): %d linked, %s")
+                    :format(spellInfo and spellInfo.name or "?", icon.spellID, #linked,
+                            aura and ("|cff40ff40active via " .. tostring(auraSpellID) .. "|r")
+                                 or "|cffff4040no buff found|r"))
+
+                if #linked == 0 then
+                    print("      |cffffd100-> no linked spells: this entry was not matched to a "
+                        .. "Cooldown Manager cooldown. Run /thugcv probe.|r")
+                elseif not aura then
+                    -- Show what we looked for, so a wrong ID set is obvious.
+                    local names = {}
+                    for _, id in ipairs(linked) do
+                        local info = C_Spell.GetSpellInfo(id)
+                        table.insert(names, (info and info.name or "?") .. "(" .. id .. ")")
+                    end
+                    print("      looked for: " .. table.concat(names, ", "))
+                end
+            end
+        end
         return
     end
 

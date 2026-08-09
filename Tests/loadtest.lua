@@ -118,6 +118,12 @@ function IsSpellKnownOrOverridesKnown() return true end
 function RegisterStateDriver() end
 function GetTime() return 1000 end
 
+-- 12.x secret values. Anything carrying __secret stands in for a field the
+-- client will not let addon code read.
+function issecretvalue(v) return type(v) == "table" and v.__secret == true end
+local SECRET = { __secret = true }
+_G.__SECRET = SECRET
+
 -- Resource ring. __powerToken is what UnitPowerType reports (it already
 -- follows shapeshift form in the real game); __form drives the override path.
 _G.__powerToken = "MANA"
@@ -681,6 +687,28 @@ if failures == 0 and ThugUI.CooldownViewer then
             CV:UpdateState()
             assert(not CV.icons[Data.CellKey(1, 1)].wanted,
                 "someone else's buff was treated as the player's")
+            wipe(_G.__auras)
+        end },
+
+        -- Regression: copying Blizzard's sourceUnit == "player" check verbatim
+        -- rejected every aura, because in 12.x that field is a secret value to
+        -- addon code and the comparison can never succeed. An unreadable source
+        -- must be accepted or the whole mode shows nothing.
+        { "a secret sourceUnit is accepted, not rejected", function()
+            wipe(_G.__auras)
+            _G.__auras[9002] = { spellId = 9002, sourceUnit = _G.__SECRET }
+            CV:UpdateState()
+            assert(CV.icons[Data.CellKey(1, 1)].wanted,
+                "a buff whose source could not be read was rejected")
+            wipe(_G.__auras)
+        end },
+
+        { "a missing sourceUnit is accepted", function()
+            wipe(_G.__auras)
+            _G.__auras[9003] = { spellId = 9003 }
+            CV:UpdateState()
+            assert(CV.icons[Data.CellKey(1, 1)].wanted,
+                "a buff with no source field was rejected")
             wipe(_G.__auras)
         end },
 
