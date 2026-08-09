@@ -129,9 +129,54 @@ local function ApplySweep(icon, spellName)
     end
 end
 
-local function GetAura(spellID)
-    if not C_UnitAuras or not C_UnitAuras.GetPlayerAuraBySpellID then return nil end
-    return C_UnitAuras.GetPlayerAuraBySpellID(spellID)
+--- A buff on the player cast by the player, for one spell ID.
+---
+--- Blizzard's CooldownViewerItemDataMixin:FindLinkedSpellForCurrentAuras uses
+--- GetUnitAuraBySpellID plus a sourceUnit == "player" check, so this matches
+--- it: a tracked buff should mean YOUR buff, not the same-named one somebody
+--- else put on you.
+local function GetPlayerCastAura(spellID)
+    if not spellID or not C_UnitAuras then return nil end
+
+    -- sourceUnit nil is allowed through: not every API path fills it in, and
+    -- rejecting on absence would hide legitimate buffs. Anything that names a
+    -- source other than the player is rejected on BOTH paths -- the fallback
+    -- must not quietly re-admit what the first check just refused.
+    local function Mine(aura)
+        return aura and (aura.sourceUnit == nil or aura.sourceUnit == "player") and aura or nil
+    end
+
+    if C_UnitAuras.GetUnitAuraBySpellID then
+        local ok, aura = pcall(C_UnitAuras.GetUnitAuraBySpellID, "player", spellID)
+        if ok and Mine(aura) then return aura end
+    end
+
+    if C_UnitAuras.GetPlayerAuraBySpellID then
+        local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, spellID)
+        if ok then return Mine(aura) end
+    end
+    return nil
+end
+
+--- The aura an icon should be showing, and which spell it came from.
+---
+--- Some Cooldown Manager entries stand for a SET of possible buffs rather than
+--- one: Roll the Bones grants one or more of six, and Blizzard's tracker walks
+--- cooldownInfo.linkedSpellIDs to find whichever is live, then draws that
+--- buff's icon and timer instead of the base spell's. Without walking the
+--- linked list, tracking Roll the Bones as a buff finds nothing at all,
+--- because no aura is ever named "Roll the Bones".
+---
+--- @return auraData, spellID that produced it
+local function ResolveAura(icon)
+    local aura = GetPlayerCastAura(icon.spellID)
+    if aura then return aura, icon.spellID end
+
+    for _, linkedID in ipairs(icon.linkedSpellIDs or {}) do
+        aura = GetPlayerCastAura(linkedID)
+        if aura then return aura, linkedID end
+    end
+    return nil
 end
 
 -- ----------------------------------------------------------------------------
@@ -249,7 +294,16 @@ function CV:Rebuild()
 
         local texture = C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(placement.spellID)
         icon.tex:SetTexture(texture)
+        -- Remembered so aura mode can swap to a linked buff's art and back.
+        icon.baseTexture = texture
         icon.spellID = placement.spellID
+
+        -- The set of buffs this entry can stand for, e.g. the six Roll the
+        -- Bones outcomes. Resolved here rather than stored in the placement,
+        -- so it follows talent changes and survives a patch renumbering
+        -- cooldown IDs.
+        local cooldownInfo = Data.GetCooldownInfoForSpell(placement.spellID)
+        icon.linkedSpellIDs = cooldownInfo and cooldownInfo.linkedSpellIDs or nil
         -- Resolved by ID (which works for any spell in the game) and cached, so
         -- the per-frame path can query by name. Rebuild re-runs on
         -- SPELLS_CHANGED / PLAYER_TALENT_UPDATE, so this stays current.
@@ -415,19 +469,41 @@ function CV:UpdateState()
         if not IsSpellAvailable(spellName) then
             show = false
         elseif icon.mode == "aura" then
-            local aura = GetAura(spellID)
+            local aura, auraSpellID = ResolveAura(icon)
             show = aura ~= nil
-            if aura and aura.expirationTime and aura.duration and aura.duration > 0 then
-                icon.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration)
+
+            -- Show the buff you actually have, not the spell that granted it.
+            -- The texture is looked up from OUR spell ID rather than read off
+            -- the aura, because aura fields can be secret values in combat
+            -- while the ID we matched on never is.
+            if aura and auraSpellID ~= icon.spellID then
+                icon.tex:SetTexture(C_Spell.GetSpellTexture(auraSpellID))
             else
-                icon.cooldown:Clear()
+                icon.tex:SetTexture(icon.baseTexture)
             end
-            if aura and aura.applications and aura.applications > 1 then
-                icon.count:SetText(aura.applications)
-                icon.count:Show()
-            else
-                icon.count:Hide()
+
+            -- Aura timing is secret-guarded: a comparison against a secret
+            -- number does not yield a usable boolean, so the whole read is
+            -- wrapped rather than trusted.
+            local swept = false
+            if aura then
+                swept = pcall(function()
+                    if aura.expirationTime and aura.duration and aura.duration > 0 then
+                        icon.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration)
+                        return true
+                    end
+                end)
             end
+            if not swept or not aura then icon.cooldown:Clear() end
+
+            local stacked = aura and pcall(function()
+                if aura.applications and aura.applications > 1 then
+                    icon.count:SetText(aura.applications)
+                    icon.count:Show()
+                    return true
+                end
+            end)
+            if not stacked then icon.count:Hide() end
         else
             local ready, charges = IsSpellReady(spellName)
 
@@ -646,6 +722,10 @@ driver:SetScript("OnEvent", function(_, event, arg1)
         -- Spec change swaps the whole profile, so the icon set is rebuilt from
         -- scratch rather than re-pointed. The settings page follows along:
         -- clearing editSpecID makes it re-default to the spec now active.
+        -- Talents change what each category contains and which spells are
+        -- overridden, so the linked-spell lookup has to be rebuilt with them.
+        Data.InvalidateCooldownInfoCache()
+
         if event == "PLAYER_SPECIALIZATION_CHANGED" then
             -- Retry migration for the spec just switched TO. The ECV list is
             -- spell names, and names only resolve for a spec you are actually
@@ -727,6 +807,32 @@ SlashCmdList["THUGCV"] = function(msg)
             print("|cff00ff00ThugUI:|r no old bar exists for "
                 .. Data.GetSpecName(specID) .. " (only Balance, Guardian and "
                 .. "Restoration ever had one).")
+        end
+        return
+    end
+
+    -- Dump what the Cooldown Manager actually reports for this spec. The
+    -- linkedSpellIDs column is the interesting one: an entry that tracks a set
+    -- of possible buffs (Roll the Bones) has no aura of its own and is only
+    -- findable through that list.
+    if msg == "probe" then
+        ThugUI_BCVDump = ThugUI_BCVDump or {}
+        ThugUI_BCVDump.cooldownViewer = {
+            capturedAt = date("%Y-%m-%d %H:%M:%S"),
+            spec = Data.GetSpecName(Data.GetActiveSpecID()),
+            entries = Data.DumpCooldownViewer(),
+        }
+        local count = #ThugUI_BCVDump.cooldownViewer.entries
+        print(("|cff00ff00ThugUI:|r probed %d cooldown entries into ThugUI_BCVDump. "
+            .. "|cffffd100/reload|r to flush it to disk."):format(count))
+
+        -- Anything with linked spells is worth surfacing immediately.
+        for _, entry in ipairs(ThugUI_BCVDump.cooldownViewer.entries) do
+            if entry.linkedSpellIDs ~= "" then
+                print(("  |cff00ffcc%s|r [%s] spellID=%s linked: %s")
+                    :format(entry.name or "(no base spell)", entry.category,
+                            tostring(entry.spellID), entry.linkedSpellIDs))
+            end
         end
         return
     end

@@ -395,13 +395,122 @@ local function CooldownViewerSpellIDs(categoryName)
     for _, cooldownID in ipairs(cooldownIDs) do
         local infoOK, info = pcall(C_CooldownViewer.GetCooldownViewerCooldownInfo, cooldownID)
         if infoOK and info then
-            -- overrideSpellID is what the player actually casts once a talent
-            -- replaces the base spell; prefer it so the icon matches the bar.
-            local spellID = info.overrideSpellID or info.spellID
+            local spellID = Data.PickerSpellIDFor(info)
             if spellID then table.insert(spellIDs, spellID) end
         end
     end
     return spellIDs
+end
+
+--- The spell ID a Cooldown Manager entry should appear under in the picker.
+---
+--- overrideSpellID first, so a talent that replaces a base spell shows the icon
+--- the player actually casts. The linked fallback matters for entries that
+--- have NO base spell of their own: Roll the Bones is tracked as its set of
+--- possible buffs, so `spellID` is nil and taking only override-or-base
+--- dropped it from the list entirely.
+function Data.PickerSpellIDFor(info)
+    if not info then return nil end
+    return info.overrideSpellID
+        or info.spellID
+        or info.overrideTooltipSpellID
+        or (info.linkedSpellIDs and info.linkedSpellIDs[1])
+end
+
+-- Cooldown Manager entries, indexed by every spell ID that can stand for them.
+-- Rebuilt on demand because talents change what is in each category.
+local cooldownInfoCache, cooldownInfoCacheSpec
+
+local function BuildCooldownInfoCache()
+    local cache = {}
+    if not C_CooldownViewer or not C_CooldownViewer.GetCooldownViewerCategorySet then
+        return cache
+    end
+
+    for _, categoryName in ipairs({ "Essential", "Utility", "TrackedBuff", "TrackedBar" }) do
+        local category = Enum and Enum.CooldownViewerCategory and Enum.CooldownViewerCategory[categoryName]
+        if category ~= nil then
+            local ok, ids = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category)
+            if ok and type(ids) == "table" then
+                for _, cooldownID in ipairs(ids) do
+                    local infoOK, info = pcall(C_CooldownViewer.GetCooldownViewerCooldownInfo, cooldownID)
+                    if infoOK and info then
+                        -- Indexed under every ID that could name this entry, so
+                        -- a placement made from any of them finds it again.
+                        for _, id in ipairs({
+                            info.spellID, info.overrideSpellID, info.overrideTooltipSpellID,
+                        }) do
+                            if id and not cache[id] then cache[id] = info end
+                        end
+                        for _, id in ipairs(info.linkedSpellIDs or {}) do
+                            if id and not cache[id] then cache[id] = info end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return cache
+end
+
+--- The Cooldown Manager entry a placed spell belongs to, or nil.
+--- This is where linkedSpellIDs comes from -- the set of buffs a single
+--- tracked entry can show, e.g. the six Roll the Bones outcomes.
+function Data.GetCooldownInfoForSpell(spellID)
+    if not spellID then return nil end
+
+    local specID = Data.GetActiveSpecID()
+    if not cooldownInfoCache or cooldownInfoCacheSpec ~= specID then
+        cooldownInfoCache = BuildCooldownInfoCache()
+        cooldownInfoCacheSpec = specID
+    end
+    return cooldownInfoCache[spellID]
+end
+
+function Data.InvalidateCooldownInfoCache()
+    cooldownInfoCache, cooldownInfoCacheSpec = nil, nil
+end
+
+--- Everything the Cooldown Manager reports for this spec, for /thugcv probe.
+function Data.DumpCooldownViewer()
+    local dump = {}
+    if not C_CooldownViewer or not C_CooldownViewer.GetCooldownViewerCategorySet then
+        return dump
+    end
+
+    for _, categoryName in ipairs({ "Essential", "Utility", "TrackedBuff", "TrackedBar" }) do
+        local category = Enum and Enum.CooldownViewerCategory and Enum.CooldownViewerCategory[categoryName]
+        if category ~= nil then
+            local ok, ids = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category)
+            if ok and type(ids) == "table" then
+                for _, cooldownID in ipairs(ids) do
+                    local infoOK, info = pcall(C_CooldownViewer.GetCooldownViewerCooldownInfo, cooldownID)
+                    if infoOK and info then
+                        local names = {}
+                        for _, id in ipairs(info.linkedSpellIDs or {}) do
+                            local spellInfo = C_Spell.GetSpellInfo(id)
+                            table.insert(names, id .. "=" .. ((spellInfo and spellInfo.name) or "?"))
+                        end
+                        local baseInfo = info.spellID and C_Spell.GetSpellInfo(info.spellID)
+                        table.insert(dump, {
+                            category = categoryName,
+                            cooldownID = cooldownID,
+                            spellID = info.spellID,
+                            name = baseInfo and baseInfo.name,
+                            overrideSpellID = info.overrideSpellID,
+                            overrideTooltipSpellID = info.overrideTooltipSpellID,
+                            hasAura = info.hasAura,
+                            selfAura = info.selfAura,
+                            charges = info.charges,
+                            isKnown = info.isKnown,
+                            linkedSpellIDs = table.concat(names, ", "),
+                        })
+                    end
+                end
+            end
+        end
+    end
+    return dump
 end
 
 --- Every active, non-passive spell in the player's spellbook.

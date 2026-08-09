@@ -197,10 +197,26 @@ C_Spell = {
     GetSpellCharges = function() return nil end,
 }
 _G.__cooldownState = {}
-C_UnitAuras = { GetPlayerAuraBySpellID = function() return nil end }
+-- Auras present on the player, keyed by spell ID.
+_G.__auras = {}
+C_UnitAuras = {
+    GetUnitAuraBySpellID = function(unit, spellID)
+        if unit ~= "player" then return nil end
+        return _G.__auras[spellID]
+    end,
+    GetPlayerAuraBySpellID = function(spellID) return _G.__auras[spellID] end,
+}
+
+-- Cooldown entry 3 models Roll the Bones: no base spellID of its own, just a
+-- set of possible buffs in linkedSpellIDs.
+_G.__cooldownEntries = {
+    [1] = { cooldownID = 1, spellID = 1001 },
+    [2] = { cooldownID = 2, spellID = 1002 },
+    [3] = { cooldownID = 3, spellID = nil, linkedSpellIDs = { 9001, 9002, 9003 } },
+}
 C_CooldownViewer = {
     GetCooldownViewerCategorySet = function() return { 1, 2, 3 } end,
-    GetCooldownViewerCooldownInfo = function(id) return { cooldownID = id, spellID = 1000 + id } end,
+    GetCooldownViewerCooldownInfo = function(id) return _G.__cooldownEntries[id] end,
 }
 C_SpellBook = {
     GetNumSpellBookSkillLines = function() return 1 end,
@@ -623,6 +639,49 @@ if failures == 0 and ThugUI.CooldownViewer then
             -- Rows 2 and 4 survive; packing down means they end at rows 3 and 4.
             assertSame(DisplayRows(CV, Data, 2, { 2, 4 }), { 3, 4 },
                 "rows did not close toward the bottom")
+        end },
+
+        -- Roll the Bones: one tracked entry standing for a set of possible
+        -- buffs, with no aura of its own.
+        { "an entry with no base spell still reaches the picker", function()
+            Data.InvalidateCooldownInfoCache()
+            local found = false
+            for _, entry in ipairs(Data.BuildSpellList("buffs", nil)) do
+                if entry.spellID == 9001 then found = true end
+            end
+            assert(found, "an entry defined only by linkedSpellIDs was dropped from the picker")
+        end },
+
+        { "aura mode finds a linked buff and shows its icon", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 9001, "aura")
+            Data.InvalidateCooldownInfoCache()
+            CV:Rebuild()
+
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(icon.linkedSpellIDs, "linked spell IDs were not cached on the icon")
+
+            CV.container.__shown = true
+            wipe(_G.__auras)
+            CV:UpdateState()
+            assert(not icon.wanted, "aura mode showed with no buff active")
+
+            -- The THIRD of the linked buffs is the one running.
+            _G.__auras[9003] = { spellId = 9003, sourceUnit = "player" }
+            CV:UpdateState()
+            assert(icon.wanted, "aura mode did not find the active linked buff")
+        end },
+
+        { "a buff from someone else does not count", function()
+            wipe(_G.__auras)
+            _G.__auras[9002] = { spellId = 9002, sourceUnit = "party1" }
+            CV:UpdateState()
+            assert(not CV.icons[Data.CellKey(1, 1)].wanted,
+                "someone else's buff was treated as the player's")
+            wipe(_G.__auras)
         end },
 
         { "direction validity is per axis", function()
