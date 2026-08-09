@@ -22,12 +22,19 @@ ThugUI.Window = Window
 
 local W  -- ThugUI.Widgets, resolved on first use (load order independent)
 
--- Sized around the Cooldown Viewer page, which is the widest thing here:
--- 236 picker + 320 grid + 200 inspector plus gutters.
+-- Sized around the Cooldown Viewer page, which is the largest thing here:
+-- 236 picker + 320 grid + 200 inspector across, and the grid plus the settings
+-- band beneath it down. Tests/loadtest.lua asserts non-scrolling pages fit
+-- inside CONTENT_HEIGHT, so shrinking these will fail loudly rather than
+-- quietly pushing controls off the bottom.
 local WINDOW_WIDTH   = 1040
-local WINDOW_HEIGHT  = 680
+local WINDOW_HEIGHT  = 720
 local SIDEBAR_WIDTH  = 170
 local HEADER_HEIGHT  = 44
+
+-- Exposed so a page can be checked against the space it actually has. Content
+-- sits below the header and above the bottom margin.
+Window.CONTENT_HEIGHT = WINDOW_HEIGHT - (HEADER_HEIGHT + 8) - 14
 
 Window.pages = {}
 Window.pagesByID = {}

@@ -36,7 +36,9 @@ local GRID_X        = 262  -- grid origin within the page
 local GRID_Y        = -96
 local PICKER_WIDTH  = 236
 local PICKER_TOP    = -96
-local PICKER_HEIGHT = 400
+-- Level with the grid (GRID_Y + 10 cells), so the settings band below starts
+-- clear of both columns rather than colliding with a taller picker.
+local PICKER_HEIGHT = 320
 local ROW_HEIGHT    = 26
 
 local COLS, ROWS = Data.GRID_COLS, Data.GRID_ROWS
@@ -486,7 +488,7 @@ function Page:Build(host, panel)
     subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
     subtitle:SetWidth(700)
     subtitle:SetJustifyH("LEFT")
-    subtitle:SetText("Per-specialization layouts. The grid is a map of what rides on your cursor — "
+    subtitle:SetText("Per-specialization layouts. The grid is a map of what rides on your cursor ??? "
         .. "in combat the scaffold disappears and only the icons show.")
 
     -- Spec selector ------------------------------------------------------
@@ -565,20 +567,47 @@ function Page:Build(host, panel)
     end)
 end
 
-function Page:BuildInspector(host)
-    local x = GRID_X + COLS * CELL + 22
-    local panel = W.NewPanel(host, { x = x, y = 96, width = 200 })
-    self.inspectorPanel = panel
+-- ----------------------------------------------------------------------------
+-- Controls
+--
+-- Split across two regions rather than one tall right-hand column. Stacked
+-- together they ran roughly 670px into a ~614px frame and the bottom controls
+-- fell off the window.
+--
+-- The division is by subject, not just to save space:
+--   right column  what is true of the SELECTED ICON, beside the grid it
+--                 belongs to
+--   bottom band   what is true of the WHOLE PROFILE, spanning the width under
+--                 the grid, where wide controls like sliders actually fit
+-- ----------------------------------------------------------------------------
 
-    panel:Section("Selected icon")
+local BAND_TOP = 436          -- below the grid (96 + 10*32 = 416) plus a gutter
+local BAND_COL_1 = 0
+local BAND_COL_2 = 276
+local BAND_COL_3 = 552
+
+function Page:BuildInspector(host)
+    self.panels = {}
+
+    local function NewPanel(x, y, width)
+        local panel = W.NewPanel(host, { x = x, y = y, width = width })
+        table.insert(self.panels, panel)
+        return panel
+    end
+
+    -- Right column: the selected icon and where the shape hangs off the cursor.
+    local right = NewPanel(GRID_X + COLS * CELL + 22, 96, 200)
+    self.inspectorPanel = right
+
+    right:Section("Selected icon")
 
     local sel = host:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     sel:SetWidth(200)
     sel:SetJustifyH("LEFT")
-    panel:Place(sel, 34, { gap = 4 })
+    right:Place(sel, 34, { gap = 4 })
     self.selectedLabel = sel
 
-    panel:Dropdown{
+    right:Dropdown{
         options = Data.MODES,
         width = 190,
         get = function()
@@ -600,7 +629,7 @@ function Page:BuildInspector(host)
         end,
     }
 
-    panel:Button{
+    right:Button{
         label = "Remove icon",
         width = 190,
         onClick = function()
@@ -608,13 +637,13 @@ function Page:BuildInspector(host)
         end,
     }
 
-    panel:Section("Anchor")
+    right:Section("Anchor")
 
     -- Seeded with a full-length string so the layout cursor reserves the right
     -- height; Note sizes itself from the text present at build time.
-    self.anchorLabel = panel:Note("Cursor holds the grid at column 0, row 0.", { width = 200 })
+    self.anchorLabel = right:Note("Cursor holds the grid at column 0, row 0.", { width = 200 })
 
-    panel:Button{
+    right:Button{
         label = "Set cursor anchor",
         width = 190,
         tooltip = "Show a marker at every grid-line intersection and pick the one the cursor holds.",
@@ -625,11 +654,14 @@ function Page:BuildInspector(host)
         end,
     }
 
-    panel:Section("Collapse")
+    -- Bottom band, column 1: collapse.
+    local collapse = NewPanel(BAND_COL_1, BAND_TOP, 250)
 
-    panel:Dropdown{
+    collapse:Section("Collapse")
+
+    collapse:Dropdown{
         options = Data.COLLAPSE_MODES,
-        width = 190,
+        width = 230,
         get = function() return Profile().collapse or "none" end,
         set = function(v)
             local profile = Profile()
@@ -645,55 +677,62 @@ function Page:BuildInspector(host)
         end,
     }
 
-    panel:Dropdown{
+    collapse:Dropdown{
         options = function()
             return Data.GetCollapseDirections(Profile().collapse or "rows")
         end,
-        width = 190,
+        width = 230,
         get = function() return Profile().collapseDirection or "auto" end,
         set = function(v) Profile().collapseDirection = v; Apply(); Page:Refresh() end,
     }
 
     -- Seeded at the longest wording it can hold, because Note reserves height
     -- from the text present at build time.
-    self.collapseNote = panel:Note(
-        "Rows pack left. Icons close up as they go on cooldown, and a gap you "
-        .. "left between clusters closes too — tick preview to see the real shape.",
-        { width = 200 })
+    self.collapseNote = collapse:Note(
+        "Rows pack left. Each row closes up on its own, so an icon never changes "
+        .. "row. A gap you left between clusters closes too.",
+        { width = 250 })
 
-    panel:Section("Procs")
+    -- Bottom band, column 2: geometry. Sliders are the widest controls here,
+    -- which is most of why this band exists.
+    local size = NewPanel(BAND_COL_2, BAND_TOP, 250)
 
-    panel:Checkbox{
-        label = "Show proc glow",
-        tooltip = "The same pulsing highlight an action button gets when a proc makes a "
-            .. "spell free or empowered — Opportunity on Pistol Shot, for instance. Uses "
-            .. "Blizzard's own alert art, so it reads identically to your action bars.",
-        get = function() return Profile().showProcGlow ~= false end,
-        set = function(v) Profile().showProcGlow = v; Apply() end,
-    }
+    size:Section("Size and spacing")
 
-    panel:Section("Size and spacing")
-
-    panel:Slider{
+    size:Slider{
         label = "Icon size", min = 16, max = 64, step = 2, width = 150, format = "%d",
         get = function() return Profile().iconSize end,
         set = function(v) Profile().iconSize = v; Apply() end,
     }
-    panel:Slider{
+    size:Slider{
         label = "Padding", min = 0, max = 20, step = 1, width = 150, format = "%d",
         get = function() return Profile().padding end,
         set = function(v) Profile().padding = v; Apply() end,
     }
-    panel:Slider{
+    size:Slider{
         label = "Scale", min = 0.5, max = 2.0, step = 0.05, width = 150, format = "%.2f",
         get = function() return Profile().scale end,
         set = function(v) Profile().scale = v; Apply() end,
     }
 
-    panel:Gap(6)
-    panel:Button{
+    -- Bottom band, column 3: everything else about this layout.
+    local misc = NewPanel(BAND_COL_3, BAND_TOP, 260)
+
+    misc:Section("This layout")
+
+    misc:Checkbox{
+        label = "Show proc glow",
+        tooltip = "The same pulsing highlight an action button gets when a proc makes a "
+            .. "spell free or empowered ??? Opportunity on Pistol Shot, for instance. Uses "
+            .. "Blizzard's own alert art, so it reads identically to your action bars.",
+        get = function() return Profile().showProcGlow ~= false end,
+        set = function(v) Profile().showProcGlow = v; Apply() end,
+    }
+
+    misc:Gap(10)
+    misc:Button{
         label = "Clear this layout",
-        width = 190,
+        width = 200,
         tooltip = "Remove every icon from this spec's grid. Does not touch other specs.",
         onClick = function()
             wipe(Profile().placements)
@@ -779,7 +818,7 @@ function Page:Refresh()
         self.selectedLabel:SetText("|cff808080Click an icon on the grid.|r")
     end
 
-    if self.inspectorPanel then self.inspectorPanel:Refresh() end
+    for _, panel in ipairs(self.panels or {}) do panel:Refresh() end
     self:RefreshPicker()
 end
 

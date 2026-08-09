@@ -55,11 +55,15 @@ frameMT.__index = function(tbl, key)
             if key == "IsShown" then return a.__shown == true end
         end
         if key:match("^Get") then
-            if key == "GetWidth" or key == "GetHeight" or key == "GetStringWidth"
-                or key == "GetStringHeight" or key == "GetFrameLevel" then
+            if key == "GetWidth" or key == "GetHeight" or key == "GetFrameLevel" then
                 return 100
             end
             if key == "GetScale" or key == "GetEffectiveScale" then return 1 end
+            -- Roughly life-sized, so panel height maths means something. A
+            -- flat 100 per line made every wrapped note absurdly tall and any
+            -- layout-fits check meaningless.
+            if key == "GetStringHeight" then return 14 end
+            if key == "GetStringWidth" then return 60 end
             if key == "GetPoint" then return "TOPLEFT", nil, "TOPLEFT", 0, 0 end
             if key == "GetChildren" or key == "GetRegions" then return end
             if key == "GetText" then return "" end
@@ -346,6 +350,33 @@ if failures == 0 and ThugUI and ThugUI.Window then
         else
             say(("PAGE FAIL  %s\n           %s"):format(def.id, tostring(pageErr)))
             failures = failures + 1
+        end
+    end
+
+    -- Regression: the Cooldown Viewer page laid ~670px of controls into a
+    -- ~614px frame and the bottom of the column fell off the window. Pages
+    -- that opt out of scrolling have to fit what they draw.
+    local limit = ThugUI.Window.CONTENT_HEIGHT
+    for _, def in ipairs(ThugUI.Window.pages) do
+        if def.scroll == false then
+            local panels = {}
+            local page = def.id == "cooldownviewer" and ThugUI.CooldownViewer.Page
+            if page and page.panels then panels = page.panels end
+
+            local worst, worstBottom = nil, 0
+            for i, panel in ipairs(panels) do
+                local bottom = panel:GetHeight()
+                if bottom > worstBottom then worst, worstBottom = i, bottom end
+            end
+
+            if worstBottom > limit then
+                say(("LAYOUT FAIL %s: panel %d reaches %dpx in a %dpx frame")
+                    :format(def.id, worst, worstBottom, limit))
+                failures = failures + 1
+            else
+                say(("ok         page %s fits (%dpx of %dpx)")
+                    :format(def.id, worstBottom, limit))
+            end
         end
     end
 end
