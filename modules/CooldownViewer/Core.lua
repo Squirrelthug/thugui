@@ -551,6 +551,8 @@ function CV:UpdateState()
         local spellID = icon.spellID
         local spellName = icon.spellName
         local show = false
+        -- Resolved once: "proc" mode gates on it and the glow visual uses it.
+        local procced = ShouldGlow(icon)
 
         if not IsSpellAvailable(spellName) then
             show = false
@@ -596,6 +598,12 @@ function CV:UpdateState()
             if icon.mode == "always" then
                 show = true
                 ApplySweep(icon, spellName)
+            elseif icon.mode == "proc" then
+                -- Both conditions, deliberately. A proc that lands while the
+                -- spell is still on cooldown is not yet actionable, so it stays
+                -- hidden until it is actually pressable.
+                show = (ready and procced) and true or false
+                icon.cooldown:Clear()
             else
                 -- "cooldown" mode: the icon IS the readiness signal, so there is
                 -- nothing to sweep -- it simply disappears once spent.
@@ -616,7 +624,7 @@ function CV:UpdateState()
 
         -- Glow only on a visible icon; an alert left running on a hidden frame
         -- keeps animating and pops back the next time the icon shows.
-        SetGlow(icon, show and glowEnabled and ShouldGlow(icon) or false)
+        SetGlow(icon, show and glowEnabled and procced or false)
     end
 
     self:ApplyLayout()

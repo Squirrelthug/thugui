@@ -742,6 +742,39 @@ if failures == 0 and ThugUI.CooldownViewer then
             assert(not icon.glowing, "glow did not clear when the proc ended")
         end },
 
+        { "proc mode needs BOTH ready and procced", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 888, "proc")
+            CV:Rebuild()
+            CV.container.__shown = true
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            -- Ready, no proc: hidden. This is the whole point of the mode --
+            -- "cooldown" would show here.
+            wipe(_G.__overlayed)
+            _G.__cooldownState[888] = { isOnGCD = false, isActive = false }
+            CV:UpdateState()
+            assert(not icon.wanted, "proc mode showed a merely-usable spell")
+
+            -- Procced but still on cooldown: hidden, not yet actionable.
+            _G.__overlayed[888] = true
+            _G.__cooldownState[888] = { isOnGCD = false, isActive = true }
+            CV:UpdateState()
+            assert(not icon.wanted, "proc mode showed a spell that was still spent")
+
+            -- Both: shown.
+            _G.__cooldownState[888] = { isOnGCD = false, isActive = false }
+            CV:UpdateState()
+            assert(icon.wanted, "proc mode hid a spell that was ready and procced")
+
+            wipe(_G.__overlayed)
+            CV:UpdateState()
+            assert(not icon.wanted, "proc mode kept showing after the proc ended")
+        end },
+
         { "a hidden icon never keeps a glow", function()
             local profile = Data.GetActiveProfile()
             _G.__overlayed[777] = true

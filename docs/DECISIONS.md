@@ -232,7 +232,34 @@ so it works from any spec. `/thugcv import` runs it on demand.
 Generalise: a "did it once" flag on an operation that can silently no-op is a
 bug waiting to happen. Mark done only on success.
 
-## 10. Odds and ends worth not rediscovering
+## 10. Display modes
+
+A placed icon has a mode deciding when it draws:
+
+| Mode | Shows when |
+|---|---|
+| `cooldown` | the spell is off cooldown — the icon *is* the readiness signal, so nothing sweeps; it simply disappears once spent |
+| `proc` | off cooldown **and** lit by a proc. Narrower than `cooldown`: a merely-usable spell stays hidden until something makes it worth pressing |
+| `always` | always, with a cooldown sweep over it |
+| `aura` | while its buff is on the player — see §8 for entries standing for a *set* of buffs |
+
+`proc` requires **both** conditions deliberately. A proc landing while the spell
+is still on cooldown is not yet actionable, so it stays hidden until it is
+genuinely pressable.
+
+Proc state comes from `C_SpellActivationOverlay.IsSpellOverlayed`, which
+returns a **plain bool** per Blizzard's generated docs — one of the few things
+in this area safe to branch on while everything around it is secret.
+
+The glow visual is Blizzard's own `ActionButtonSpellAlertManager`, not an
+imitation, so a glow here reads identically to one on the action bars. Its
+`Default` path only needs a frame with a size, and a nil `action` field
+short-circuits the assisted-combat branch, so our icons qualify.
+
+**Clear the glow whenever an icon hides.** An alert left running on a hidden
+frame keeps animating and pops back when the icon returns.
+
+## 11. Odds and ends worth not rediscovering
 
 - **`GetProfile` must refuse specID 0/nil.** Called before spec data loads, it
   used to create and store a junk `[0]` profile that collected edits nobody
