@@ -159,14 +159,40 @@ local function GetPlayerCastAura(spellID)
         return source == "player" and aura or nil
     end
 
+    -- Which STAGE failed, recorded once per spell per session. "The buff icon
+    -- did not draw" has three causes that are identical from outside: the API
+    -- threw, it returned no aura at all, or it returned one that Mine()
+    -- refused. Guessing between them has already cost several round trips.
+    local function Note(stage)
+        if ThugUI.Diagnostics then
+            ThugUI.Diagnostics:LogOnce(
+                ("aura-%s-%s"):format(tostring(spellID), stage),
+                "AURA", "lookup for %s: %s (combat=%s)",
+                tostring(spellID), stage, tostring(InCombat()))
+        end
+    end
+
     if C_UnitAuras.GetUnitAuraBySpellID then
         local ok, aura = pcall(C_UnitAuras.GetUnitAuraBySpellID, "player", spellID)
-        if ok and Mine(aura) then return aura end
+        if not ok then
+            Note("api-threw")
+        elseif aura == nil then
+            Note("api-returned-nothing")
+        elseif not Mine(aura) then
+            Note("rejected-by-source-check")
+        else
+            Note("found")
+            return aura
+        end
     end
 
     if C_UnitAuras.GetPlayerAuraBySpellID then
         local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, spellID)
-        if ok then return Mine(aura) end
+        if ok then
+            local mine = Mine(aura)
+            Note(mine and "found-via-fallback" or "fallback-empty")
+            return mine
+        end
     end
     return nil
 end
