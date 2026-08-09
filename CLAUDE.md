@@ -1,7 +1,9 @@
 # ThugUI — agent instructions
 
-Read this before touching anything. Then read `docs/DECISIONS.md`, which is the
-reasoning behind how the addon is built; it will stop you re-deriving things
+**Read `docs/HANDOFF.md` first.** It says exactly where the work stands, which
+changes are verified in game and which are only correct in code, and what the
+one open thread is. Then finish this file, then `docs/DECISIONS.md` — the
+reasoning behind how the addon is built, which will stop you re-deriving things
 that cost real debugging time to learn.
 
 ThugUI is a personal UI suite for one player on WoW retail. It is not a public
@@ -162,6 +164,7 @@ Ones that actually apply here:
 
 | File | What it is |
 |---|---|
+| `docs/HANDOFF.md` | **Start here.** Where the work stands, verified vs not, what is queued |
 | `CLAUDE.md` | This. How to work on the addon |
 | `docs/DECISIONS.md` | Why the addon is built the way it is. The reasoning log |
 | `docs/SOURCES.md` | Where trustworthy information comes from, with last-checked dates |

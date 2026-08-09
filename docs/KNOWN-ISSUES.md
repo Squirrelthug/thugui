@@ -12,8 +12,16 @@ checklist).
 
 ## Resource ring cannot show an exact level in combat
 
-**Status:** parked 2026-08-08. Ring is off by default; the crash it caused is
-fixed, the feature is not.
+**Status: awaiting verification, 2026-08-08.** Originally parked. A taint
+source was then found and fixed, and since the secrecy appears to follow taint
+rather than being unconditional, this may already be resolved.
+
+**How to check:** play a fight, log out, read `ThugUI_DebugLog.events`. If
+`RING: UnitPower unreadable (secret value)` is absent, it is fixed — update
+this entry. If present, another taint source remains. See `HANDOFF.md` §3.
+
+The analysis below stands regardless, since it describes what happens *while*
+tainted.
 
 `UnitPower("player", powerType)` returns a **secret number** while our execution
 is tainted — `UnitPowerMax` returns a plain one alongside it:
@@ -34,13 +42,14 @@ value is unreadable the ring holds its last resolved level and keeps its colour
 
 **What would make it fixable, in rough order of likelihood:**
 
-1. **Untainting ThugUI.** The error says *"while execution tainted by
-   `ThugUI`"*, which suggests the secrecy is a consequence of taint rather than
-   a blanket restriction. There is a known taint source — `ADDON_ACTION_BLOCKED`
-   on `ThugUI_TargetOfTargetMover:SetSize()` from
-   `TargetOfTarget/Core.lua:432` — and an oUF portrait error carrying the same
-   "tainted by ThugUI" wording. Clearing that is worth trying before anything
-   else; it may restore plain numbers everywhere.
+1. **Untainting ThugUI. — ATTEMPTED 2026-08-08, result unknown.** The error says
+   *"while execution tainted by `ThugUI`"*, which suggests the secrecy is a
+   consequence of taint rather than a blanket restriction. The known source —
+   `ADDON_ACTION_BLOCKED` on `ThugUI_TargetOfTargetMover:SetSize()` from
+   `TargetOfTarget/Core.lua` — now defers out of combat via
+   `ToT:MoverGeometryBlocked`. An oUF portrait error carried the same "tainted
+   by ThugUI" wording and may be a second source, or may just be downstream of
+   the first.
 2. A future radial widget that takes value/max directly.
 3. Blizzard reclassifying current power as non-secret for untainted addons.
 

@@ -283,7 +283,33 @@ short-circuits the assisted-combat branch, so our icons qualify.
 **Clear the glow whenever an icon hides.** An alert left running on a hidden
 frame keeps animating and pops back when the icon returns.
 
-## 11. Odds and ends worth not rediscovering
+## 11. Diagnostics are always on
+
+`modules/Diagnostics.lua` writes to `ThugUI_DebugLog` with no command and no
+flag. It records **evidence of behaviour**, not a version string: the snapshot
+lists each placed icon with the linked-spell count actually resolved for it, so
+`linked=4` proves the linked-buff code ran.
+
+That design came from a specific failure — a fix was pushed, the player was
+still running the previous build, and the behaviour was indistinguishable from
+the fix not working. Nothing on disk could tell them apart, so a wrong
+conclusion was reached and stated confidently.
+
+Rules for it:
+- **Event level only.** A handful of entries per session plus one snapshot at
+  logout. The verbose per-aura logger in `EssentialRings` is a different thing
+  and stays behind `debugMode`.
+- **`LogOnce` for anything that repeats per frame.** First occurrence is the
+  story; 10,000 copies are noise.
+- **Never let it throw.** Always-on code must not be the reason something
+  breaks — the timestamp helper is guarded for exactly this.
+- The log is a ring buffer capped at 300, dropping the **oldest**: the tail
+  explains whatever just went wrong.
+- Cleared on login, so one session cannot bury the one being asked about.
+- The snapshot is taken on `PLAYER_LOGOUT`, which fires before saved variables
+  are written and so captures the session that just ran.
+
+## 12. Odds and ends worth not rediscovering
 
 - **`GetProfile` must refuse specID 0/nil.** Called before spec data loads, it
   used to create and store a junk `[0]` profile that collected edits nobody
