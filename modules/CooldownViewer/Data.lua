@@ -399,7 +399,8 @@ local CATEGORIES_BY_SOURCE = {
 
 --- Spell IDs from one Cooldown Manager category. Returns an empty list on any
 --- client where C_CooldownViewer is missing or the enum has been renamed.
-local function CooldownViewerSpellIDs(categoryName)
+--- @param expandLinked boolean? also offer each entry's linked buffs separately
+local function CooldownViewerSpellIDs(categoryName, expandLinked)
     if not C_CooldownViewer or not C_CooldownViewer.GetCooldownViewerCategorySet then
         return {}
     end
@@ -415,6 +416,20 @@ local function CooldownViewerSpellIDs(categoryName)
         if infoOK and info then
             local spellID = Data.PickerSpellIDFor(info)
             if spellID then table.insert(spellIDs, spellID) end
+
+            -- An entry standing for a SET of buffs offers only the set: pick
+            -- "Roll the Bones" and you get whichever outcome is live. Listing
+            -- the outcomes individually as well lets a player track one of
+            -- them specifically -- "show me only when I roll Jackpot".
+            --
+            -- Read from linkedSpellIDs, never from a table of IDs we wrote
+            -- down: the outcomes change between builds (they were six, they
+            -- are four now), so anything hardcoded rots silently.
+            if expandLinked then
+                for _, linkedID in ipairs(info.linkedSpellIDs or {}) do
+                    table.insert(spellIDs, linkedID)
+                end
+            end
         end
     end
     return spellIDs
@@ -612,18 +627,24 @@ function Data.BuildSpellList(source, search)
         for _, id in ipairs(list) do table.insert(ids, id) end
     end
 
+    -- Only the buff sources expand their linked spells. On a cooldown entry a
+    -- linked spell is the same button under another ID, and listing it would
+    -- just double the list; on a buff entry it is a genuinely different thing
+    -- to track.
+    local expand = (source == "buffs" or source == "all")
+
     if source == "spellbook" then
         collect(SpellbookSpellIDs())
     elseif source == "all" then
-        for _, categoryNames in pairs(CATEGORIES_BY_SOURCE) do
+        for sourceName, categoryNames in pairs(CATEGORIES_BY_SOURCE) do
             for _, categoryName in ipairs(categoryNames) do
-                collect(CooldownViewerSpellIDs(categoryName))
+                collect(CooldownViewerSpellIDs(categoryName, sourceName == "buffs"))
             end
         end
         collect(SpellbookSpellIDs())
     else
         for _, categoryName in ipairs(CATEGORIES_BY_SOURCE[source] or {}) do
-            collect(CooldownViewerSpellIDs(categoryName))
+            collect(CooldownViewerSpellIDs(categoryName, expand))
         end
         -- A spec Blizzard has not categorised would otherwise show an empty
         -- picker with no hint that another source would work.

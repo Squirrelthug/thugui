@@ -435,6 +435,23 @@ function CV:ApplyLayout()
             icon:SetPoint("TOPLEFT", f, "TOPLEFT",
                 (p.col - 1) * cellW + pad / 2,
                 -((p.row - 1) * cellH + pad / 2))
+
+            -- Aura mode is the only visibility here that hangs on a lookup
+            -- which can fail without erroring, and from the outside "it never
+            -- appeared" is indistinguishable from "it appeared in a cell I was
+            -- not watching" -- collapse moves it, so the cell it was drawn in
+            -- is not the cell it lands in. Logged on transition only (a handful
+            -- of lines a fight) and WITH the collapsed cell, so the saved log
+            -- alone separates the two.
+            if icon.mode == "aura" and icon.loggedShown ~= icon.wanted then
+                icon.loggedShown = icon.wanted
+                if ThugUI.Diagnostics then
+                    ThugUI.Diagnostics:Log("CV", "buff icon %s: %s at cell %d:%d (combat=%s)",
+                        tostring(icon.spellName),
+                        icon.wanted and "SHOWN" or "hidden",
+                        p.row, p.col, tostring(InCombat()))
+                end
+            end
         end
     end
 

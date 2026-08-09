@@ -488,6 +488,37 @@ if failures == 0 and ThugUI.CooldownViewer then
                 assert(type(list) == "table", "no list for source " .. source.value)
             end
         end },
+
+        -- An entry standing for a SET of buffs offered only the set, so a
+        -- player could track "Roll the Bones" but not "only when I roll
+        -- Jackpot". The outcomes come from linkedSpellIDs, never from a list
+        -- of IDs written down here -- they were six on an older build and are
+        -- four now, so anything hardcoded rots without anyone noticing.
+        { "buff outcomes are offered individually, not just the set", function()
+            local list = Data.BuildSpellList("buffs", nil)
+
+            local byID = {}
+            for _, entry in ipairs(list) do byID[entry.spellID] = true end
+
+            assert(byID[5000], "the set entry itself vanished from the picker")
+            local info = Data.GetCooldownInfoForSpell(5000)
+            assert(info and #info.linkedSpellIDs > 0, "setup: no linked buffs to expand")
+            for _, linkedID in ipairs(info.linkedSpellIDs) do
+                assert(byID[linkedID],
+                    ("linked buff %d was not offered on its own"):format(linkedID))
+            end
+
+            -- Cooldown sources must NOT expand: there a linked spell is the
+            -- same button under another ID and would just double the list.
+            local essentials = Data.BuildSpellList("essential", nil)
+            local essentialIDs = {}
+            for _, entry in ipairs(essentials) do essentialIDs[entry.spellID] = true end
+            local cdInfo = Data.GetCooldownInfoForSpell(9101)
+            if cdInfo and cdInfo.linkedSpellIDs and #cdInfo.linkedSpellIDs > 0 then
+                assert(not essentialIDs[cdInfo.linkedSpellIDs[1]],
+                    "a cooldown entry's linked spell was offered separately")
+            end
+        end },
         { "grid page refresh after edits", function()
             ThugUI.Window:SelectPage("cooldownviewer")
         end },
