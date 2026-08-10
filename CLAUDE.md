@@ -146,7 +146,15 @@ file and use `git commit -F <file>`.
 
 ## 6. Skills
 
-Available at `C:\Users\Squirrel\iCloudDrive\Desktop\claude-skills-main\skills`.
+**`skills/wow-addon-dev/SKILL.md` lives in this repo.** It is our own, written
+from what this addon cost us to learn: the 12.x secret-value model, the evidence
+loop, testing without the game, and the traps. It is deliberately young — **add
+to it whenever this project teaches you something that would apply to the next
+addon too**, and prune anything that stops being true. Copy or symlink it into
+the skills folder below to have it load like the others.
+
+The rest are available at
+`C:\Users\Squirrel\iCloudDrive\Desktop\claude-skills-main\skills`.
 Ones that actually apply here:
 
 | Skill | When |
@@ -171,6 +179,7 @@ Ones that actually apply here:
 | `docs/KNOWN-ISSUES.md` | Understood problems deliberately not fixed, and what would change that |
 | `docs/UPCOMING-PATCH.md` | What we know about the *next* game patch, accrued before it ships |
 | `Tests/README.md` | What the harness covers and what it cannot |
+| `skills/wow-addon-dev/SKILL.md` | Our own addon-development skill. Generalised lessons, meant to outlive this project |
 
 **Keep `DECISIONS.md` current.** When you solve something non-obvious, add the
 reasoning. That file is the point of this whole arrangement.

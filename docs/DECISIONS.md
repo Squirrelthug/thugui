@@ -422,7 +422,72 @@ Corrections that follow:
    us whole: secret bool → `EvaluateColorValueFromBoolean` → `SetAlpha`. It is
    useless here only because no per-spell secret bool exists to feed it.
 
-## 13. Odds and ends worth not rediscovering
+## 13. Buff icons are Blizzard's own frames, sitting in our cells
+
+**Verified working in game 2026-08-09.** `modules/CooldownViewer/BlizzBuffs.lua`.
+
+§12 establishes that an addon cannot identify an aura during combat: the list
+comes back, the structs can be indexed, `aura.spellId` is right there, and
+comparing it errors. Every other piece of the aura system is reachable. That one
+is the choke point, and it is deliberate.
+
+So ThugUI stopped asking. Each aura-mode placement is matched to the item frame
+in Blizzard's buff viewer carrying the same **`cooldownID`** — cooldown IDs stay
+plain numbers in combat, since the `CooldownViewerCooldown` structure carries no
+secret predicates at all — and that item is anchored over the assigned cell.
+Blizzard's untainted code decides shown/artwork/timer; ThugUI decides where it
+sits and how big it is.
+
+### What the player has to do for it to work
+
+**The buff must be in one of the two *active* lists in the game's own Cooldown
+Manager settings**, and it will look different depending on which:
+
+| List it is in | What lands in the cell |
+|---|---|
+| **Tracked Buffs** | icon with a countdown timer on it |
+| **Tracked Bars** | icon with an animated bar to its right |
+| Neither (just the buff list) | nothing — there is no item frame to adopt |
+
+Both lists live in the same Essential Cooldowns window, on different tabs. The
+player confirmed the mechanism directly: dragging Roll the Bones from the bar
+list to the icon list changed what appeared in the cell, live.
+
+This is not a limitation to design around — it is how the feature works, and it
+means **the addon can only show what Blizzard is already tracking**. It needs
+saying in the UI next to the tracked-buff picker, which is queued in
+`HANDOFF.md` §4.
+
+The grid is stacked cells, so a bar shoved into one cell is fine and never
+occupies more than one. The player likes the animation and does not want it
+scaled up.
+
+### Three deliberate restraints
+
+- **Nothing is reparented.** Anchoring places a frame perfectly well, and 12.1
+  tightens what addons may do to aura frames ("addons are no longer allowed to
+  reparent aura buttons"). Cooldown viewer items are not aura buttons, but
+  staying on the side of the line that needs no permission cost nothing here.
+- **No fighting the layout.** Their `RefreshLayout` releases every item back to
+  the pool and re-anchors it, so our anchors *will* be overwritten. We re-apply
+  on a hook, deferred one frame so we are not anchoring in the middle of their
+  pass.
+- **The grid hands the items back the moment it hides.** They are not our
+  children, so hiding the container would otherwise strand them at the
+  coordinates of an invisible grid.
+
+### The cost, stated plainly
+
+An adopted cell is **always reserved**, buff up or not, because we cannot ask
+whether it is up. With collapse on, that cell no longer closes. The alternative
+is a row sliding over a cell Blizzard may fill a moment later.
+
+### And it is not free
+
+Touching those frames appears to break Edit Mode — see `KNOWN-ISSUES.md`,
+"Edit Mode cooldown windows vanish". That is the open thread as of this writing.
+
+## 14. Odds and ends worth not rediscovering
 
 - **`GetProfile` must refuse specID 0/nil.** Called before spec data loads, it
   used to create and store a junk `[0]` profile that collected edits nobody

@@ -44,6 +44,31 @@ is faster than diffing branches by hand.
 field and enum with type information, straight from Blizzard, with no community
 transcription errors in between.
 
+### They are the fastest way to answer a secret-value question
+
+Added 2026-08-09, after this settled a three-session investigation in about ten
+minutes. Every function entry carries the flags that decide what an addon gets:
+
+| Flag on a function | What it means for us |
+|---|---|
+| `SecretWhenInCombat`, `SecretWhenUnitAuraRestricted`, `SecretWhenUnitPowerRestricted`, `SecretWhenCooldownsRestricted` | the RETURN becomes a secret under that condition |
+| **`RequiresNonSecretAura`** | the call returns **nothing at all** rather than a secret — this is why the buff lookups came back empty and not as errors |
+| `SecretArguments = "AllowedWhenTainted"` | we may PASS a secret into it |
+| `SecretArguments = "AllowedWhenUntainted"` | we may not — passing one throws |
+| `NeverSecret` on an argument or field | always readable |
+
+```sh
+gh api "repos/Gethe/wow-ui-source/contents/Interface/AddOns/\
+Blizzard_APIDocumentationGenerated/UnitAuraDocumentation.lua?ref=live" \
+  --jq .content | base64 -d | grep -n -B2 -A16 'Name = "GetUnitAuraBySpellID"'
+```
+
+**But verify behaviour on the client anyway.** `modules/SecretProbe.lua` exists
+for this and has already caught the docs and the wiki being wrong together:
+`Cooldown:SetCooldownDuration` is documented as accepting secrets and **refuses
+them**, and secondary resources were readable in combat a patch before the notes
+said so.
+
 ## Tier 2 — community reference
 
 Good for orientation and lookup. Verify behaviour against Tier 1.
@@ -69,6 +94,12 @@ them. Two examples from this project:
 
 **Rule: wiki for signatures, Blizzard source for semantics.**
 
+Its [Secret Values](https://warcraft.wiki.gg/wiki/Secret_Values) page is
+genuinely good and is the best orientation to the 12.x restrictions — but it
+listed the `Cooldown` setters among the APIs that accept secret values from
+tainted code, and on 12.0.7 `SetCooldownDuration` **refuses** them. Checked
+2026-08-09. Orientation there, confirmation on the client.
+
 ## Tier 3 — other addons on this machine
 
 `C:\Program Files (x86)\World of Warcraft\_retail_\Interface\AddOns\`
@@ -89,3 +120,4 @@ Check the licence before copying code, not just before shipping it.
 | Date | What changed |
 |---|---|
 | 2026-08-08 | List created. Tier 1 and 2 verified live except `wago.tools` and in-game `/api`. townlong-yak confirmed carrying 12.1.0 PTR builds with Compare support |
+| 2026-08-09 | Added the secret-value flag table for `Blizzard_APIDocumentationGenerated` — the single fastest way to answer "what will this API give an addon". Noted one confirmed wiki error (`Cooldown` setters and secrets). Recorded that the client itself, via `Tests/`-style probing, has now out-ranked both |

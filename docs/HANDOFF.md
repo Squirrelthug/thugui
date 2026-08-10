@@ -1,4 +1,4 @@
-# Handoff — state as of 2026-08-08
+# Handoff — state as of 2026-08-09
 
 Cold-start entry point. Read this, then `../CLAUDE.md`, then
 `DECISIONS.md`.
@@ -49,8 +49,8 @@ wrong" from "they were on an older build".
 | Taint fix (ToT mover deferral) | **Held, but irrelevant to secrets** — see §3 and `DECISIONS.md` §12 |
 | Secret probe (`modules/SecretProbe.lua`) | **Ran 2026-08-09** — results in `DECISIONS.md` §12 |
 | Combo pips | **Verified in game** 2026-08-09 — and they track live *in combat*, which was not expected |
-| Blizzard buff items in grid cells (`BlizzBuffs.lua`) | **Built 2026-08-09, unverified in game** — the only route to a buff icon in combat |
-| Resource ring showing at all | **Still blocked** — `UnitPower` is secret again |
+| Blizzard buff items in grid cells (`BlizzBuffs.lua`) | **Verified working in game** 2026-08-09 — buff draws in the assigned cell, in combat. **But it breaks Edit Mode — see §3c** |
+| Resource ring exact level in combat | **Permanently impossible** — measured. Energy is secret to addons and no blessed setter takes a secret for a radial swipe. A straight bar could; a ring cannot |
 | Columns / both collapse | **Unverified in game** |
 | Window layout reorganisation | **Unverified visually** |
 | Always-on diagnostics | **Verified, after two faults were fixed** — see §3a |
@@ -58,9 +58,9 @@ wrong" from "they were on an older build".
 Everything unverified has test coverage; tests prove it does not error and the
 logic is right, not that it looks right on screen.
 
-## 3. The open thread: secret values — and taint was a dead end
+## 3. Closed: secret values, and why taint was a dead end
 
-**Resolved as a diagnosis, 2026-08-09. Do not chase the taint again.** The full
+**Answered 2026-08-09. Do not chase the taint again.** The full
 reasoning and the evidence are in `DECISIONS.md` §12; the short version:
 
 Addon code always executes tainted by its own addon, so there is no untainted
@@ -73,12 +73,17 @@ nothing in combat) and `UnitPower` carries `SecretWhenUnitPowerRestricted`.
 The buff icon and the ring were never broken by anything we did. A tainted
 addon is not meant to be able to answer "is buff X up" in combat.
 
-`modules/SecretProbe.lua` now measures exactly what this client hands us, at
-five points around combat, with no command to type. Read
-`ThugUI_DebugLog.secrets` after a fight and a reload. **The pivotal line is
-`aura[1].spellId read`**: if a secret aura struct can still be indexed, a
-native mapping might drive an icon without us reading it; if it errors, using
-Blizzard's own `BuffIconCooldownViewer` frames is the only route left.
+`modules/SecretProbe.lua` measured exactly what this client hands us, at five
+points around combat, with no command to type — it **ran on 2026-08-09** and the
+results are the table in `DECISIONS.md` §12. It is still installed and still
+samples every session, so re-reading `ThugUI_DebugLog.secrets` after a patch is
+a free way to see what changed.
+
+The decisive line was `aura[1].spellId read`: the struct **can** be indexed and
+the field **is** reachable — as a secret, and comparing it errors. So there is
+no route to identifying a buff in combat from addon code, and Blizzard's own
+frames were the only option left. That is what `BlizzBuffs.lua` now does, and it
+works — see §3b.
 
 The historical account below is kept because it explains how the wrong
 conclusion was reached, and the description of behaviour *while* restricted is
@@ -137,39 +142,62 @@ never "nothing happened".
 Do not build anything that depends on reading a power value until this is
 settled. See `KNOWN-ISSUES.md`.
 
-## 3b. Buff icons do not draw in combat — same cause, and by design
+## 3b. Buff icons in combat — SOLVED, by using Blizzard's frames
 
-Tracked in `KNOWN-ISSUES.md`. It is the same restriction as the ring, but the
-fix is not "untaint": there is nothing to untaint. The by-spell aura lookups
-return nothing to addon code while auras are restricted, which is precisely
-what `RequiresNonSecretAura` means.
+ThugUI's *own* aura icons still cannot draw in combat and never will: the game
+will not tell an addon which aura is which while restrictions are in effect. The
+by-spell lookups return nothing (`RequiresNonSecretAura`), the list returns
+secret structs, and `aura.spellId` can be read but not compared. That part is
+permanent and is not worth another session.
 
-Agreed plan, 2026-08-09, in order:
+**What works instead, verified in game 2026-08-09:**
+`modules/CooldownViewer/BlizzBuffs.lua` matches each aura-mode placement to the
+item frame carrying the same `cooldownID` and anchors it over the cell. The buff
+draws in the right place, during combat. `DECISIONS.md` §13 has the design and
+the constraint the player has to satisfy for it to work (the buff must be in the
+Tracked Buffs or Tracked Bars list — a bar lands in the cell as an icon plus its
+animation, an icon lands as an icon plus a timer; both fit one cell, and the
+player likes the bar visual as-is and does not want it enlarged).
 
-1. ~~**Probe**~~ — done, ran 2026-08-09. Results in `DECISIONS.md` §12.
-2. ~~**Adopt Blizzard's own buff frames**~~ — built, `BlizzBuffs.lua`. One
-   Blizzard item per grid cell, chosen over moving the whole bar because it is
-   the only option that matches the per-cell grid. **Needs verifying in game.**
-3. If that fails, park buffs and mark those icons visually as unavailable in
-   combat rather than leaving them silently blank.
-4. ~~**Combo point pips**~~ — built and verified.
+The plan that got here, for the record:
 
-**What to check on the next play session**, in rough order of how likely each is
-to be the thing that is wrong:
+1. ~~**Probe**~~ — ran 2026-08-09. Results in `DECISIONS.md` §12.
+2. ~~**Adopt Blizzard's buff frames**~~ — built and working, one item per cell.
+3. ~~Fall back to flagging the icons as combat-unavailable~~ — not needed.
+4. ~~**Combo point pips**~~ — built and verified, and they track live in combat.
 
-- Does the buff icon appear in the assigned cell *during* combat at all?
-  `ThugUI_DebugLog.events` will carry `CVBUFF: adopted N Blizzard buff item(s)`
-  if the plumbing found them, or `no Blizzard buff item frames found` if the
-  Cooldown Manager is off or those buffs are not tracked in Edit Mode.
-- Does it sit at the right size? The item is scaled, not resized, so a very
-  small cell may leave the timer text unreadable.
-- Does Blizzard's bar flicker back to its Edit Mode position? That would mean a
-  layout pass we are not hooked to, and the fix is another hook rather than a
-  redesign.
-- With collapse on, the adopted cell is now **always** reserved, buff up or not.
-  That is deliberate and it is a behaviour change — if it looks wrong, the
-  alternative is letting the row close over a cell Blizzard may fill a moment
-  later.
+**The remaining cost:** with collapse on, an adopted cell is now always
+reserved, buff up or not, because we cannot ask whether it is up. And Edit Mode
+breaks — §3c.
+
+## 3c. The current open thread: Edit Mode windows vanish
+
+**This is where the work stands. Start here.** Full detail, suspect list and the
+free first test are in `KNOWN-ISSUES.md` → "Edit Mode cooldown windows vanish
+after combat".
+
+The one-paragraph version: adopting Blizzard's buff items into grid cells
+*works* — the buff draws in the right cell, in combat, which is the thing three
+sessions were spent trying to reach. But during or after combat the Essential
+Cooldowns window and its tracked buff / tracked bar tabs stop appearing in Edit
+Mode, as though the Cooldown Manager had been switched off. On leaving combat
+the live buff was seen to flash back at its default Edit Mode position and
+vanish instantly.
+
+Two things make this tractable rather than mysterious:
+
+- We touch exactly four things on Blizzard's frames, and they are listed in
+  `BlizzBuffs.lua`. The strongest suspect is `SetFrameStrata`/`SetFrameLevel`
+  on the Edit Mode **system** frame, and second is calling their own
+  `RefreshLayout` from our stack when releasing.
+- `EssentialRings.lua:926` *also* moves `BuffIconCooldownViewer` in combat and
+  calls `UpdateSystem` / `EditModeManagerFrame.LayoutApplied` on the way out.
+  **If `anchorBuffFrameToCursor` is on, two features are fighting over one
+  frame.** Test that before writing any code — it is free.
+
+Ask for one reload and read `!BugGrabber.lua` for `ADDON_ACTION_BLOCKED` naming
+ThugUI alongside EditMode or the cooldown viewer. That names the culprit
+outright.
 
 ## 4. Queued work
 
@@ -193,6 +221,21 @@ default. Controls are on the Cursor Rings page.
   make them readable and the same code then tracks live. Verified in the test
   harness both ways; **unverified in game**.
 
+**A note on the tracked-buff picker — agreed with the player, not built.** The
+buff icon only appears if that buff is in one of the game's two *active*
+Cooldown Manager lists, and which list decides what it looks like:
+
+| List | What lands in the cell |
+|---|---|
+| **Tracked Buffs** | icon with a countdown timer |
+| **Tracked Bars** | icon with an animated bar beside it |
+| Neither | nothing to adopt — the cell stays empty |
+
+Both lists are in the same Essential Cooldowns window, on different tabs. The
+picker in ThugUI's own config gives no hint of this, so a buff chosen there can
+silently do nothing. Put the explanation next to the tracked-buff list in
+`ui/pages/CooldownViewer.lua`. Reasoning is recorded in `DECISIONS.md` §13.
+
 **Category enumeration for 12.1** — see `UPCOMING-PATCH.md`. Category names are
 hardcoded in three places and will silently drop the five new 12.1 categories.
 
@@ -202,8 +245,16 @@ Four spec profiles exist. Outlaw (260) is the active testbed:
 
 - anchor col 3, row 6; collapse `columns`; padding 6
 - 8 icons, including Pistol Shot (185763) in `proc` mode and Roll the Bones
-  (1214909) in `aura` mode at cell 5:8 — that last one is the unverified case
+  (1214909) in `aura` mode — now drawn by Blizzard's adopted item and
+  **confirmed working in combat**
 - Druid 102 / 104 / 105 hold the migrated legacy bars
+- **Combo pips are on**, and the player moved the grid's cursor anchor further
+  out to make room for them, having found the pips drew underneath the grid.
+  They then asked for a tighter pip ring, which is why the offset slider reaches
+  -80. Do not "fix" the anchor distance; it is a deliberate choice.
+- The player keeps Roll the Bones in the **Tracked Buffs** list (icon plus
+  timer) rather than Tracked Bars, having tried both. They liked the bar visual
+  and want it available, at one cell, unenlarged — see `DECISIONS.md` §13.
 
 Resto (105) is at scale 0.6, faithful to the old ECV, and so looks smaller than
 the others. That is deliberate, and the player knows.

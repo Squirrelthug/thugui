@@ -10,6 +10,63 @@ checklist).
 
 ---
 
+## Edit Mode cooldown windows vanish after combat
+
+**Status: OPEN, and the highest-priority item. Reported 2026-08-09, not yet
+investigated.** New, and almost certainly caused by
+`modules/CooldownViewer/BlizzBuffs.lua` — the feature works, and this is its
+price so far.
+
+**Symptoms, as reported:**
+
+- The buff item lands in the grid cell correctly and looks right.
+- Then, during combat or on leaving it, **the Essential Cooldowns window and its
+  tracked buff / tracked bar tabs stop appearing in Edit Mode at all** — the
+  same way they look when the Cooldown Manager is switched off. They cannot be
+  dragged, and cannot be opened.
+- On leaving combat, the live Roll the Bones buff was seen to **flash back at
+  the default Edit Mode position of the tracked-buff bar and vanish
+  immediately** — as though it were placed correctly and then something
+  reminded it that it is disabled.
+- The cast ring's drain/fill animation also misbehaved in the same sessions.
+  Possibly the same cause, possibly noise. Do not treat it as confirmed.
+
+**What we do to Blizzard's frames** (all in `BlizzBuffs.lua`, and the suspect
+list is in this order):
+
+1. **`viewer:SetFrameStrata()` / `SetFrameLevel()` on the Edit Mode *system*
+   frame itself**, to lift the items above our grid. Edit Mode manages that
+   frame; touching a managed frame from addon code is a classic way to make Edit
+   Mode refuse it. Strongest suspect.
+2. **`pcall(viewer.RefreshLayout, viewer)` in `RestoreViewer`** — calling one of
+   Blizzard's own methods with our taint on the stack, which runs
+   `itemFramePool:ReleaseAll()` and `Layout()` inside their frame. Runs on
+   release, which is exactly when the flash-and-vanish was seen.
+3. `item:SetScale` / `ClearAllPoints` / `SetPoint` on the pooled child frames.
+4. `hooksecurefunc` on `RefreshLayout` and `Layout`.
+
+**Check this FIRST, because it is free:** `modules/EssentialRings.lua:926`
+(`ER:UpdateBuffFramePosition`, setting `anchorBuffFrameToCursor`) *also* moves
+`BuffIconCooldownViewer` in combat, and on leaving combat it calls
+`buffFrame.UpdateSystem` or `EditModeManagerFrame.LayoutApplied` directly — both
+textbook Edit Mode taint, and both fire at precisely the moment the flash was
+seen. **If that setting is on, two features are fighting over the same frame.**
+Turn it off and retest before changing any code.
+
+**Evidence to collect, in this order:**
+
+1. `!BugGrabber.lua` for `ADDON_ACTION_BLOCKED` naming ThugUI together with
+   `EditMode`, `CooldownViewer` or the buff viewer. That names the culprit
+   outright and costs one reload.
+2. Whether the problem survives with `anchorBuffFrameToCursor` off.
+3. Whether it survives with "Use Blizzard's buff frames" off (the checkbox on
+   the Cooldown Viewer page). If it does, `BlizzBuffs.lua` is not the cause.
+
+**Do not** work around it by re-enabling the frames through Edit Mode APIs from
+addon code. That is more of the same medicine.
+
+---
+
 ## Resource ring cannot show an exact level in combat
 
 **Status: still open, checked 2026-08-09.** The ring is now switched **on**
