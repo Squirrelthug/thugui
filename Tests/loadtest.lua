@@ -830,6 +830,116 @@ if ThugUI.CooldownViewer then
             ThugUI.Window:SelectPage("cooldownviewer")
         end },
 
+        -- Task 11: a spell can legitimately be placed twice under different
+        -- modes -- Roll the Bones as an Essential cooldown AND as a tracked
+        -- buff -- and greying a picker row by spell ID alone made the OTHER
+        -- placement's row read as "already placed" too, which is misleading:
+        -- it is a genuinely different thing to place. Spell 5000 in the stub
+        -- data is exactly this shape: cooldownID 4 lists it under Essential,
+        -- cooldownID 5 lists it under TrackedBar (collected into "buffs").
+        { "IsSpellPlaced with no mode argument behaves exactly as before", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            Data.SetPlacement(profile, 1, 1, 7777, "aura")
+
+            assert(Data.IsSpellPlaced(profile, 7777),
+                "an aura-mode placement was not found with no mode argument")
+            assert(Data.IsSpellPlaced(profile, 7777, nil) == Data.IsSpellPlaced(profile, 7777),
+                "passing nil explicitly changed the result from omitting it")
+            assert(not Data.IsSpellPlaced(profile, 6666),
+                "an unplaced spell ID reported placed")
+
+            wipe(profile.placements)
+        end },
+
+        { "a cooldown-mode placement greys under essential, not under buffs", function()
+            local Page = ThugUI.CooldownViewer.Page
+            local profile = Data.GetActiveProfile()
+            local restoreSource = Page.pickerSource
+
+            wipe(profile.placements)
+            Data.SetPlacement(profile, 1, 1, 5000, "cooldown")
+
+            local function RowFor(source)
+                Page.pickerSource = source
+                Page:RefreshPicker()
+                for _, r in ipairs(Page.pickerRows) do
+                    if r.spellID == 5000 and r:IsShown() then return r end
+                end
+            end
+
+            local essentialRow = RowFor("essential")
+            assert(essentialRow, "setup: spell 5000 not offered under essential")
+            assert(essentialRow.label:GetText():find("808080", 1, true),
+                "a cooldown-mode placement did not grey its row under essential")
+
+            local buffsRow = RowFor("buffs")
+            assert(buffsRow, "setup: spell 5000 not offered under buffs")
+            assert(not buffsRow.label:GetText():find("808080", 1, true),
+                "a cooldown-mode placement wrongly greyed its row under buffs")
+
+            wipe(profile.placements)
+            Page.pickerSource = restoreSource
+            Page:RefreshPicker()
+        end },
+
+        { "an aura-mode placement greys under buffs, not under essential", function()
+            local Page = ThugUI.CooldownViewer.Page
+            local profile = Data.GetActiveProfile()
+            local restoreSource = Page.pickerSource
+
+            wipe(profile.placements)
+            Data.SetPlacement(profile, 1, 1, 5000, "aura")
+
+            local function RowFor(source)
+                Page.pickerSource = source
+                Page:RefreshPicker()
+                for _, r in ipairs(Page.pickerRows) do
+                    if r.spellID == 5000 and r:IsShown() then return r end
+                end
+            end
+
+            local buffsRow = RowFor("buffs")
+            assert(buffsRow, "setup: spell 5000 not offered under buffs")
+            assert(buffsRow.label:GetText():find("808080", 1, true),
+                "an aura-mode placement did not grey its row under buffs")
+
+            local essentialRow = RowFor("essential")
+            assert(essentialRow, "setup: spell 5000 not offered under essential")
+            assert(not essentialRow.label:GetText():find("808080", 1, true),
+                "an aura-mode placement wrongly greyed its row under essential")
+
+            wipe(profile.placements)
+            Page.pickerSource = restoreSource
+            Page:RefreshPicker()
+        end },
+
+        { "the all source greys on either mode", function()
+            local Page = ThugUI.CooldownViewer.Page
+            local profile = Data.GetActiveProfile()
+            local restoreSource = Page.pickerSource
+
+            local function IsGreyed(mode)
+                wipe(profile.placements)
+                Data.SetPlacement(profile, 1, 1, 5000, mode)
+                Page.pickerSource = "all"
+                Page:RefreshPicker()
+                local row
+                for _, r in ipairs(Page.pickerRows) do
+                    if r.spellID == 5000 and r:IsShown() then row = r end
+                end
+                assert(row, "setup: spell 5000 not offered under all")
+                return row.label:GetText():find("808080", 1, true) ~= nil
+            end
+
+            assert(IsGreyed("cooldown"), "a cooldown-mode placement did not grey its row under 'all'")
+            assert(IsGreyed("aura"), "an aura-mode placement did not grey its row under 'all'")
+
+            wipe(profile.placements)
+            Page.pickerSource = restoreSource
+            Page:RefreshPicker()
+        end },
+
         -- Diagnostics are always on, so they must be safe to call from
         -- anywhere and must never grow without bound.
         { "diagnostics record without being switched on", function()

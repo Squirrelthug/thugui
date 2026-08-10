@@ -458,9 +458,26 @@ local function AcquirePickerRow(index)
     return row
 end
 
+--- Which mode family a row under this picker source should grey against.
+---
+--- The "buffs" source shows tracked buffs, which only ever draw as an aura-
+--- mode placement, so only an aura placement of the same spell means "already
+--- here". Every other curated source (essential, utility, spellbook) draws a
+--- spell icon, which is any non-aura mode, so only THOSE placements count --
+--- Roll the Bones placed as a buff must not grey it under Essential cooldowns.
+--- "all" has no single category to judge a row against, so it keeps the old,
+--- broader behaviour: grey on any placement at all. This is a page-level
+--- decision, not Data's -- Data has no notion of a "picker source".
+local function GreyMode(source)
+    if source == "buffs" then return "aura" end
+    if source == "all" then return nil end
+    return "other"
+end
+
 function Page:RefreshPicker()
     local entries = Data.BuildSpellList(self.pickerSource, self.pickerSearch)
     local profile = Profile()
+    local greyMode = GreyMode(self.pickerSource)
 
     for i, entry in ipairs(entries) do
         local row = AcquirePickerRow(i)
@@ -469,7 +486,7 @@ function Page:RefreshPicker()
 
         -- Already-placed spells stay in the list but read as spent, so the
         -- catalogue does not reshuffle every time something is dropped.
-        if Data.IsSpellPlaced(profile, entry.spellID) then
+        if Data.IsSpellPlaced(profile, entry.spellID, greyMode) then
             row.label:SetText("|cff808080" .. entry.name .. "|r")
         else
             row.label:SetText(entry.name)

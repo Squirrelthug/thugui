@@ -90,6 +90,30 @@ tightly enough that none of the three needed a decision made for it.
   four sections. That is the right failure mode: cheap for the coordinator to
   fix, and it never silently rewrites something nobody asked it to touch.
 
+## Batch 4 — the picker offered things that could not work — COMPLETE
+
+| # | Task | Outcome |
+|---|---|---|
+| 10 | Stop expanding linked spells into the picker | Clean. Left two now-wrong tests failing and drafted their replacements rather than rewriting them — exactly right |
+| 11 | Grey the picker row by mode, not just spell ID | Clean |
+
+### What this batch taught the process
+
+- **The harness was hiding its own coverage.** Every section after the first was
+  gated on `failures == 0`, so one early failure silently skipped four whole
+  sections while still printing a plausible short report. Coverage vanished at
+  precisely the moment something was known to be broken. Every case already runs
+  under `pcall`, so the guard never protected anything. Found by task 10 as a
+  side effect, outside its scope, and reported rather than fixed — which is how
+  it should work.
+- **A task that expects to invalidate existing tests should say so.** Task 10's
+  brief told the agent that failing tests were an expected outcome and to draft
+  replacements instead of editing them. That produced a clean review instead of
+  a silent rewrite, which is the failure this project has already had once.
+- **Evidence beat inference again.** The scope of the linked-spell problem came
+  from reading `ThugUI_BCVDump` — 20 of 31 entries affected — not from reasoning
+  about the code. The player had reported it as a Roll the Bones quirk.
+
 ## Next batch — nothing written yet, on purpose
 
 The open thread is in `docs/HANDOFF.md`, "Read this first". It needs the player

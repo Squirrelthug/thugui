@@ -343,9 +343,28 @@ function Data.MovePlacement(profile, fromRow, fromCol, toRow, toCol)
     profile.placements[to], profile.placements[from] = profile.placements[from], profile.placements[to]
 end
 
-function Data.IsSpellPlaced(profile, spellID)
+--- Is this spell already on the grid?
+---
+--- @param mode string? Restricts which placements count.
+---   nil     -- any mode counts (the original behaviour, kept exactly for the
+---             callers that predate this argument).
+---   "aura"  -- only an aura-mode placement counts.
+---   "other" -- only a non-aura placement (cooldown/proc/always) counts.
+--- The same spell ID can legitimately be placed twice with different meanings
+--- -- Roll the Bones as an Essential cooldown AND as a tracked buff -- so a
+--- caller that cares about one kind of placement, not merely the ID, needs a
+--- way to ask for that. Data does not know what a "picker source" is; the
+--- caller decides which mode family a given row's placement should be judged
+--- against.
+function Data.IsSpellPlaced(profile, spellID, mode)
     for _, placement in pairs(profile.placements) do
-        if placement.spellID == spellID then return true end
+        if placement.spellID == spellID then
+            if mode == nil then return true end
+            local placementMode = placement.mode or "cooldown"
+            local isAura = placementMode == "aura"
+            if mode == "aura" and isAura then return true end
+            if mode == "other" and not isAura then return true end
+        end
     end
     return false
 end
