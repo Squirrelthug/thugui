@@ -729,6 +729,25 @@ function Page:BuildInspector(host)
         set = function(v) Profile().showProcGlow = v; Apply() end,
     }
 
+    misc:Checkbox{
+        label = "Use Blizzard's buff frames",
+        tooltip = "Buff icons cannot be drawn by an addon during combat: the game will "
+            .. "not say which aura is which while you are fighting. With this on, "
+            .. "Blizzard's own tracked-buff icon is placed in the cell you assigned it "
+            .. "instead, so it works in combat.\n\n"
+            .. "Needs the Cooldown Manager turned on, with those buffs tracked in Edit "
+            .. "Mode. Turn this off to go back to ThugUI's own icons, which only draw "
+            .. "out of combat.",
+        get = function() return ThugUI_Config.cvUseBlizzardBuffs ~= false end,
+        set = function(v)
+            ThugUI_Config.cvUseBlizzardBuffs = v
+            if ThugUI.CooldownViewer.BlizzBuffs then
+                ThugUI.CooldownViewer.BlizzBuffs:Refresh()
+            end
+            Apply()
+        end,
+    }
+
     misc:Gap(10)
     misc:Button{
         label = "Clear this layout",

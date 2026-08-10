@@ -49,6 +49,7 @@ wrong" from "they were on an older build".
 | Taint fix (ToT mover deferral) | **Held, but irrelevant to secrets** — see §3 and `DECISIONS.md` §12 |
 | Secret probe (`modules/SecretProbe.lua`) | **Ran 2026-08-09** — results in `DECISIONS.md` §12 |
 | Combo pips | **Verified in game** 2026-08-09 — and they track live *in combat*, which was not expected |
+| Blizzard buff items in grid cells (`BlizzBuffs.lua`) | **Built 2026-08-09, unverified in game** — the only route to a buff icon in combat |
 | Resource ring showing at all | **Still blocked** — `UnitPower` is secret again |
 | Columns / both collapse | **Unverified in game** |
 | Window layout reorganisation | **Unverified visually** |
@@ -145,14 +146,30 @@ what `RequiresNonSecretAura` means.
 
 Agreed plan, 2026-08-09, in order:
 
-1. **Probe** (built) — one fight, one reload, read `ThugUI_DebugLog.secrets`.
-2. **Adopt Blizzard's own buff frames** behind the existing grid, so the icons
-   work the way the documentation says they can. `EssentialRings.lua:930`
-   already parks `BuffIconCooldownViewer` at the cursor, so the idiom exists.
+1. ~~**Probe**~~ — done, ran 2026-08-09. Results in `DECISIONS.md` §12.
+2. ~~**Adopt Blizzard's own buff frames**~~ — built, `BlizzBuffs.lua`. One
+   Blizzard item per grid cell, chosen over moving the whole bar because it is
+   the only option that matches the per-cell grid. **Needs verifying in game.**
 3. If that fails, park buffs and mark those icons visually as unavailable in
    combat rather than leaving them silently blank.
-4. **Combo point pips**, built now against the 12.1 relaxation of secondary
-   resources so they work on 12.1 launch day.
+4. ~~**Combo point pips**~~ — built and verified.
+
+**What to check on the next play session**, in rough order of how likely each is
+to be the thing that is wrong:
+
+- Does the buff icon appear in the assigned cell *during* combat at all?
+  `ThugUI_DebugLog.events` will carry `CVBUFF: adopted N Blizzard buff item(s)`
+  if the plumbing found them, or `no Blizzard buff item frames found` if the
+  Cooldown Manager is off or those buffs are not tracked in Edit Mode.
+- Does it sit at the right size? The item is scaled, not resized, so a very
+  small cell may leave the timer text unreadable.
+- Does Blizzard's bar flicker back to its Edit Mode position? That would mean a
+  layout pass we are not hooked to, and the fix is another hook rather than a
+  redesign.
+- With collapse on, the adopted cell is now **always** reserved, buff up or not.
+  That is deliberate and it is a behaviour change — if it looks wrong, the
+  alternative is letting the row close over a cell Blizzard may fill a moment
+  later.
 
 ## 4. Queued work
 

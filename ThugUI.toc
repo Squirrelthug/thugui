@@ -59,6 +59,10 @@ modules\ComboPips.lua
 modules\CooldownViewer\Data.lua
 modules\CooldownViewer\Core.lua
 
+# Blizzard's own buff item frames, anchored into our grid cells. Loads after
+# Core because it reads CV.icons and hangs itself off CV.
+modules\CooldownViewer\BlizzBuffs.lua
+
 # Secret probe: records which 12.x APIs hand this addon a readable value, a
 # secret, or nothing, at five points around combat. Loads after CooldownViewer
 # because it probes the aura-mode icons actually placed in the active spec.

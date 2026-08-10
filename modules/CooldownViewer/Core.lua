@@ -462,6 +462,11 @@ function CV:Rebuild()
 
         local texture = C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(placement.spellID)
         icon.tex:SetTexture(texture)
+        -- Icons are pooled, and a cell adopted by Blizzard's buff frame leaves
+        -- its texture at zero alpha. Without this reset, the next spell to
+        -- reuse that frame would be invisible for reasons nothing about it
+        -- explains.
+        icon.tex:SetAlpha(1)
         -- Remembered so aura mode can swap to a linked buff's art and back.
         icon.baseTexture = texture
         icon.spellID = placement.spellID
@@ -620,6 +625,11 @@ function CV:ApplyLayout()
     end
 
     Commit()
+
+    -- Blizzard's buff items ride on our icons, so they move when the icons do.
+    -- Collapse means a cell's position depends on which icons are live, which
+    -- is exactly why this belongs here rather than in Rebuild.
+    if self.BlizzBuffs then self.BlizzBuffs:Refresh() end
 end
 
 -- ----------------------------------------------------------------------------
@@ -656,8 +666,25 @@ function CV:UpdateState()
         -- Resolved once: "proc" mode gates on it and the glow visual uses it.
         local procced = ShouldGlow(icon)
 
+        -- A cell whose buff is drawn by Blizzard's own item frame. Ours stays
+        -- in the layout -- the Blizzard item is anchored to it, and with
+        -- collapse on, a cell that stopped being "wanted" would slide the rest
+        -- of the row over the top of it -- but it draws nothing itself.
+        --
+        -- The cell is therefore reserved whether or not the buff is up, which
+        -- is a real behaviour change from the aura path: that one collapses the
+        -- cell when the buff drops. It is the price of not being able to ask
+        -- whether the buff is up. Blizzard's item hides itself, so the cell
+        -- goes empty rather than stale.
+        local adopted = self.BlizzBuffs and self.BlizzBuffs:AdoptedItem(icon)
+
         if not IsSpellAvailable(spellName) then
             show = false
+        elseif adopted then
+            show = true
+            icon.tex:SetAlpha(0)
+            icon.cooldown:Clear()
+            icon.count:Hide()
         elseif icon.mode == "aura" then
             local aura, auraSpellID = ResolveAura(icon)
             show = aura ~= nil
@@ -773,6 +800,11 @@ function CV:UpdateVisibility(forceCombat)
     if not self:ShouldShow(forceCombat) then
         f:Hide()
         self.anchoredToCursor = nil
+        -- Hand Blizzard's buff items back the moment the grid stops showing.
+        -- They are not our children, so hiding the container does not hide
+        -- them -- without this they would hang in mid-air at the coordinates
+        -- of a grid nobody can see.
+        if self.BlizzBuffs then self.BlizzBuffs:Refresh() end
         return
     end
 

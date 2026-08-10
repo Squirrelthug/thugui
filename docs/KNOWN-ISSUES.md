@@ -76,8 +76,13 @@ combat and extrapolating, or reading it from a Blizzard frame's displayed text.
 
 ## Buff (aura) icons never draw in combat
 
-**Status: root cause identified 2026-08-09, not yet fixed.** Almost certainly
-the same underlying fault as the resource ring entry above.
+**Status: cause proven and worked around 2026-08-09; the workaround is
+unverified in game.** ThugUI's *own* aura icons still cannot draw in combat and
+never will — that part is permanent. `modules/CooldownViewer/BlizzBuffs.lua`
+sidesteps it by anchoring Blizzard's own tracked-buff item into the assigned
+grid cell, so their untainted code decides what shows. Switch it off with
+"Use Blizzard's buff frames" on the Cooldown Viewer page to get the old
+behaviour back.
 
 An `aura`-mode icon resolves and draws correctly out of combat and never draws
 in combat. Twelve logged transitions in one session, no exceptions:

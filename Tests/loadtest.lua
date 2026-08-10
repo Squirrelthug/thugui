@@ -1345,6 +1345,133 @@ if failures == 0 and ThugUI.ResourceRing then
     end
 end
 
+-- Blizzard buff items adopted into grid cells. The reason this exists at all is
+-- that an addon cannot identify an aura in combat, so the cell has to be driven
+-- by Blizzard's own frame -- which means the plumbing that finds and anchors
+-- that frame is now load-bearing for the feature working at all.
+if failures == 0 and ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs then
+    say("\n-- blizzard buff items --")
+    local CV = ThugUI.CooldownViewer
+    local Data = CV.Data
+    local BB = CV.BlizzBuffs
+
+    -- Stands in for BuffIconCooldownViewer. Cooldown ID 3 is the entry the
+    -- stub data defines purely by its linked buffs, which is the Roll the Bones
+    -- shape: no aura is ever named after the spell that granted it.
+    local viewer = NewFrame()
+    local item = NewFrame()
+    item.GetCooldownID = function() return 3 end
+    item.GetParent = function() return viewer end
+    viewer.itemFramePool = {
+        EnumerateActive = function()
+            local i = 0
+            return function()
+                i = i + 1
+                if i == 1 then return item end
+            end
+        end,
+    }
+    _G.BuffIconCooldownViewer = viewer
+
+    local function PlaceAura(spellID)
+        local profile = Data.GetActiveProfile()
+        wipe(profile.placements)
+        profile.collapse = "none"
+        profile.enabled, profile.onlyInCombat = true, false
+        Data.SetPlacement(profile, 1, 1, spellID, "aura")
+        Data.InvalidateCooldownInfoCache()
+        CV:Rebuild()
+        CV.container.__shown = true
+        return CV.icons[Data.CellKey(1, 1)]
+    end
+
+    local steps = {
+        { "an aura icon is adopted by its Blizzard item", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local icon = PlaceAura(9001)
+            BB:Refresh()
+            assert(BB:AdoptedItem(icon) == item, "the Blizzard item was not adopted")
+        end },
+
+        { "the item is anchored over the cell", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            local point = item.__point
+            assert(point, "the adopted item was never anchored")
+            assert(point[2] == icon,
+                "the item was anchored to something other than its cell")
+        end },
+
+        -- Both halves matter: ours must not draw over Blizzard's, and the cell
+        -- must stay reserved or collapse slides the row over the top of it.
+        { "our own art is suppressed but the cell is kept", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            wipe(_G.__auras)
+            CV:UpdateState()
+            assert(icon.wanted, "an adopted cell stopped being wanted")
+            assert(icon.tex.__alpha == 0, "our own icon art was still drawn")
+        end },
+
+        { "a hidden grid hands the buffs back", function()
+            CV.container.__shown = false
+            BB:Refresh()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(BB:AdoptedItem(icon) == nil, "the item was held while the grid was hidden")
+            assert(item.__thugBaseWidth == nil, "the item kept the scale we gave it")
+            CV.container.__shown = true
+        end },
+
+        -- The escape hatch has to actually let go, and the old aura path has to
+        -- still work when it does.
+        { "switching it off restores the aura path", function()
+            ThugUI_Config.cvUseBlizzardBuffs = false
+            local icon = PlaceAura(9001)
+            BB:Refresh()
+            assert(BB:AdoptedItem(icon) == nil, "an item was adopted while disabled")
+
+            wipe(_G.__auras)
+            CV:UpdateState()
+            assert(not icon.wanted, "the aura path did not resume")
+            _G.__auras[9003] = { spellId = 9003, sourceUnit = "player" }
+            CV:UpdateState()
+            assert(icon.wanted, "the aura path did not find the linked buff")
+            assert(icon.tex.__alpha ~= 0, "the aura path drew nothing")
+            wipe(_G.__auras)
+        end },
+
+        -- A spell Blizzard is not tracking must fall through rather than be
+        -- silently blanked: that would be a cell that never draws anything.
+        { "an unmatched spell is left to the aura path", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local icon = PlaceAura(1001)
+            BB:Refresh()
+            assert(BB:AdoptedItem(icon) == nil, "an unrelated item was adopted")
+
+            _G.__auras[1001] = { spellId = 1001, sourceUnit = "player" }
+            CV:UpdateState()
+            assert(icon.wanted, "the aura path did not run for an unmatched spell")
+            wipe(_G.__auras)
+        end },
+
+        { "restore", function()
+            ThugUI_Config.cvUseBlizzardBuffs = nil
+            _G.BuffIconCooldownViewer = nil
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            CV:Rebuild()
+        end },
+    }
+
+    for _, step in ipairs(steps) do
+        local ok, err = pcall(step[2])
+        if ok then
+            say("ok         " .. step[1])
+        else
+            say(("STEP FAIL  %s\n           %s"):format(step[1], tostring(err)))
+            failures = failures + 1
+        end
+    end
+end
+
 -- Combo pips: which resource, how many, and how many are lit.
 if failures == 0 and ThugUI.ComboPips then
     say("\n-- combo pips --")
