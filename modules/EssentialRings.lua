@@ -762,7 +762,15 @@ end
 function ER:CreateECV()
     if ER.ecvContainer then return end
 
-    local f = CreateFrame("Frame", "EssentialCooldownViewer", UIParent)
+    -- Namespaced, and it MUST stay namespaced. This frame predates Blizzard's
+    -- Cooldown Manager, and when 11.1.5 shipped one it happened to name its own
+    -- frame "EssentialCooldownViewer" too. Creating ours with that name
+    -- overwrote the global from tainted addon code, so every piece of Blizzard
+    -- code that resolves the viewer by name executed tainted by us -- and their
+    -- code reads fields that are secret under taint, so it threw. See
+    -- DECISIONS.md §15. The sibling BCV/GCV frames were always ThugUI_-prefixed;
+    -- this one was the outlier, from the very first commit.
+    local f = CreateFrame("Frame", "ThugUI_EssentialCooldownViewer", UIParent)
     f:SetFrameStrata("HIGH")
     f:SetFrameLevel(10)
     ER.ecvContainer = f
@@ -924,6 +932,19 @@ end
 
 -- Position the Blizzard tracked buff frame (BuffIconCooldownViewer) at cursor
 -- Uses the same scale-corrected math as UpdateECVPosition.
+--
+-- WARNING, added 2026-08-09. This function does three of the exact things that
+-- killed Blizzard's cooldown viewer for a whole session -- it moves and scales
+-- an Edit Mode system frame, and it calls their `UpdateSystem` /
+-- `LayoutApplied` from our stack. See DECISIONS.md §15 for what that costs:
+-- their own OnEvent handlers then run tainted by us and throw on secret fields,
+-- which empties the item pool until /reload.
+--
+-- It is left in place because the setting is **off**, it predates what we know,
+-- and it is the legacy escape hatch. `CooldownViewer/BlizzBuffs.lua` is the
+-- supported route now and taints nothing. If this ever needs to come back,
+-- rewrite it the way BlizzBuffs was rewritten: anchor from our side, keep
+-- bookkeeping in side tables, and never call their methods.
 function ER:UpdateBuffFramePosition()
     if not ThugUI_Config.anchorBuffFrameToCursor then return end
 

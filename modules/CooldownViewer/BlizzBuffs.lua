@@ -22,13 +22,32 @@
 -- 12.1 tightens what addons may do to aura frames specifically -- "addons are
 -- no longer allowed to reparent aura buttons". Cooldown viewer items are not
 -- aura buttons, but staying on the side of the line that needs no permission
--- costs us nothing here. Frame strata is nudged on the viewer instead, which
--- is one revertible property on one frame.
+-- costs us nothing here.
 --
 -- It also does not fight Blizzard for the layout. Their RefreshLayout releases
 -- every item back to the pool and re-anchors it, so our anchors WILL be
 -- overwritten; the answer is to re-apply afterwards, on a hook, rather than to
 -- try to prevent it.
+--
+-- WHAT IT MUST NEVER DO, AND WHY -- read this before adding a line here
+--
+-- Every write to a Blizzard frame taints that frame, and a tainted frame runs
+-- ITS OWN handlers tainted by us. Blizzard's cooldown viewer code then reads
+-- fields that are secret under taint (`sourceUnit`, `allowAvailableAlert`,
+-- `previousCooldownChargesCount`) and throws inside its own OnEvent. The throw
+-- aborts RefreshLayout mid-ReleaseAll, the item pool empties, and the viewer is
+-- dead until /reload. That was measured, not theorised: docs/DECISIONS.md §15
+-- has the stacks. So, specifically:
+--
+--   * no `item.__anything = x` -- a field set on their table taints the table.
+--     Bookkeeping lives in the weak side tables below instead.
+--   * no SetFrameStrata/SetFrameLevel on the viewer. It is an Edit Mode system
+--     frame. Our own icon is lowered to meet it instead.
+--   * no calling their methods (`viewer:RefreshLayout()`) from our stack.
+--
+-- What is left is the anchor and the scale on the pooled item, which is the
+-- feature itself and cannot be avoided while the design is "their frame, our
+-- cell". hooksecurefunc is fine -- it exists to be taint-safe.
 -- ============================================================================
 
 ThugUI = ThugUI or {}
@@ -47,6 +66,16 @@ local VIEWER_NAMES = { "BuffIconCooldownViewer", "BuffBarCooldownViewer" }
 
 BB.adopted = {}   -- our icon frame -> Blizzard item frame
 BB.taken = {}     -- Blizzard item frame -> true, for the release pass
+BB.lowered = {}   -- our icon frame -> true, for the strata restore pass
+
+-- Everything we need to remember ABOUT a Blizzard frame, kept beside it rather
+-- than on it -- see the header. Weak keys so a pooled item that Blizzard
+-- discards does not stay alive because we once measured it.
+local weak = { __mode = "k" }
+local hookedViewers = setmetatable({}, weak)  -- viewer -> true
+local baseWidth     = setmetatable({}, weak)  -- item   -> unscaled width, or false
+local homeAnchor    = setmetatable({}, weak)  -- item   -> the anchor Blizzard gave it
+local iconStrata    = setmetatable({}, weak)  -- our icon -> strata before we lowered it
 
 function BB:IsEnabled()
     -- On by default: this is the only thing that makes an aura-mode icon work
@@ -121,53 +150,67 @@ end
 -- Placing them
 -- ----------------------------------------------------------------------------
 
---- Remember what we changed, once, so it can be handed back exactly.
-local function RememberViewer(viewer)
-    if viewer.__thugStrata == nil then
-        viewer.__thugStrata = viewer:GetFrameStrata()
-        viewer.__thugLevel = viewer:GetFrameLevel()
+--- Items draw at their PARENT's strata, and we are not reparenting them, so
+--- without help the buff sits underneath the cell it is standing in -- which the
+--- player hit immediately with the combo pips and had to work around by moving
+--- the grid.
+---
+--- The old fix lifted their viewer to meet our grid. That taints an Edit Mode
+--- system frame, so it is now done from our side: OUR icon drops to the viewer's
+--- strata, which we may read freely. Their item carries frameLevel 512 within
+--- that strata (CooldownViewer.xml), so it clears our icon comfortably without
+--- either of us naming a number.
+local function LowerIcon(icon, viewer)
+    if iconStrata[icon] == nil then
+        iconStrata[icon] = icon:GetFrameStrata() or false
     end
+    icon:SetFrameStrata(viewer:GetFrameStrata())
 end
 
---- Items draw at their PARENT's strata, and we are not reparenting them, so the
---- viewer is what has to be lifted above the grid. Without this the buff icon
---- sits underneath our own icons -- which the player hit immediately with the
---- combo pips and had to work around by moving the grid.
-local function LiftViewer(viewer, container)
-    RememberViewer(viewer)
-    viewer:SetFrameStrata(container:GetFrameStrata())
-    viewer:SetFrameLevel((container:GetFrameLevel() or 10) + 5)
+local function RestoreIcon(icon)
+    local strata = iconStrata[icon]
+    if strata then icon:SetFrameStrata(strata) end
+    iconStrata[icon] = nil
 end
 
-local function RestoreViewer(viewer)
-    if viewer.__thugStrata then
-        viewer:SetFrameStrata(viewer.__thugStrata)
-        viewer:SetFrameLevel(viewer.__thugLevel or 1)
-    end
-    -- Puts every item back where Blizzard's own layout wants it, which is also
-    -- where the player put the bar in Edit Mode.
-    if viewer.RefreshLayout then pcall(viewer.RefreshLayout, viewer) end
+--- Where Blizzard had the item before we moved it.
+---
+--- Recorded so releasing can put it back with a SetPoint of our own. The old
+--- code called their RefreshLayout to do the same job, which ran their function
+--- on our stack -- the exact thing that kills the viewer.
+local function RememberHome(item)
+    if homeAnchor[item] ~= nil then return end
+
+    local point, relativeTo, relativePoint, x, y = item:GetPoint()
+    homeAnchor[item] = point and { point, relativeTo, relativePoint, x, y } or false
 end
 
 --- Size the item to the cell by scale rather than SetSize: the item's own
 --- internal anchors are laid out against its configured size, and resizing it
 --- leaves the cooldown swipe and the stack text in the wrong places.
 local function FitItem(item, iconSize)
-    if item.__thugBaseWidth == nil then
+    if baseWidth[item] == nil then
         local width = item:GetWidth()
-        item.__thugBaseWidth = (width and width > 0) and width or false
+        baseWidth[item] = (width and width > 0) and width or false
     end
 
-    local base = item.__thugBaseWidth
+    local base = baseWidth[item]
     if base and iconSize then item:SetScale(iconSize / base) end
 end
 
 --- Hand one item back to Blizzard.
 local function ReleaseItem(item)
-    if item.__thugBaseWidth ~= nil then
+    if baseWidth[item] ~= nil then
         item:SetScale(1)
-        item.__thugBaseWidth = nil
+        baseWidth[item] = nil
     end
+
+    local home = homeAnchor[item]
+    if home then
+        item:ClearAllPoints()
+        item:SetPoint(home[1], home[2], home[3], home[4], home[5])
+    end
+    homeAnchor[item] = nil
 end
 
 -- ----------------------------------------------------------------------------
@@ -180,16 +223,16 @@ end
 
 --- Give everything back and forget it.
 function BB:Release()
-    if not next(self.adopted) and not self.lifted then return end
+    if not next(self.adopted) and not next(self.taken) and not next(self.lowered) then
+        return
+    end
 
     for item in pairs(self.taken) do ReleaseItem(item) end
+    for icon in pairs(self.lowered) do RestoreIcon(icon) end
+
     wipe(self.adopted)
     wipe(self.taken)
-
-    if self.lifted then
-        self.lifted = false
-        for _, viewer in ipairs(Viewers()) do RestoreViewer(viewer) end
-    end
+    wipe(self.lowered)
 end
 
 --- Anchor every aura-mode icon's Blizzard counterpart over its cell.
@@ -211,7 +254,7 @@ function BB:Apply()
     local _, _, iconSize = CV:GetCellSize(profile)
 
     local map = self:ItemsByCooldownID()
-    local stillTaken = {}
+    local stillTaken, stillLowered = {}, {}
     local count = 0
 
     -- Said out loud, once, because the failure is otherwise invisible: with the
@@ -233,10 +276,11 @@ function BB:Apply()
             if item then
                 local viewer = item:GetParent()
                 if viewer then
-                    LiftViewer(viewer, container)
-                    self.lifted = true
+                    LowerIcon(icon, viewer)
+                    stillLowered[icon] = true
                 end
 
+                RememberHome(item)
                 FitItem(item, iconSize)
                 item:ClearAllPoints()
                 item:SetPoint("CENTER", icon, "CENTER", 0, 0)
@@ -252,7 +296,10 @@ function BB:Apply()
     for item in pairs(self.taken) do
         if not stillTaken[item] then ReleaseItem(item) end
     end
-    self.taken = stillTaken
+    for icon in pairs(self.lowered) do
+        if not stillLowered[icon] then RestoreIcon(icon) end
+    end
+    self.taken, self.lowered = stillTaken, stillLowered
 
     -- Once a session, and only the first time it succeeds: this is the line
     -- that says the feature is actually live, in the same spirit as the
@@ -296,8 +343,8 @@ function BB:Refresh()
 end
 
 function BB:HookViewer(viewer)
-    if viewer.__thugHooked then return end
-    viewer.__thugHooked = true
+    if hookedViewers[viewer] then return end
+    hookedViewers[viewer] = true
 
     if type(viewer.RefreshLayout) == "function" then
         hooksecurefunc(viewer, "RefreshLayout", function() BB:Queue() end)

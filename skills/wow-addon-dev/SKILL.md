@@ -52,6 +52,45 @@ under certain conditions. With a secret you may:
 You may **not**: compare it, do arithmetic on it, use it as a table key, `#` it,
 `tostring` it, or branch on it. Any of those throws.
 
+### The exception that makes it your fault after all
+
+The rule above holds **only while the erroring file is yours.** Check the path in
+every error before you shrug it off:
+
+```
+Blizzard_CooldownViewer/CooldownViewer.lua:425: attempt to compare field
+'sourceUnit' (a secret string value, while execution tainted by 'YourAddon')
+```
+
+Blizzard's code is not addon code. If it reports *your* taint, **you put it
+there**, and this is now the most damaging bug class in 12.x. The chain:
+
+1. You write to one of their frames. A **field you set on their table counts** —
+   `frame.__myBookkeeping = x` is not free, it is a taint. So do `SetPoint`,
+   `SetScale`, `SetFrameStrata`, and calling their methods from your stack.
+2. A tainted frame runs **its own** handlers tainted by you.
+3. Their handler reads a field that is secret under taint — and throws, because
+   they wrote it assuming untainted execution where that field is plain.
+4. The throw aborts their function *mid-way*. Aborting inside a pool release
+   leaves the pool empty; aborting inside an event handler drops the update.
+
+The symptom is a Blizzard feature that works, then silently stops, and comes back
+on `/reload` — because the reload rebuilds the frames untainted. It reads like
+your feature being switched off. Grep the error log for Blizzard file paths
+carrying your addon's name; one line names the culprit outright.
+
+**What is safe:** reads cost nothing, and `hooksecurefunc` exists to be
+taint-safe. Keep bookkeeping in your own weak-keyed side tables. Solve layering
+from your side — lower your frame to their strata rather than lifting theirs,
+since you may read `GetFrameStrata()` freely.
+
+**Also check your frame names.** `CreateFrame("Frame", "SomeName", …)` overwrites
+`_G.SomeName`, and setting a global from addon code taints that global — so
+every piece of Blizzard code resolving that frame by name now runs tainted by
+you. Namespace *every* global name you create. This bit us via a frame named
+`EssentialCooldownViewer`, chosen years before Blizzard shipped a frame with the
+same name; the collision arrived in a patch, not in a commit.
+
 ### Read the flags instead of guessing
 
 `Blizzard_APIDocumentationGenerated/*.lua` carries the answer for every

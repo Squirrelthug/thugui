@@ -3,10 +3,17 @@
 Cold-start entry point. Read this, then `../CLAUDE.md`, then
 `DECISIONS.md`.
 
-The single most important thing on this page is the table in §2: several
-changes are **correct in code but unverified in game**, because the author
-cannot launch WoW. Do not assume they work, and do not assume they are broken.
-§1 says how to find out from disk.
+**The cooldown viewer is finished, running, and verified in game.** Buff icons
+draw in their assigned cell during combat, count down, and re-attach when the
+buff is recast; Blizzard's Cooldown Manager is no longer damaged by us. Sessions
+116–117 are clean. Treat that whole feature as working code, not as an
+investigation in progress.
+
+The table in §2 is still the honest map: it separates what has been **confirmed
+in the running game** from what is only **correct in code**. Keep it that way —
+saying which of the two a thing is in, out loud, is what stopped a wrong
+conclusion being stated confidently for a third time. §1 says how to check from
+disk.
 
 ---
 
@@ -49,7 +56,8 @@ wrong" from "they were on an older build".
 | Taint fix (ToT mover deferral) | **Held, but irrelevant to secrets** — see §3 and `DECISIONS.md` §12 |
 | Secret probe (`modules/SecretProbe.lua`) | **Ran 2026-08-09** — results in `DECISIONS.md` §12 |
 | Combo pips | **Verified in game** 2026-08-09 — and they track live *in combat*, which was not expected |
-| Blizzard buff items in grid cells (`BlizzBuffs.lua`) | **Verified working in game** 2026-08-09 — buff draws in the assigned cell, in combat. **But it breaks Edit Mode — see §3c** |
+| Blizzard buff items in grid cells (`BlizzBuffs.lua`) | **Verified working in game** 2026-08-09 — buff draws in the assigned cell, in combat, and counts down correctly |
+| Taint export into Blizzard's cooldown viewer | **Fixed and verified in game** 2026-08-09 — long combat test with re-application, BugGrabber sessions 116–117 clean. `DECISIONS.md` §15 |
 | Resource ring exact level in combat | **Permanently impossible** — measured. Energy is secret to addons and no blessed setter takes a secret for a radial swipe. A straight bar could; a ring cannot |
 | Columns / both collapse | **Unverified in game** |
 | Window layout reorganisation | **Unverified visually** |
@@ -103,24 +111,32 @@ mover while the protected oUF unit button was anchored to it, which is blocked
 in combat, and the block taints the addon for the session. Both mover paths now
 defer out of combat.
 
-**Answered 2026-08-09: it did not work.** The line is present, 5 seconds into a
-fresh session, before any combat:
+**Answered 2026-08-09: it did not work, and it never could have.** The line is
+present 5 seconds into a fresh session, before any combat:
 
 ```
 [00:34:46] RING: UnitPower unreadable (secret value) for ENERGY
            — addon is tainted; resource level cannot be computed
 ```
 
-So the ToT mover deferral was **not** the only taint source, and the ring and
-the combo point pips both stay blocked. What the evidence now says:
+That is inherent taint, not a trace, and no mover fix was ever going to change
+it. Where the three loose ends from that theory actually landed:
 
-- It taints within seconds of login, with no combat and no mover resize, so the
-  remaining source is on a **login path**, not a combat one.
-- `ADDON_ACTION_BLOCKED` for `ThugUI_TargetOfTargetMover:SetSize()` has **not**
-  recurred since session 82 — that fix did hold, it just was not sufficient.
-- The oUF `portrait.lua:46` "tainted by ThugUI" error recurred in session 90.
-  oUF is vendored under our name, so anything it touches is attributed to us.
-  **That is the next thread to pull**, not the mover.
+- **The ring** stays unable to show an exact level in combat, permanently.
+  `UnitPower` carries `SecretWhenUnitPowerRestricted` for *primary* resources.
+  Not a bug, not fixable — `KNOWN-ISSUES.md`.
+- **The pips** were never blocked at all. Secondary resources are readable in
+  combat on 12.0.7 (`UnitPower combo 1, max 7`, measured mid-fight), and the
+  pips are verified tracking live.
+- **The ToT mover fix held** — `ADDON_ACTION_BLOCKED` for
+  `ThugUI_TargetOfTargetMover:SetSize()` has not recurred since session 82.
+- **oUF `portrait.lua:46` is a real bug, but an ordinary one.** It performs a
+  boolean test on a secret boolean. oUF is vendored under our name so it reports
+  as ours, and per §12 that means *addon code touching a secret* — it wants a
+  defensive read, not a taint hunt. Small, unclaimed, and safe to pick up.
+
+The taint we were genuinely exporting was elsewhere entirely, and is fixed:
+§3c and `DECISIONS.md` §15.
 
 ### 3a. The diagnostics themselves were broken until 2026-08-09
 
@@ -139,8 +155,8 @@ Worth knowing, because it invalidates earlier conclusions drawn from silence:
 An empty `ThugUI_DebugLog` before this date means "not loaded or not captured",
 never "nothing happened".
 
-Do not build anything that depends on reading a power value until this is
-settled. See `KNOWN-ISSUES.md`.
+Both faults are fixed, and the diagnostics have been load-bearing ever since —
+every conclusion in §3c was reached by reading them.
 
 ## 3b. Buff icons in combat — SOLVED, by using Blizzard's frames
 
@@ -170,34 +186,26 @@ The plan that got here, for the record:
 reserved, buff up or not, because we cannot ask whether it is up. And Edit Mode
 breaks — §3c.
 
-## 3c. The current open thread: Edit Mode windows vanish
+## 3c. Edit Mode windows vanish — CLOSED 2026-08-09
 
-**This is where the work stands. Start here.** Full detail, suspect list and the
-free first test are in `KNOWN-ISSUES.md` → "Edit Mode cooldown windows vanish
-after combat".
+**Verified fixed in game.** Reasoning and stacks: `DECISIONS.md` §15. Keep the
+one-line lesson even if you never read the rest: **an error inside a *Blizzard*
+file that names ThugUI means we exported taint into their frame.** §12's "that
+just means it is addon code" applies only when the erroring file is ours.
 
-The one-paragraph version: adopting Blizzard's buff items into grid cells
-*works* — the buff draws in the right cell, in combat, which is the thing three
-sessions were spent trying to reach. But during or after combat the Essential
-Cooldowns window and its tracked buff / tracked bar tabs stop appearing in Edit
-Mode, as though the Cooldown Manager had been switched off. On leaving combat
-the live buff was seen to flash back at its default Edit Mode position and
-vanish instantly.
+Two sources, both fixed: `ER:CreateECV()` had created its bar under Blizzard's
+own global name `EssentialCooldownViewer` (from the first commit — the collision
+arrived in a patch, not a commit); and `BlizzBuffs.lua` wrote `__thug*` fields
+onto their frames, set strata on their Edit Mode system frame, and called their
+`RefreshLayout` from our stack.
 
-Two things make this tractable rather than mysterious:
+Proof, not impression: BugGrabber sessions 113 and 115 carried runaways of 534
+and 1160 errors inside `Blizzard_CooldownViewer`; sessions 116 and 117, after
+both fixes and through a long combat test with the buff expiring and being
+re-applied, recorded **zero errors of any kind**.
 
-- We touch exactly four things on Blizzard's frames, and they are listed in
-  `BlizzBuffs.lua`. The strongest suspect is `SetFrameStrata`/`SetFrameLevel`
-  on the Edit Mode **system** frame, and second is calling their own
-  `RefreshLayout` from our stack when releasing.
-- `EssentialRings.lua:926` *also* moves `BuffIconCooldownViewer` in combat and
-  calls `UpdateSystem` / `EditModeManagerFrame.LayoutApplied` on the way out.
-  **If `anchorBuffFrameToCursor` is on, two features are fighting over one
-  frame.** Test that before writing any code — it is free.
-
-Ask for one reload and read `!BugGrabber.lua` for `ADDON_ACTION_BLOCKED` naming
-ThugUI alongside EditMode or the cooldown viewer. That names the culprit
-outright.
+`anchorBuffFrameToCursor` was checked and is **off**, so `EssentialRings.lua:926`
+was never part of this.
 
 ## 4. Queued work
 
@@ -221,9 +229,10 @@ default. Controls are on the Cursor Rings page.
   make them readable and the same code then tracks live. Verified in the test
   harness both ways; **unverified in game**.
 
-**A note on the tracked-buff picker — agreed with the player, not built.** The
-buff icon only appears if that buff is in one of the game's two *active*
-Cooldown Manager lists, and which list decides what it looks like:
+**The tracked-buff note — built 2026-08-09**, on the Cooldown Viewer page under
+"Use Blizzard's buff frames". The buff icon only appears if that buff is in one
+of the game's two *active* Cooldown Manager lists, and which list decides what it
+looks like:
 
 | List | What lands in the cell |
 |---|---|
@@ -231,10 +240,14 @@ Cooldown Manager lists, and which list decides what it looks like:
 | **Tracked Bars** | icon with an animated bar beside it |
 | Neither | nothing to adopt — the cell stays empty |
 
-Both lists are in the same Essential Cooldowns window, on different tabs. The
-picker in ThugUI's own config gives no hint of this, so a buff chosen there can
-silently do nothing. Put the explanation next to the tracked-buff list in
-`ui/pages/CooldownViewer.lua`. Reasoning is recorded in `DECISIONS.md` §13.
+It is a visible note, not a tooltip, because the failure is silent: the picker
+offers buffs that are in neither list, and an empty cell looks exactly like a
+broken addon.
+
+**ThugUI will not add them to those lists for you**, and that was checked rather
+than assumed — `C_CooldownViewer`'s only write is `SetLayoutData`, an opaque blob
+holding the entire layout. `DECISIONS.md` §15 has why both routes are worse than
+the manual step.
 
 **Category enumeration for 12.1** — see `UPCOMING-PATCH.md`. Category names are
 hardcoded in three places and will silently drop the five new 12.1 categories.

@@ -503,3 +503,120 @@ Touching those frames appears to break Edit Mode — see `KNOWN-ISSUES.md`,
   creating fresh frames would bleed them for the session.
 - **Templates naming `$parentText` give nothing on anonymous frames.**
   `OptionsSliderTemplate` needs a real generated name.
+
+## 15. We were tainting Blizzard's frames, and their code was throwing on it
+
+**Measured 2026-08-09, from `!BugGrabber.lua` sessions 112–115.** This is the
+answer to "the cooldown feature keeps disabling itself and needs a `/reload`",
+and it is a genuine exception to §12 — read both or you will draw the wrong
+conclusion from either.
+
+§12 says "tainted by 'ThugUI'" is the engine telling you *this is addon code*,
+and that is right **when the erroring file is ours**. These errors were in
+Blizzard's:
+
+```
+session 113  CooldownViewer.lua:904          compare a secret number            x534
+session 114  CooldownViewer.lua:992          compare 'previousCooldownChargesCount' x17768
+session 115  CooldownViewerItemData.lua:454  boolean test on 'hasTotem'         x1160
+session 115  CooldownViewer.lua:425          compare field 'sourceUnit'         x1
+```
+
+Counts are per error *site*, and BugGrabber stores them per record — read the
+`counter` that follows a message inside its own record, not the nearest one. Two
+of these were first written down against the wrong lines for exactly that reason.
+The `x1` on `sourceUnit` is not insignificance; it is a buff being re-applied
+once and failing to attach.
+
+Blizzard's code is not addon code. If it reports our taint, **we put it there.**
+The clean control from the same log: across ~90 installed addons, exactly one
+other case exists (`tRP3_Vendor` doing the same to `TextStatusBar`). Everybody
+else errors in their own files.
+
+### The mechanism, and why it looks like the feature being switched off
+
+A frame written to by addon code is tainted, and a tainted frame runs **its own**
+handlers tainted by us. Blizzard's viewer then reads fields that are secret under
+taint and throws *inside its own OnEvent*. The throw aborts the function it is
+in, and the two that matter are:
+
+- `RefreshLayout` → `Pools:ReleaseAll` — aborts halfway, so the item pool empties
+  and never refills. Symptom: `CVBUFF: no Blizzard buff item frames found`, an
+  empty cell, and Edit Mode showing no cooldown windows at all.
+- `NeedsAddedAuraUpdate` compares `auraInfo.sourceUnit` to decide whether a newly
+  applied aura belongs to an item. Symptom: **a buff that counts down correctly
+  but never reappears when re-applied.** An aura already attached keeps
+  refreshing; a *new* one can never attach.
+
+Both clear on `/reload`, because the frames are rebuilt untainted. That is why
+the bug always looked like "it works until it doesn't".
+
+### The two sources, in the order they were found
+
+**1. A frame-name collision, from the first commit.**
+`ER:CreateECV()` created its bar as `CreateFrame("Frame", "EssentialCooldownViewer", …)`.
+That predates the Cooldown Manager; 11.1.5 then shipped a Blizzard frame with
+exactly that name. Ours overwrote the global from tainted code, so Blizzard's own
+code resolving the viewer by name executed tainted. It ran unconditionally at
+load regardless of `showECV`, which also explains the long-standing puzzle of the
+resource ring reporting an unreadable power value five seconds into a session
+with no combat. Every sibling frame in that file was already `ThugUI_`-prefixed;
+this one was the outlier. Renamed to `ThugUI_EssentialCooldownViewer`.
+
+**Verified by the logs either side of the change:** session 114 (before) tainted
+`EssentialCooldownViewer`; session 115 (after) tainted only
+`BuffIconCooldownViewer`.
+
+**2. `BlizzBuffs.lua` touching the buff viewer.** Four vectors; three were
+avoidable and are gone:
+
+| Was | Now |
+|---|---|
+| `item.__thugBaseWidth`, `viewer.__thugStrata/__thugLevel/__thugHooked` | weak-keyed side tables in the module |
+| `viewer:SetFrameStrata/SetFrameLevel` to lift it above our grid | our own icon drops to the viewer's strata, which we may read freely |
+| `pcall(viewer.RefreshLayout, viewer)` to put items back | the item's original anchor is recorded and restored with our own `SetPoint` |
+| `item:SetScale/ClearAllPoints/SetPoint` | **kept — this is the feature** |
+
+The general rule, worth carrying to any addon: **writing a field onto a Blizzard
+frame is not free bookkeeping, it is a taint.** `hooksecurefunc` is fine; it
+exists to be taint-safe. Reads are fine and cost nothing — which is why the
+strata fix works from our side.
+
+### Answered: the remaining vector is safe
+
+`SetPoint`/`SetScale` on a pooled item does **not** taint it. Verified 2026-08-09
+across a long combat test with re-application: `!BugGrabber.lua` sessions 116 and
+117 recorded **zero errors of any kind**, against 534 and 1160-count runaways in
+113 and 115. The design stands as built.
+
+So the boundary is not "touching their frames" in general — it is **writing to
+their tables, changing their managed properties, and calling their methods**.
+Anchoring and scaling a pooled child are fine. The three regression cases in
+`Tests/loadtest.lua` pin the fixed vectors open so a future change cannot quietly
+reintroduce them.
+
+### Why the addon does not add buffs to Blizzard's tracked lists for you
+
+Asked 2026-08-09, and the answer is no — checked against the generated docs and
+their settings source rather than assumed.
+
+`C_CooldownViewer` has exactly one write in its whole surface: `SetLayoutData(data)`,
+where `data` is an opaque `cstring` holding the **entire** cooldown-viewer layout.
+There is no per-spell, per-category setter. Blizzard's own UI does not use it
+directly either — it goes `CooldownViewerSettingsItemMixin:AssignToCategory` →
+`dataProvider:SetCooldownToCategory` → serializer → `WriteData`, all inside
+`Blizzard_CooldownViewerSettings`, which is load-on-demand.
+
+Both routes are bad for us:
+
+- **Via `SetLayoutData`:** we would read the blob, parse an undocumented and
+  unversioned format, mutate it, and write the whole thing back. The failure mode
+  is wiping the player's entire Cooldown Manager configuration — every viewer,
+  every category — on a format change we did not anticipate.
+- **Via their data provider:** force-load their settings addon and run their
+  mutation and `RefreshLayout` on our tainted stack. That is precisely §15's bug,
+  reintroduced deliberately, on the code path that persists settings.
+
+So it stays manual, and the constraint is stated in the open on the Cooldown
+Viewer page rather than only in a tooltip. Revisit only if Blizzard ships a
+scoped setter.

@@ -488,7 +488,7 @@ function Page:Build(host, panel)
     subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
     subtitle:SetWidth(700)
     subtitle:SetJustifyH("LEFT")
-    subtitle:SetText("Per-specialization layouts. The grid is a map of what rides on your cursor ??? "
+    subtitle:SetText("Per-specialization layouts. The grid is a map of what rides on your cursor - "
         .. "in combat the scaffold disappears and only the icons show.")
 
     -- Spec selector ------------------------------------------------------
@@ -723,7 +723,7 @@ function Page:BuildInspector(host)
     misc:Checkbox{
         label = "Show proc glow",
         tooltip = "The same pulsing highlight an action button gets when a proc makes a "
-            .. "spell free or empowered ??? Opportunity on Pistol Shot, for instance. Uses "
+            .. "spell free or empowered - Opportunity on Pistol Shot, for instance. Uses "
             .. "Blizzard's own alert art, so it reads identically to your action bars.",
         get = function() return Profile().showProcGlow ~= false end,
         set = function(v) Profile().showProcGlow = v; Apply() end,
@@ -747,6 +747,20 @@ function Page:BuildInspector(host)
             Apply()
         end,
     }
+
+    -- Said in the open, not just in the checkbox tooltip. A buff that is not in
+    -- one of Blizzard's two lists produces an empty cell and no error of any
+    -- kind, which is indistinguishable from the addon being broken -- and the
+    -- picker happily offers buffs that are in neither. This is the only place
+    -- the player can find that out.
+    misc:Note(
+        "Blizzard only hands over a buff it is already tracking. One placed here "
+        .. "draws in combat only if it is also in the game's "
+        .. "|cffffd100Tracked Buffs|r or |cffffd100Tracked Bars|r list "
+        .. "(Edit Mode, Cooldown Manager). Tracked Buffs gives an icon with a "
+        .. "timer; Tracked Bars gives an icon with its bar. In neither list "
+        .. "there is nothing to place, and the cell stays empty.",
+        { width = 260 })
 
     misc:Gap(10)
     misc:Button{

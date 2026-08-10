@@ -65,6 +65,14 @@ frameMT.__index = function(tbl, key)
             if key == "SetAlpha" then a.__alpha = a1 return end
             if key == "GetAlpha" then return a.__alpha == nil and 1 or a.__alpha end
             if key == "SetVertexColor" then a.__color = { a1, a2, a3 } return end
+            -- Strata and scale are modelled because the Blizzard-buff tests
+            -- assert on WHOSE frame changed. Lifting their viewer instead of
+            -- lowering our icon is the taint bug that killed the cooldown
+            -- viewer for a whole session -- a test that cannot tell the two
+            -- apart cannot catch it coming back.
+            if key == "SetFrameStrata" then a.__strata = a1 return end
+            if key == "SetScale" then a.__scale = a1 return end
+            if key == "GetFrameStrata" then return a.__strata or "MEDIUM" end
         end
         if key:match("^Get") then
             if key == "GetWidth" or key == "GetHeight" or key == "GetFrameLevel" then
@@ -1411,12 +1419,39 @@ if failures == 0 and ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs 
             assert(icon.tex.__alpha == 0, "our own icon art was still drawn")
         end },
 
+        -- The three regression cases below are the taint bug of 2026-08-09,
+        -- pinned open. Each one is a thing BlizzBuffs used to do to Blizzard's
+        -- frames that made their own OnEvent handlers throw and emptied the
+        -- item pool until /reload. See docs/DECISIONS.md §15.
+        { "nothing is written onto Blizzard's frames", function()
+            for key in pairs(item) do
+                assert(not tostring(key):match("^__thug"),
+                    "a field was set on the Blizzard item: " .. tostring(key))
+            end
+            for key in pairs(viewer) do
+                assert(not tostring(key):match("^__thug"),
+                    "a field was set on the Blizzard viewer: " .. tostring(key))
+            end
+        end },
+
+        { "our icon is lowered, their viewer is left alone", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(viewer.__strata == nil,
+                "the Edit Mode system frame had its strata changed")
+            assert(icon.__strata == viewer:GetFrameStrata(),
+                "our icon was not dropped to the viewer's strata")
+        end },
+
         { "a hidden grid hands the buffs back", function()
             CV.container.__shown = false
             BB:Refresh()
             local icon = CV.icons[Data.CellKey(1, 1)]
             assert(BB:AdoptedItem(icon) == nil, "the item was held while the grid was hidden")
-            assert(item.__thugBaseWidth == nil, "the item kept the scale we gave it")
+            assert(item.__scale == 1, "the item kept the scale we gave it")
+            -- Put back by our own SetPoint, never by calling their RefreshLayout
+            -- from our stack.
+            assert(item.__point and item.__point[1] == "TOPLEFT",
+                "the item was not returned to the anchor Blizzard gave it")
             CV.container.__shown = true
         end },
 
