@@ -43,9 +43,12 @@ local SHOTS = {
         file = "blizzard_menu_with_cooldown_manager_highlighted",
         u = 0.9980, v = 0.7871, aspect = 1.268,
     },
+    -- scale shrinks a shot against the standard popout width. This one is a tall
+    -- narrow menu, so at full width it towered over every other step for no
+    -- extra legibility.
     escMenu = {
         file = "blizzard_escape_menu_with_edit_mode_highlighted",
-        u = 0.5059, v = 1.0000, aspect = 0.506,
+        u = 0.5059, v = 1.0000, aspect = 0.506, scale = 0.56,
     },
     editModeTick = {
         file = "HUD_edit_mode_with_cooldown_manager_box_checked_and_highlighted",
@@ -141,6 +144,12 @@ local SHOT_WIDTH  = 420   -- the popout is deliberately far wider than the panel
 local SHOT_GAP    = 8
 local SHOT_PAD    = 12
 
+-- The caption's own box, off to the left of the images. Narrow on purpose: it
+-- holds one line about what you are looking at, and a wide box would compete
+-- with the screenshot for attention.
+local CAPTION_WIDTH = 190
+local CAPTION_PAD   = 10
+
 -- ----------------------------------------------------------------------------
 -- Screenshot popout
 --
@@ -177,8 +186,25 @@ function Guide:EnsurePopout()
         popout.shots[i] = tex
     end
 
-    local caption = popout:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    caption:SetWidth(SHOT_WIDTH)
+    -- The caption gets its own box, off to the left, rather than sitting under
+    -- the images. Underneath it was landing against the screenshot's own
+    -- background and reading as part of the picture -- the one line that says
+    -- what you are looking at was the easiest thing to miss.
+    local box = CreateFrame("Frame", "ThugUI_BuffGuideCaption", popout, "BackdropTemplate")
+    box:SetFrameStrata("DIALOG")
+    box:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 14,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 },
+    })
+    box:SetBackdropColor(0, 0, 0, 0.95)
+    box:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.9)
+    popout.captionBox = box
+
+    local caption = box:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    caption:SetPoint("TOPLEFT", box, "TOPLEFT", CAPTION_PAD, -CAPTION_PAD)
+    caption:SetWidth(CAPTION_WIDTH - CAPTION_PAD * 2)
     caption:SetJustifyH("LEFT")
     popout.caption = caption
 
@@ -213,27 +239,34 @@ function Guide:ShowShot(row, step)
     local y = -SHOT_PAD
     local x = SHOT_PAD
     local rowHeight = 0
+    local contentWidth = 0
 
     for i, tex in ipairs(popout.shots) do
         local shot = step.shots[i] and SHOTS[step.shots[i]]
         if shot then
-            local height = width / shot.aspect
+            -- A scaled shot draws narrower AND makes the popout narrower with
+            -- it, or a shrunken image would just sit in the same large box
+            -- surrounded by empty backdrop.
+            local shotWidth = width * (shot.scale or 1)
+            local height = shotWidth / shot.aspect
             tex:SetTexture(MEDIA .. shot.file)
             -- Without this the transparent padding on the power-of-two canvas
             -- is drawn as if it were part of the screenshot.
             tex:SetTexCoord(0, shot.u, 0, shot.v)
-            tex:SetSize(width, height)
+            tex:SetSize(shotWidth, height)
             tex:ClearAllPoints()
             tex:SetPoint("TOPLEFT", popout, "TOPLEFT", x, y)
             tex:Show()
 
             if sideBySide then
                 -- One row: advance across, and the row is as tall as its
-                -- tallest image so the caption clears both.
-                x = x + width + SHOT_GAP
+                -- tallest image so the box below clears both.
+                x = x + shotWidth + SHOT_GAP
                 rowHeight = math.max(rowHeight, height)
+                contentWidth = x - SHOT_GAP - SHOT_PAD
             else
                 y = y - height - SHOT_GAP
+                contentWidth = math.max(contentWidth, shotWidth)
             end
         else
             tex:Hide()
@@ -242,12 +275,17 @@ function Guide:ShowShot(row, step)
 
     if sideBySide then y = y - rowHeight - SHOT_GAP end
 
-    popout.caption:SetText(step.caption or "")
-    popout.caption:ClearAllPoints()
-    popout.caption:SetPoint("TOPLEFT", popout, "TOPLEFT", SHOT_PAD, y)
+    popout:SetSize(contentWidth + SHOT_PAD * 2, -y - SHOT_GAP + SHOT_PAD)
 
-    popout:SetSize(SHOT_WIDTH + SHOT_PAD * 2,
-        -y + popout.caption:GetStringHeight() + SHOT_PAD)
+    -- Its own box, to the LEFT of the images. Sized to the text it holds, and
+    -- top-aligned with the picture it describes.
+    local box = popout.captionBox
+    popout.caption:SetText(step.caption or "")
+    box:SetSize(CAPTION_WIDTH,
+        popout.caption:GetStringHeight() + CAPTION_PAD * 2)
+    box:ClearAllPoints()
+    box:SetPoint("TOPRIGHT", popout, "TOPLEFT", -SHOT_GAP, 0)
+    box:SetShown((step.caption or "") ~= "")
     popout:ClearAllPoints()
     popout:SetPoint("TOPRIGHT", row, "TOPLEFT", -8, 0)
     popout:Show()
