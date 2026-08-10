@@ -391,11 +391,51 @@ Data.SOURCES = {
 -- Only the TrackedBar entry knows which buffs the spell can grant, so with
 -- TrackedBar unread the outcome buffs were unreachable no matter what the
 -- player picked.
+--
+-- CATEGORIES_BY_SOURCE stays an explicit hand-written map while the cache,
+-- dump, and "Everything" iterate Enum.CooldownViewerCategory. Combining
+-- TrackedBuff and TrackedBar into "Tracked buffs" is a player-facing UI design
+-- decision, not a data structure decision. New categories remain accessible via
+-- "Everything" until explicitly added to a curated source.
 local CATEGORIES_BY_SOURCE = {
     essential = { "Essential" },
     utility   = { "Utility" },
     buffs     = { "TrackedBuff", "TrackedBar" },
 }
+
+--- Every Cooldown Manager category as `{ name = <string>, value = <number> }`,
+--- sorted ascending by value.
+---
+--- Hardcoded category names silently ignore new categories added by game patches.
+--- Iterating the enum keeps internal caches, probe dumps, and "Everything" complete.
+---
+--- FILTERING NEGATIVE VALUES:
+--- Blizzard injects negative pseudo-categories into `Enum.CooldownViewerCategory`
+--- at runtime in `Blizzard_CooldownViewer/CooldownViewerSettingsConstants.lua`:
+---   --- These values aren't actually part of the enum
+---   --- They exist so that disabled states can be managed using the same category enums
+---   --- There are checks to ensure that they don't match any of the pre-existing enum values
+---   Enum.CooldownViewerCategory.HiddenSpell = -1;
+---   Enum.CooldownViewerCategory.HiddenAura = -2;
+--- (Renamed to `HiddenActive = -1` and `HiddenPassive = -2` on 12.1 PTR).
+--- They are markers for disabled states, not real category sets. Matching on
+--- name would break when names change between builds, so we filter by value:
+--- real categories start at 0 and count upwards.
+local function CooldownViewerCategories()
+    local categories = {}
+    if not Enum or not Enum.CooldownViewerCategory then
+        return categories
+    end
+
+    for name, value in pairs(Enum.CooldownViewerCategory) do
+        if type(value) == "number" and value >= 0 then
+            table.insert(categories, { name = name, value = value })
+        end
+    end
+
+    table.sort(categories, function(a, b) return a.value < b.value end)
+    return categories
+end
 
 --- Spell IDs from one Cooldown Manager category. Returns an empty list on any
 --- client where C_CooldownViewer is missing or the enum has been renamed.
@@ -481,8 +521,9 @@ local function BuildCooldownInfoCache()
         return cache
     end
 
-    for _, categoryName in ipairs({ "Essential", "Utility", "TrackedBuff", "TrackedBar" }) do
-        local category = Enum and Enum.CooldownViewerCategory and Enum.CooldownViewerCategory[categoryName]
+    for _, item in ipairs(CooldownViewerCategories()) do
+        local categoryName = item.name
+        local category = item.value
         if category ~= nil then
             local ok, ids = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category)
             if ok and type(ids) == "table" then
@@ -546,8 +587,9 @@ function Data.DumpCooldownViewer()
         return dump
     end
 
-    for _, categoryName in ipairs({ "Essential", "Utility", "TrackedBuff", "TrackedBar" }) do
-        local category = Enum and Enum.CooldownViewerCategory and Enum.CooldownViewerCategory[categoryName]
+    for _, item in ipairs(CooldownViewerCategories()) do
+        local categoryName = item.name
+        local category = item.value
         if category ~= nil then
             local ok, ids = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category)
             if ok and type(ids) == "table" then
@@ -617,6 +659,24 @@ local function SpellEntry(spellID)
     return { spellID = spellID, name = name, icon = icon }
 end
 
+--- Check if a category name is included in CATEGORIES_BY_SOURCE.buffs
+local function IsBuffCategory(categoryName)
+    for _, name in ipairs(CATEGORIES_BY_SOURCE.buffs or {}) do
+        if name == categoryName then return true end
+    end
+    return false
+end
+
+--- Check if a category name is included in any source in CATEGORIES_BY_SOURCE
+local function IsKnownCategory(categoryName)
+    for _, categoryNames in pairs(CATEGORIES_BY_SOURCE) do
+        for _, name in ipairs(categoryNames) do
+            if name == categoryName then return true end
+        end
+    end
+    return false
+end
+
 --- The picker list for a source, de-duplicated, name-filtered, alphabetised.
 --- @param source string one of Data.SOURCES values
 --- @param search string? case-insensitive substring filter
@@ -636,10 +696,15 @@ function Data.BuildSpellList(source, search)
     if source == "spellbook" then
         collect(SpellbookSpellIDs())
     elseif source == "all" then
-        for sourceName, categoryNames in pairs(CATEGORIES_BY_SOURCE) do
-            for _, categoryName in ipairs(categoryNames) do
-                collect(CooldownViewerSpellIDs(categoryName, sourceName == "buffs"))
+        for _, item in ipairs(CooldownViewerCategories()) do
+            local categoryName = item.name
+            if not IsKnownCategory(categoryName) then
+                if ThugUI.Diagnostics and ThugUI.Diagnostics.LogOnce then
+                    ThugUI.Diagnostics:LogOnce("cv-unrecognized-cat-" .. categoryName, "CV",
+                        "Unrecognized CooldownViewerCategory '%s' in Enum", categoryName)
+                end
             end
+            collect(CooldownViewerSpellIDs(categoryName, IsBuffCategory(categoryName)))
         end
         collect(SpellbookSpellIDs())
     else

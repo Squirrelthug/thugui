@@ -573,6 +573,156 @@ if failures == 0 and ThugUI.CooldownViewer then
                     "a cooldown entry's linked spell was offered separately")
             end
         end },
+        { "unknown category reaches cache and dump", function()
+            Enum.CooldownViewerCategory.FutureCategory = 4
+            _G.__cooldownEntries[6] = { cooldownID = 6, spellID = 88888 }
+            _G.__categorySets.FutureCategory = { 6 }
+
+            Data.InvalidateCooldownInfoCache()
+            local info = Data.GetCooldownInfoForSpell(88888)
+            assert(info and info.cooldownID == 6, "unknown category entry not indexed in cache")
+
+            local dump = Data.DumpCooldownViewer()
+            local foundInDump = false
+            for _, item in ipairs(dump) do
+                if item.category == "FutureCategory" and item.cooldownID == 6 then
+                    foundInDump = true
+                    break
+                end
+            end
+            assert(foundInDump, "unknown category entry not included in dump")
+
+            Enum.CooldownViewerCategory.FutureCategory = nil
+            _G.__cooldownEntries[6] = nil
+            _G.__categorySets.FutureCategory = nil
+            Data.InvalidateCooldownInfoCache()
+        end },
+        { "unknown category reaches all source and not curated sources", function()
+            Enum.CooldownViewerCategory.FutureCategory = 4
+            _G.__cooldownEntries[6] = { cooldownID = 6, spellID = 88888 }
+            _G.__categorySets.FutureCategory = { 6 }
+
+            local allList = Data.BuildSpellList("all", nil)
+            local inAll = false
+            for _, entry in ipairs(allList) do
+                if entry.spellID == 88888 then
+                    inAll = true
+                    break
+                end
+            end
+            assert(inAll, "unknown category spell not offered in 'all' source")
+
+            for _, sourceKey in ipairs({ "essential", "utility", "buffs" }) do
+                local list = Data.BuildSpellList(sourceKey, nil)
+                for _, entry in ipairs(list) do
+                    assert(entry.spellID ~= 88888,
+                        ("unknown category spell leaked into curated source %s"):format(sourceKey))
+                end
+            end
+
+            Enum.CooldownViewerCategory.FutureCategory = nil
+            _G.__cooldownEntries[6] = nil
+            _G.__categorySets.FutureCategory = nil
+        end },
+        { "dump is ordered deterministically by category value", function()
+            Enum.CooldownViewerCategory.FutureHigh = 10
+            Enum.CooldownViewerCategory.FutureLow = 4
+            _G.__cooldownEntries[10] = { cooldownID = 10, spellID = 99990 }
+            _G.__cooldownEntries[40] = { cooldownID = 40, spellID = 99994 }
+            _G.__categorySets.FutureHigh = { 10 }
+            _G.__categorySets.FutureLow = { 40 }
+
+            local dump1 = Data.DumpCooldownViewer()
+            local dump2 = Data.DumpCooldownViewer()
+
+            assert(#dump1 == #dump2, "dump output length non-deterministic")
+
+            local categoryValues = {
+                Essential = 0, Utility = 1, TrackedBuff = 2, TrackedBar = 3,
+                FutureLow = 4, FutureHigh = 10
+            }
+            local lastVal = -1
+            for i, item in ipairs(dump1) do
+                local val = categoryValues[item.category]
+                assert(val, "unknown category in dump check: " .. tostring(item.category))
+                assert(val >= lastVal, ("dump not ordered by category value ascending at index %d"):format(i))
+                assert(item.cooldownID == dump2[i].cooldownID, "dump mismatch between calls")
+                lastVal = val
+            end
+
+            Enum.CooldownViewerCategory.FutureHigh = nil
+            Enum.CooldownViewerCategory.FutureLow = nil
+            _G.__cooldownEntries[10] = nil
+            _G.__cooldownEntries[40] = nil
+            _G.__categorySets.FutureHigh = nil
+            _G.__categorySets.FutureLow = nil
+        end },
+        { "non-numeric keys in enum table are skipped", function()
+            Enum.CooldownViewerCategory.Meta = { version = 1 }
+
+            local dump = Data.DumpCooldownViewer()
+            for _, item in ipairs(dump) do
+                assert(item.category ~= "Meta", "non-numeric enum key appeared in dump")
+            end
+
+            Enum.CooldownViewerCategory.Meta = nil
+        end },
+        { "missing CooldownViewerCategory degrades to empty safely", function()
+            local realEnumCat = Enum.CooldownViewerCategory
+            Enum.CooldownViewerCategory = nil
+            Data.InvalidateCooldownInfoCache()
+
+            local dump = Data.DumpCooldownViewer()
+            assert(type(dump) == "table" and #dump == 0, "dump did not degrade to empty table")
+
+            local info = Data.GetCooldownInfoForSpell(1001)
+            assert(info == nil, "cache returned info when enum was missing")
+
+            local list = Data.BuildSpellList("all", nil)
+            assert(type(list) == "table", "BuildSpellList('all') failed when enum missing")
+
+            Enum.CooldownViewerCategory = realEnumCat
+            Data.InvalidateCooldownInfoCache()
+        end },
+        { "Blizzard's negative pseudo-categories are ignored", function()
+            Enum.CooldownViewerCategory.HiddenSpell = -1
+            Enum.CooldownViewerCategory.HiddenAura = -2
+            _G.__cooldownEntries[99] = { cooldownID = 99, spellID = 9999 }
+            _G.__categorySets.HiddenSpell = { 99 }
+            _G.__categorySets.HiddenAura = { 99 }
+
+            Data.InvalidateCooldownInfoCache()
+
+            local info = Data.GetCooldownInfoForSpell(9999)
+            assert(info == nil, "spell in negative pseudo-category was indexed by GetCooldownInfoForSpell")
+
+            local dump = Data.DumpCooldownViewer()
+            local foundInDump = false
+            for _, item in ipairs(dump) do
+                if item.spellID == 9999 then
+                    foundInDump = true
+                    break
+                end
+            end
+            assert(not foundInDump, "spell in negative pseudo-category appeared in DumpCooldownViewer")
+
+            local allList = Data.BuildSpellList("all", nil)
+            local foundInList = false
+            for _, entry in ipairs(allList) do
+                if entry.spellID == 9999 then
+                    foundInList = true
+                    break
+                end
+            end
+            assert(not foundInList, "spell in negative pseudo-category appeared in BuildSpellList('all')")
+
+            Enum.CooldownViewerCategory.HiddenSpell = nil
+            Enum.CooldownViewerCategory.HiddenAura = nil
+            _G.__cooldownEntries[99] = nil
+            _G.__categorySets.HiddenSpell = nil
+            _G.__categorySets.HiddenAura = nil
+            Data.InvalidateCooldownInfoCache()
+        end },
         { "grid page refresh after edits", function()
             ThugUI.Window:SelectPage("cooldownviewer")
         end },
@@ -1473,8 +1623,75 @@ if failures == 0 and ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs 
             wipe(_G.__auras)
         end },
 
-        -- A spell Blizzard is not tracking must fall through rather than be
-        -- silently blanked: that would be a cell that never draws anything.
+        { "an unmatched spell logs no item frame stage once", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local icon = PlaceAura(1001)
+            BB:Refresh()
+            BB:Refresh()
+
+            local count = 0
+            for _, line in ipairs(ThugUI_DebugLog.events or {}) do
+                if line:find("no matching item frame", 1, true) and line:find("1001", 1, true) then
+                    count = count + 1
+                end
+            end
+            assert(count == 1, ("expected no matching item frame logged once, got %d"):format(count))
+        end },
+
+        { "an adopted icon is shown even when its spell name does not resolve", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local icon = PlaceAura(9001)
+            BB:Refresh()
+            assert(BB:AdoptedItem(icon) == item, "precondition: Blizzard item was not adopted")
+
+            _G.__unknownNames["Spell 9001"] = true
+            CV:UpdateState()
+
+            assert(icon.wanted, "an adopted cell whose spell name does not resolve was not wanted")
+            assert(icon:IsShown(), "an adopted cell whose spell name does not resolve was not shown")
+
+            _G.__unknownNames["Spell 9001"] = nil
+        end },
+
+        { "an adopted cell keeps its slot under columns collapse", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "columns"
+            profile.collapseDirection = "up"
+            profile.enabled, profile.onlyInCombat = true, false
+
+            Data.SetPlacement(profile, 1, 1, 1001, "always")
+            Data.SetPlacement(profile, 3, 1, 9001, "aura")
+            Data.InvalidateCooldownInfoCache()
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            local iconTop = CV.icons[Data.CellKey(1, 1)]
+            local iconAdopted = CV.icons[Data.CellKey(3, 1)]
+
+            BB:Refresh()
+            assert(BB:AdoptedItem(iconAdopted) == item, "precondition: 9001 item was not adopted")
+
+            _G.__unknownNames["Spell 9001"] = true
+            CV:UpdateState()
+
+            assert(iconAdopted.wanted, "adopted cell was not wanted under columns collapse")
+            local _, cellH, _, pad = CV:GetCellSize(profile)
+            local expectedY = -((2 - 1) * cellH + pad / 2)
+            assert(iconAdopted.__point and iconAdopted.__point[5] == expectedY,
+                ("adopted cell did not collapse into slot 2 (expected y=%.1f, got y=%s)"):format(
+                    expectedY, tostring(iconAdopted.__point and iconAdopted.__point[5])))
+
+            _G.__unknownNames["Spell 9001"] = nil
+            profile.collapse = "none"
+        end },
+
+        -- Restored during review of task 05, which repurposed this case in place
+        -- rather than adding alongside it. It guards the FALLBACK: a spell
+        -- Blizzard is not drawing must still reach ThugUI's own aura path. That
+        -- fallthrough sits directly below the branch task 05 reordered, so it is
+        -- exactly the coverage a reorder there could break.
         { "an unmatched spell is left to the aura path", function()
             ThugUI_Config.cvUseBlizzardBuffs = true
             local icon = PlaceAura(1001)
@@ -1485,6 +1702,53 @@ if failures == 0 and ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs 
             CV:UpdateState()
             assert(icon.wanted, "the aura path did not run for an unmatched spell")
             wipe(_G.__auras)
+        end },
+
+        { "a non-adopted icon whose spell does not resolve is still hidden", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local icon = PlaceAura(1001)
+            BB:Refresh()
+            assert(BB:AdoptedItem(icon) == nil, "precondition: 1001 should not be adopted")
+
+            _G.__unknownNames["Spell 1001"] = true
+            CV:UpdateState()
+
+            assert(not icon.wanted, "a non-adopted icon with unresolved spell name was wanted")
+            assert(not icon:IsShown(), "a non-adopted icon with unresolved spell name was shown")
+
+            _G.__unknownNames["Spell 1001"] = nil
+        end },
+
+        { "an Apply error is logged and applying flag is cleared", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            PlaceAura(9001)
+            -- Force an error inside Apply when processing item
+            item.ClearAllPoints = function() error("forced Apply failure") end
+
+            BB:Refresh()
+            assert(not BB.applying, "applying flag remained true after Apply threw")
+
+            item.ClearAllPoints = function() end
+
+            local foundErrorLog = false
+            for _, line in ipairs(ThugUI_DebugLog.events or {}) do
+                if line:find("CVBUFF", 1, true) and line:find("forced Apply failure", 1, true) then
+                    foundErrorLog = true
+                    break
+                end
+            end
+            assert(foundErrorLog, "Apply error was not logged in ThugUI_DebugLog")
+
+            -- Verify subsequent Refresh runs without early return
+            local ranSecondPass = false
+            local realItems = BB.ItemsByCooldownID
+            BB.ItemsByCooldownID = function(self)
+                ranSecondPass = true
+                return realItems(self)
+            end
+            BB:Refresh()
+            BB.ItemsByCooldownID = realItems
+            assert(ranSecondPass, "subsequent BB:Refresh did not run after error")
         end },
 
         { "restore", function()

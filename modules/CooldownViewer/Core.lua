@@ -676,15 +676,21 @@ function CV:UpdateState()
         -- cell when the buff drops. It is the price of not being able to ask
         -- whether the buff is up. Blizzard's item hides itself, so the cell
         -- goes empty rather than stale.
+        --
+        -- Adoption outranks our own IsSpellAvailable check. When Blizzard's
+        -- untainted code is drawing the item, we have no standing to ask whether
+        -- the spell exists: a placement whose spell ID is a passive that grants
+        -- the buff (e.g. Opportunity 279876 -> buff 195627) will not resolve
+        -- via a by-name lookup (GetSpellInfo), but Blizzard's frame is live.
         local adopted = self.BlizzBuffs and self.BlizzBuffs:AdoptedItem(icon)
 
-        if not IsSpellAvailable(spellName) then
-            show = false
-        elseif adopted then
+        if adopted then
             show = true
             icon.tex:SetAlpha(0)
             icon.cooldown:Clear()
             icon.count:Hide()
+        elseif not IsSpellAvailable(spellName) then
+            show = false
         elseif icon.mode == "aura" then
             local aura, auraSpellID = ResolveAura(icon)
             show = aura ~= nil

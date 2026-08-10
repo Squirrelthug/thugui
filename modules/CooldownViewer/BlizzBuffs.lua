@@ -288,6 +288,20 @@ function BB:Apply()
                 self.adopted[icon] = item
                 stillTaken[item] = true
                 count = count + 1
+            else
+                if ThugUI.Diagnostics then
+                    local spellStr = icon.spellName and ("%s (ID %s)"):format(tostring(icon.spellName), tostring(icon.spellID)) or ("ID %s"):format(tostring(icon.spellID))
+                    if not info then
+                        ThugUI.Diagnostics:LogOnce(("blizzbuffs-no-info-%s"):format(tostring(icon.spellID)), "CVBUFF",
+                            "spell %s: no Cooldown Manager entry", spellStr)
+                    elseif not info.cooldownID then
+                        ThugUI.Diagnostics:LogOnce(("blizzbuffs-no-cdid-%s"):format(tostring(icon.spellID)), "CVBUFF",
+                            "spell %s: entry has no cooldown ID", spellStr)
+                    else
+                        ThugUI.Diagnostics:LogOnce(("blizzbuffs-no-item-%s"):format(tostring(icon.spellID)), "CVBUFF",
+                            "spell %s: no matching item frame — buff is not in Tracked Buffs or Tracked Bars", spellStr)
+                    end
+                end
             end
         end
     end
@@ -338,7 +352,13 @@ function BB:Refresh()
     -- the second pass would have nothing new to do.
     if self.applying then return end
     self.applying = true
-    pcall(function() self:Apply() end)
+    local ok, err = pcall(function() self:Apply() end)
+    if not ok and ThugUI.Diagnostics then
+        pcall(function()
+            ThugUI.Diagnostics:LogOnce(("blizzbuffs-err-%s"):format(tostring(err)), "CVBUFF",
+                "Apply failed: %s", tostring(err))
+        end)
+    end
     self.applying = false
 end
 
