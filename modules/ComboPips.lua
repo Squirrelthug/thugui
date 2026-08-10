@@ -172,6 +172,13 @@ function CP:Layout(count)
     local size = ThugUI_Config.comboPipSize or DEFAULT_SIZE
     local radius = diameter / 2 + (ThugUI_Config.comboPipOffset or DEFAULT_OFFSET)
 
+    -- The offset reaches far enough inside the band to draw a tight ring near
+    -- the cursor, which means it can also cross the centre. A negative radius
+    -- does not error -- sin/cos quietly mirror every pip to the opposite side,
+    -- so the ring appears to jump a half turn as the slider passes zero. Clamp
+    -- instead, so the tightest setting is a small ring rather than a flipped one.
+    if radius < 0 then radius = 0 end
+
     local start = 0
     if ER and ER.ClockToRadians then
         start = ER:ClockToRadians(ThugUI_Config.castRotation or 12)

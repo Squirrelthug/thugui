@@ -1432,6 +1432,22 @@ if failures == 0 and ThugUI.ComboPips then
             end
         end },
 
+        -- The offset now reaches past the centre, and a negative radius mirrors
+        -- every pip a half turn instead of erroring -- which reads as the ring
+        -- flipping as the slider crosses zero.
+        { "a tight ring never flips to the other side", function()
+            ThugUI_Config.comboPipOffset = -500
+            CP:Refresh()
+            for i = 1, CP.lastMax or 0 do
+                local point = CP.pips[i].__point
+                local radius = math.sqrt(point[4] ^ 2 + point[5] ^ 2)
+                assert(radius < 0.001,
+                    ("pip %d was placed at radius %.3f, expected the centre"):format(i, radius))
+            end
+            ThugUI_Config.comboPipOffset = nil
+            CP:Refresh()
+        end },
+
         { "no pips for a class without a secondary resource", function()
             AsClass("WARRIOR")
             CP:Refresh()

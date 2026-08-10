@@ -264,8 +264,10 @@ function Page:Build(host, panel)
     }
 
     panel:Slider{
-        label = "Distance from the ring", min = -10, max = 30, step = 1, format = "%d",
-        tooltip = "Negative values sit the pips inside the band rather than outside it.",
+        label = "Distance from the ring", min = -80, max = 40, step = 1, format = "%d",
+        tooltip = "Negative values pull the pips inside the band, towards the cursor. "
+            .. "Far enough in draws a tight ring near the centre rather than one that "
+            .. "hugs the cast sweep.",
         get = function() return Cfg().comboPipOffset or 7 end,
         set = function(v)
             Cfg().comboPipOffset = v

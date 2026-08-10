@@ -382,6 +382,46 @@ What follows from it:
 `modules/SecretProbe.lua` measures all of this on the live client rather than
 trusting the above, because the wiki has been wrong about this system before.
 
+### Measured on 12.0.7, in combat, 2026-08-09
+
+It was right to measure. Two of the expectations above were wrong.
+
+| Read | In combat | Out of combat |
+|---|---|---|
+| `UnitPower` energy (primary) | **secret** | secret |
+| `UnitPower` combo points (secondary) | **readable — `4`** | readable |
+| `GetUnitAuraBySpellID` / `GetPlayerAuraBySpellID` | nothing | returns the aura |
+| `GetAuraDataByIndex` list length | **9–11 auras returned** | 10 |
+| `aura.spellId` / `.name` **read** | **secret, but readable as a field** | plain values |
+| `aura.spellId` **compared** | **errors** | fine |
+| `GetUnitAuraInstanceIDs` | **non-secret list of real IDs** | non-secret |
+| `IsAuraFilteredOutByInstanceID` | **non-secret bool** | non-secret |
+| `DoesAuraHaveExpirationTime` | secret bool | plain bool |
+| `EvaluateColorValueFromBoolean(secret bool)` | **works, returns a secret** | works |
+| `Frame:SetAlpha(secret)`, `StatusBar:SetValue(secret)` | **accepted** | accepted |
+| `Cooldown:SetCooldownDuration(secret)` | **REFUSED** | refused |
+| `CurveObject:Evaluate(secret)` | refused | refused |
+
+Corrections that follow:
+
+1. **Secondary resources are already readable on 12.0.7**, not from 12.1. The
+   combo pips track live in combat today. The 12.1 note relaxed something that
+   had evidently already shipped.
+2. **`Cooldown:SetCooldownDuration` does not accept secrets**, despite the wiki
+   listing the `Cooldown` setters as `AllowedWhenTainted`. `StatusBar:SetValue`
+   and `SetAlpha` do. A radial swipe therefore cannot be driven from a secret
+   at all, which closes the last route to an exact resource ring in combat.
+3. **Identifying an aura in combat is genuinely impossible for an addon.** The
+   list comes back and the structs can be indexed, so `aura.spellId` is
+   *reachable* — but every use of it needs a comparison, and comparison is what
+   errors. There is no native equality helper: `Evaluate` refuses secret input,
+   and no API turns a secret spell ID into a secret boolean. Everything else
+   being available makes this the deliberate choke point rather than an
+   oversight.
+4. What *is* available is a complete display path for a secret the engine hands
+   us whole: secret bool → `EvaluateColorValueFromBoolean` → `SetAlpha`. It is
+   useless here only because no per-spell secret bool exists to feed it.
+
 ## 13. Odds and ends worth not rediscovering
 
 - **`GetProfile` must refuse specID 0/nil.** Called before spec data loads, it

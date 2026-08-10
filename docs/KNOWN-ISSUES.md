@@ -57,15 +57,17 @@ value is unreadable the ring holds its last resolved level and keeps its colour
    carries `SecretWhenUnitPowerRestricted` in Blizzard's generated docs, and
    primary resources stay secret to addons regardless. Full reasoning and
    evidence in `DECISIONS.md` §12. Do not re-open this.
-2. **Driving the arc natively, without ever reading the value.** The blessed
-   setters accept secrets from tainted code — `Cooldown:SetCooldownDuration`
-   is the one that matters for a radial swipe. What is missing is a sanctioned
-   way to turn a secret power value into a secret fraction:
-   `CurveObject:Evaluate` is `AllowedWhenUntainted`, so we cannot map it
-   ourselves. `C_DurationUtil` is the remaining candidate and is unexamined.
-3. Blizzard reclassifying primary power as non-secret. Unlikely — the 12.1
-   relaxation is explicitly for *secondary* resources, which unblocks the combo
-   point pips and nothing else.
+2. ~~**Driving the arc natively.**~~ **CLOSED 2026-08-09 — measured.**
+   `Cooldown:SetCooldownDuration(secret)` is **refused** from tainted code,
+   despite the wiki listing the `Cooldown` setters as `AllowedWhenTainted`, and
+   `CurveObject:Evaluate(secret)` is refused too. A radial swipe cannot be fed
+   a secret by any route. `StatusBar:SetValue(secret)` and `SetAlpha(secret)`
+   *are* accepted — so a straight **bar** could show exact energy in combat
+   where a ring cannot. That is a design change, not a bug fix, and has not
+   been offered to the player.
+3. Blizzard reclassifying primary power as non-secret. Unlikely, and note that
+   the 12.1 relaxation for *secondary* resources turns out to have shipped
+   already: combo points read fine in combat on 12.0.7.
 
 **Do not** attempt to work around it by guessing the value, sampling it out of
 combat and extrapolating, or reading it from a Blizzard frame's displayed text.
@@ -117,7 +119,30 @@ The route that remains is to stop asking: let Blizzard's own untainted
 only for placement and skin. `EssentialRings.lua:930` already does this for the
 cursor-anchored case.
 
-**Narrowed to the API call itself, 2026-08-09.** In combat, with the buff up,
+**Measured directly, 2026-08-09** (`ThugUI_DebugLog.secrets`, and
+`DECISIONS.md` §12 for the full table). In combat the aura list *is* returned —
+9 to 11 auras — and the structs *can* be indexed, so `aura.spellId` is
+reachable. It comes back as a secret number, and **comparing it errors**:
+
+```
+attempt to compare field 'spellId' (a secret number value, while execution
+tainted by 'ThugUI')
+```
+
+That is the choke point, and it is deliberate. Aura instance IDs are handed
+over as plain readable numbers, `IsAuraFilteredOutByInstanceID` answers with a
+plain bool, and the whole display path for a secret works
+(`DoesAuraHaveExpirationTime` → `EvaluateColorValueFromBoolean` → `SetAlpha`,
+all fine). Everything is available *except* the one operation that would let an
+addon say "this aura is that spell". No native equality helper exists:
+`CurveObject:Evaluate` refuses secret input, and no API turns a secret spell ID
+into a secret boolean.
+
+**So there is no route to identifying a buff in combat from addon code, and no
+amount of cleverness changes that.** Blizzard's own untainted frames are the
+only way to show one.
+
+**Earlier narrowing, kept for the record.** In combat, with the buff up,
 `C_UnitAuras.GetUnitAuraBySpellID("player", <linked id>)` returns **nothing**.
 It does not throw, and the aura is not refused by the source check — both of
 those are separate logged outcomes and neither appeared. Out of combat, the

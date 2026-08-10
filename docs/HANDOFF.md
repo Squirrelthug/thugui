@@ -47,7 +47,8 @@ wrong" from "they were on an older build".
 | Proc glow + `proc` mode | **Verified** — "pistol shot is working" |
 | Roll the Bones via `linkedSpellIDs` | **Verified in game** 2026-08-09 — `4 linked, active via 1214933` |
 | Taint fix (ToT mover deferral) | **Held, but irrelevant to secrets** — see §3 and `DECISIONS.md` §12 |
-| Secret probe (`modules/SecretProbe.lua`) | **Built 2026-08-09, awaiting one fight + reload** |
+| Secret probe (`modules/SecretProbe.lua`) | **Ran 2026-08-09** — results in `DECISIONS.md` §12 |
+| Combo pips | **Verified in game** 2026-08-09 — and they track live *in combat*, which was not expected |
 | Resource ring showing at all | **Still blocked** — `UnitPower` is secret again |
 | Columns / both collapse | **Unverified in game** |
 | Window layout reorganisation | **Unverified visually** |
