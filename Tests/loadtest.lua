@@ -1519,6 +1519,62 @@ if ThugUI.CooldownViewer then
             assert(Data.ResolveCollapseDirection(profile) == "down", "anchor at bottom should pack down")
         end },
 
+        -- Regression, and the reason both halves are asserted together: the
+        -- layout decides which side of the pointer the shape sits on, and the
+        -- collapse packs it "towards the cursor". They used to disagree at the
+        -- exact midpoint -- `>=` when placing, strict `>` when collapsing -- so
+        -- an anchor at row 5 put the shape ABOVE the pointer and then packed it
+        -- upwards, away from it. Whichever way the boundary is decided, these
+        -- two must decide it the same way.
+        { "an anchor on the midpoint packs towards the cursor, not away", function()
+            local profile = Data.GetActiveProfile()
+            profile.collapse, profile.collapseDirection = "columns", "auto"
+
+            -- Mirrors CV:FollowCursor's gapY test. True means the shape is
+            -- nudged so it sits above the pointer, which means packing DOWN is
+            -- what moves it towards the pointer.
+            local function LayoutPutsShapeAbove(p)
+                return (p.anchorRow or 0) >= Data.GRID_ROWS / 2
+            end
+
+            profile.anchorRow = Data.GRID_ROWS / 2
+            local _, down = Data.ResolveCollapseAxes(profile)
+            assert(LayoutPutsShapeAbove(profile) == down,
+                "at the midpoint the layout and the collapse disagreed about "
+                .. "which side of the cursor the shape is on")
+            assert(Data.ResolveCollapseDirection(profile) == "down",
+                "an anchor on the midpoint should pack down, towards the cursor")
+
+            -- One row either side must keep behaving, so the fix cannot be a
+            -- blanket flip of the comparison.
+            profile.anchorRow = Data.GRID_ROWS / 2 - 1
+            assert(Data.ResolveCollapseDirection(profile) == "up",
+                "an anchor above the midpoint should still pack up")
+            profile.anchorRow = Data.GRID_ROWS / 2 + 1
+            assert(Data.ResolveCollapseDirection(profile) == "down",
+                "an anchor below the midpoint should still pack down")
+        end },
+
+        -- The same boundary on the other axis. It was never noticed because the
+        -- profile that exposed the row case had a column anchor well clear of
+        -- the midpoint, so only one axis ever misbehaved at a time.
+        { "the column midpoint agrees with the layout too", function()
+            local profile = Data.GetActiveProfile()
+            profile.collapse, profile.collapseDirection = "rows", "auto"
+
+            local function LayoutPutsShapeLeft(p)
+                return (p.anchorCol or 0) >= Data.GRID_COLS / 2
+            end
+
+            profile.anchorCol = Data.GRID_COLS / 2
+            local right = Data.ResolveCollapseAxes(profile)
+            assert(LayoutPutsShapeLeft(profile) == right,
+                "at the midpoint the layout and the collapse disagreed on the "
+                .. "horizontal axis")
+            assert(Data.ResolveCollapseDirection(profile) == "right",
+                "an anchor on the column midpoint should pack right")
+        end },
+
         -- Regression: the grid used to vanish wholesale in combat because
         -- readiness was derived from duration, and during the GCD every spell
         -- reports a running cooldown.
@@ -1597,8 +1653,15 @@ if ThugUI.CooldownViewer then
             assert(Data.ResolveCollapseDirection(profile) == "left", "anchor 0 should pack left")
             profile.anchorCol = 10
             assert(Data.ResolveCollapseDirection(profile) == "right", "anchor 10 should pack right")
+            -- CHANGED, deliberately. This used to assert "left", recording the
+            -- arbitrary tie-break of a strict `>`. Dead centre is not actually
+            -- ambiguous: CV:FollowCursor uses `>=` to decide where to put the
+            -- shape, so at the midpoint it nudges the shape LEFT of the pointer,
+            -- and packing towards the pointer from there is RIGHT. The old
+            -- answer was the layout's opposite. See DECISIONS.md 18.
             profile.anchorCol = 5
-            assert(Data.ResolveCollapseDirection(profile) == "left", "dead centre should fall to left")
+            assert(Data.ResolveCollapseDirection(profile) == "right",
+                "dead centre should pack towards the cursor, matching the layout")
         end },
 
         -- A tracked buff can only reach a cell through Blizzard's own frame, so

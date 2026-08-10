@@ -129,11 +129,11 @@ function Data.ResolveCollapseDirection(profile)
 
     if mode == "columns" then
         if direction == "up" or direction == "down" then return direction end
-        return (profile.anchorRow or 0) > Data.GRID_ROWS / 2 and "down" or "up"
+        return (profile.anchorRow or 0) >= Data.GRID_ROWS / 2 and "down" or "up"
     end
 
     if direction == "left" or direction == "right" then return direction end
-    return (profile.anchorCol or 0) > Data.GRID_COLS / 2 and "right" or "left"
+    return (profile.anchorCol or 0) >= Data.GRID_COLS / 2 and "right" or "left"
 end
 
 --- Both axes at once, as booleans the layout code consumes directly.
@@ -148,8 +148,24 @@ function Data.ResolveCollapseAxes(profile)
     local mode = profile.collapse or "none"
     local direction = profile.collapseDirection or "auto"
 
-    local autoRight = (profile.anchorCol or 0) > Data.GRID_COLS / 2
-    local autoDown  = (profile.anchorRow or 0) > Data.GRID_ROWS / 2
+    -- >= NOT >, and it has to stay that way. `CV:FollowCursor` decides which
+    -- side of the pointer the shape physically sits on with the SAME test:
+    --
+    --     gapY = (anchorRow or 0) >= Data.GRID_ROWS / 2 and gap or -gap
+    --
+    -- Those two must agree, because one places the shape and the other packs it
+    -- towards the cursor, and "towards" is meaningless if they disagree about
+    -- where the cursor is. With a strict > here, an anchor sitting exactly on
+    -- the midpoint made the layout put the shape ABOVE the pointer while the
+    -- collapse packed it upwards, away from it.
+    --
+    -- The midpoint is a real anchor position, not a rounding artefact: the grid
+    -- is 10x10, so intersection 5 is dead centre and is exactly the value a
+    -- player gets by aiming at the middle of the picker. It only ever misfired
+    -- on the axis that landed on the boundary, which is why one spec looked
+    -- broken and another with an anchor one row further out looked fine.
+    local autoRight = (profile.anchorCol or 0) >= Data.GRID_COLS / 2
+    local autoDown  = (profile.anchorRow or 0) >= Data.GRID_ROWS / 2
 
     if mode == "both" then
         if direction == "topleft"     then return false, false end

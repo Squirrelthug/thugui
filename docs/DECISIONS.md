@@ -924,3 +924,67 @@ ours=… theirs=… -> scale=…`), so a wrong size on screen can be read back f
 disk instead of guessed at.
 
 **Unverified in game.** Built on branch `abundance-icon-scale`.
+
+## 18. The layout and the collapse must agree on where the cursor is
+
+Symptom: on the resto druid the columns collapsed **upwards, away from the
+cursor**; on the rogue, with what looked like the same settings, they collapsed
+down towards it. The player's own diagnosis was exactly right — "it thinks the
+cursor is above" — and it was true of the collapse only, not the layout.
+
+Two functions decide the same fact with different comparisons.
+
+`CV:FollowCursor` places the shape (`Core.lua`):
+
+```lua
+local gapY = (profile.anchorRow or 0) >= Data.GRID_ROWS / 2 and gap or -gap
+```
+
+`Data.ResolveCollapseAxes` packs it "towards the cursor":
+
+```lua
+local autoDown = (profile.anchorRow or 0) > Data.GRID_ROWS / 2   -- was strict
+```
+
+`>=` against `>`. At `anchorRow == 5` on a 10-row grid they disagree: the layout
+nudges the shape **above** the pointer, and the collapse then packs it **up**,
+away from it. Both axes had it; only the axis that landed on the boundary
+misbehaved, which is why one spec looked broken and another did not.
+
+The player's profiles made it look like a difference between specs:
+
+| | anchorRow | `>= 5` (layout) | `> 5` (collapse) | |
+|---|---|---|---|---|
+| Resto | **5** | above cursor | packs up | **disagree** |
+| Outlaw | 6 | above cursor | packs down | agree |
+
+Outlaw was correct by being one row clear of the boundary, not by being
+configured differently. Nothing was wrong with saving or loading the profile —
+that was checked first, and `anchorCol=3, anchorRow=5` on disk matched the
+picker exactly.
+
+### Which comparison is right
+
+**The layout is the source of truth.** It decides where the shape physically
+sits; "towards the cursor" is only meaningful relative to that. So the collapse
+was changed to match the layout, not the other way round.
+
+The midpoint is a real anchor position rather than a rounding artefact — the
+grid is 10×10, so intersection 5 is dead centre and is exactly what a player
+gets by aiming at the middle of the picker. It is not a rare edge case.
+
+### A test was changed, not just added
+
+`auto direction follows the anchor` asserted `dead centre should fall to left`.
+That recorded the tie-break of the old strict `>`, and this change deliberately
+reverses it to `right`. Dead centre was never genuinely ambiguous: the layout
+had already committed to putting the shape left of the pointer there, so the old
+answer was the layout's opposite. Called out here because a changed assertion is
+much easier to miss in review than an added one.
+
+Two cases were added that assert the two functions **against each other** rather
+than against a hardcoded direction, so a future change to either comparison
+fails rather than silently reintroducing the split. Reverting the fix fails
+exactly those two plus the changed one.
+
+**Unverified in game.** Built on branch `collapse-anchor-boundary`.
