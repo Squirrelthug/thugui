@@ -851,3 +851,76 @@ that went are exactly the two file-load assertions, the page-load assertion, and
 `ThugUI.Window.pages`, so they disappeared mechanically. No behavioural
 assertion was lost, and that was confirmed by diffing the `ok` lines against a
 stashed clean tree rather than by reading the count.
+
+## 17. An adopted buff is anchored to our cell but lives in Blizzard's frame
+
+Symptom: on the resto druid, Abundance and Omen of Clarity drew noticeably
+larger than every other icon on the grid, and collapse looked broken around them
+because an oversized icon overflows the cell the layout maths reserved for it.
+Changing Blizzard's own frame size did nothing. Rogue was unaffected.
+
+### Why the rogue looked right and the druid did not
+
+It is the same code. The difference is entirely in the profile.
+
+`BlizzBuffs` adopts a Blizzard buff item by **anchoring** it over our cell —
+`item:SetPoint("CENTER", icon, ...)` — and deliberately **not** reparenting it;
+the item stays a child of Blizzard's viewer. That is on purpose (§15: writing
+into their frames is what broke the cooldown viewer). The consequence is easy to
+miss: our own icons are children of the grid frame, which carries
+`f:SetScale(profile.scale)`, and **an adopted item inherits none of it.**
+
+`FitItem` then computed `iconSize / base`, where `iconSize` comes from
+`CV:GetCellSize` and is *unscaled*. So the item was sized in our grid's
+coordinate space and applied to a frame living in Blizzard's.
+
+At `profile.scale == 1` the two spaces coincide and the arithmetic is correct —
+which is the whole reason this survived. Outlaw, the testbed for every buff
+feature to date, is at scale 1. Resto is at **0.6**, where an adopted buff draws
+`1 / 0.6` ≈ **1.67×** too large next to correctly-scaled neighbours.
+
+Nothing about the *spell* differs. Abundance and Omen of Clarity are simply the
+only two `aura`-mode placements in spec 105, and `aura` mode is the only path
+that goes through adoption. Every other resto icon is `cooldown` mode and drawn
+by us, correctly.
+
+The fix works in screen space:
+
+```lua
+local scale = (iconSize * cell:GetEffectiveScale())
+            / (baseWidth[item] * item:GetParent():GetEffectiveScale())
+```
+
+`GetEffectiveScale` on both sides cancels UIParent out, so it holds at any UI
+scale, and it absorbs whatever Edit Mode did to Blizzard's viewer as well —
+which the old formula also ignored.
+
+### A second defect, found on the way and independent of the first
+
+`FitItem` cached its width measurement as `false` when the item reported a width
+of 0, and guarded re-measurement on `~= nil`. **A falsy answer therefore latched
+for the life of the item**, and `SetScale` was never called again — leaving
+Blizzard's native size inside a cell sized for ours. An item measured before
+their layout has run is exactly that case, and it is timing-dependent, so it
+would appear and disappear between sessions for no visible reason.
+
+Now only a real width is ever stored; an unmeasurable item is retried next pass.
+
+### Testing
+
+Four cases in `Tests/loadtest.lua`, asserting the item's **on-screen** width
+against the cell's rather than the raw scale number — the former is what the
+player sees, the latter is only a means to it.
+
+Both defects were confirmed by reintroducing each one separately:
+
+- Restoring the grid-space formula fails the three scale cases and **passes the
+  scale-1 case**, which is the proof that the old code was correct at scale 1
+  and that this is genuinely scale-specific.
+- Restoring the `false` latch fails only the retry case.
+
+`FitItem` also logs its numbers once per session (`CVBUFF: fit: base=… icon=…
+ours=… theirs=… -> scale=…`), so a wrong size on screen can be read back from
+disk instead of guessed at.
+
+**Unverified in game.** Built on branch `abundance-icon-scale`.
