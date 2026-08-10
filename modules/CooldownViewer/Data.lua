@@ -667,6 +667,18 @@ local function IsBuffCategory(categoryName)
     return false
 end
 
+--- Can a tracked buff actually be drawn right now?
+---
+--- Only Blizzard's own frames can show a buff in combat, so with that
+--- workaround switched off a buff placement has nothing to draw with and the
+--- cell would simply stay empty and silent. The picker therefore stops offering
+--- them. Mirrors BlizzBuffs:IsEnabled deliberately -- `nil` means ON, and
+--- reading this as a plain truth test would empty the buff list for every
+--- player who has never touched the setting.
+function Data.BuffsAvailable()
+    return ThugUI_Config.cvUseBlizzardBuffs ~= false
+end
+
 --- Check if a category name is included in any source in CATEGORIES_BY_SOURCE
 local function IsKnownCategory(categoryName)
     for _, categoryNames in pairs(CATEGORIES_BY_SOURCE) do
@@ -693,6 +705,11 @@ function Data.BuildSpellList(source, search)
     -- to track.
     local expand = (source == "buffs" or source == "all")
 
+    -- Withheld, not filtered out afterwards: a buff that cannot be drawn must
+    -- never be offered, in "buffs" or in "all". Only the buff categories are
+    -- affected -- essential, utility and spellbook are untouched.
+    local buffsAvailable = Data.BuffsAvailable()
+
     if source == "spellbook" then
         collect(SpellbookSpellIDs())
     elseif source == "all" then
@@ -704,16 +721,27 @@ function Data.BuildSpellList(source, search)
                         "Unrecognized CooldownViewerCategory '%s' in Enum", categoryName)
                 end
             end
-            collect(CooldownViewerSpellIDs(categoryName, IsBuffCategory(categoryName)))
+            local isBuff = IsBuffCategory(categoryName)
+            if buffsAvailable or not isBuff then
+                collect(CooldownViewerSpellIDs(categoryName, isBuff))
+            end
         end
         collect(SpellbookSpellIDs())
     else
+        local withheld = false
         for _, categoryName in ipairs(CATEGORIES_BY_SOURCE[source] or {}) do
-            collect(CooldownViewerSpellIDs(categoryName, expand))
+            if not buffsAvailable and IsBuffCategory(categoryName) then
+                withheld = true
+            else
+                collect(CooldownViewerSpellIDs(categoryName, expand))
+            end
         end
         -- A spec Blizzard has not categorised would otherwise show an empty
-        -- picker with no hint that another source would work.
-        if #ids == 0 then collect(SpellbookSpellIDs()) end
+        -- picker with no hint that another source would work. Not when the list
+        -- was withheld on purpose, though: answering "tracked buffs" with the
+        -- whole spellbook is worse than answering it with nothing and saying
+        -- why, which is what the picker does instead.
+        if #ids == 0 and not withheld then collect(SpellbookSpellIDs()) end
     end
 
     if search and search ~= "" then search = search:lower() else search = nil end

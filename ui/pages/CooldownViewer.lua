@@ -468,7 +468,19 @@ function Page:RefreshPicker()
     self.pickerList:SetHeight(math.max(#entries * ROW_HEIGHT, 1))
 
     if self.pickerEmpty then
-        self.pickerEmpty:SetShown(#entries == 0)
+        local empty = #entries == 0
+        -- An empty list has two very different causes. "Blizzard never
+        -- categorised this spec" is answered by trying another source; "you
+        -- turned the workaround off" is answered by turning it back on, and the
+        -- generic wording sends the player hunting for a problem that is not
+        -- there. This is the only place they would find out.
+        if empty and self.pickerSource == "buffs" and not Data.BuffsAvailable() then
+            self.pickerEmpty:SetText("Tracked buffs need |cffffd100Use Blizzard's buff frames|r, "
+                .. "which is switched off. Nothing else can draw a buff in combat.")
+        else
+            self.pickerEmpty:SetText("Nothing here. Try another source, or clear the search.")
+        end
+        self.pickerEmpty:SetShown(empty)
     end
 end
 
@@ -558,6 +570,11 @@ function Page:Build(host, panel)
     BuildPicker(host)
     BuildGrid(host)
     self:BuildInspector(host)
+
+    -- Built now rather than on the first click: it hangs off the config window
+    -- frame, which exists by the time a page is built, and building it once
+    -- here is what lets it be shown/hidden forever after.
+    if CV.BuffGuide then CV.BuffGuide:Ensure() end
 
     -- Preview switches itself off with the window; leaving a forced-visible
     -- overlay behind after closing settings would look like a bug.
@@ -745,22 +762,21 @@ function Page:BuildInspector(host)
                 ThugUI.CooldownViewer.BlizzBuffs:Refresh()
             end
             Apply()
+            -- Apply() only rebuilds the live viewer. The picker offers tracked
+            -- buffs only while this is on, so the list itself changes with the
+            -- tick and has to be re-read here.
+            Page:RefreshPicker()
         end,
     }
 
-    -- Said in the open, not just in the checkbox tooltip. A buff that is not in
-    -- one of Blizzard's two lists produces an empty cell and no error of any
-    -- kind, which is indistinguishable from the addon being broken -- and the
-    -- picker happily offers buffs that are in neither. This is the only place
-    -- the player can find that out.
-    misc:Note(
-        "Blizzard only hands over a buff it is already tracking. One placed here "
-        .. "draws in combat only if it is also in the game's "
-        .. "|cffffd100Tracked Buffs|r or |cffffd100Tracked Bars|r list "
-        .. "(Edit Mode, Cooldown Manager). Tracked Buffs gives an icon with a "
-        .. "timer; Tracked Bars gives an icon with its bar. In neither list "
-        .. "there is nothing to place, and the cell stays empty.",
-        { width = 260 })
+    -- This used to be a paragraph of grey text, and it was not enough. Blizzard
+    -- only hands over a buff it is already tracking, the picker happily offers
+    -- buffs that are in neither of the game's two lists, and the failure is
+    -- silent -- an empty cell looks exactly like a broken addon. The steps are
+    -- now a panel of their own with the screenshots to match; this is the way
+    -- in. ui/pages/CooldownViewerGuide.lua.
+    misc:Label("ENABLE BUFFS")
+    if CV.BuffGuide then CV.BuffGuide:CreateLink(misc) end
 
     misc:Gap(10)
     misc:Button{

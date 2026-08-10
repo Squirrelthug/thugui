@@ -70,6 +70,12 @@ modules\SecretProbe.lua
 
 # Pages for the config window. Each registers itself on load, so every module it
 # configures must already be defined above.
+#
+# The buff workaround guide is a panel hung off the config window, not a page:
+# it defines CV.BuffGuide at file scope and the Cooldown Viewer page builds its
+# link from it, so it has to load before that page (and after ui\Widgets.lua,
+# whose AttachTooltip it uses).
+ui\pages\CooldownViewerGuide.lua
 ui\pages\CooldownViewer.lua
 ui\pages\OrbAnchors.lua
 ui\pages\FrameHider.lua

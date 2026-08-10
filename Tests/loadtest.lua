@@ -1381,6 +1381,136 @@ if failures == 0 and ThugUI.CooldownViewer then
             profile.anchorCol = 5
             assert(Data.ResolveCollapseDirection(profile) == "left", "dead centre should fall to left")
         end },
+
+        -- A tracked buff can only reach a cell through Blizzard's own frame, so
+        -- with that workaround off there is nothing a buff placement could ever
+        -- draw. Offering one anyway produces a cell that stays empty and says
+        -- nothing, which is the exact failure this whole feature is about.
+        { "buff categories are withheld while the workaround is off", function()
+            local restore = ThugUI_Config.cvUseBlizzardBuffs
+            ThugUI_Config.cvUseBlizzardBuffs = false
+            Data.InvalidateCooldownInfoCache()
+
+            local buffs = Data.BuildSpellList("buffs", nil)
+            assert(#buffs == 0,
+                ("the tracked buffs source still offered %d entries"):format(#buffs))
+
+            local inAll = {}
+            for _, entry in ipairs(Data.BuildSpellList("all", nil)) do
+                inAll[entry.spellID] = true
+            end
+            -- 9001 exists only in TrackedBuff; 5101 only as a TrackedBar linked
+            -- buff. Both are unreachable by any other route, so either one
+            -- surviving means a buff category was still read.
+            assert(not inAll[9001], "a TrackedBuff entry survived in 'all'")
+            assert(not inAll[5101], "a TrackedBar linked buff survived in 'all'")
+
+            ThugUI_Config.cvUseBlizzardBuffs = restore
+        end },
+
+        -- nil means ON -- the module's IsEnabled reads `~= false`. Getting this
+        -- backwards silently empties the picker for a player who has never
+        -- touched the setting, which is most of them.
+        { "buff categories are offered when the setting is on or unset", function()
+            local restore = ThugUI_Config.cvUseBlizzardBuffs
+
+            for _, state in ipairs({ "on", "unset" }) do
+                ThugUI_Config.cvUseBlizzardBuffs = (state == "on") and true or nil
+
+                local inBuffs = {}
+                for _, entry in ipairs(Data.BuildSpellList("buffs", nil)) do
+                    inBuffs[entry.spellID] = true
+                end
+                assert(inBuffs[9001],
+                    ("a tracked buff was missing with the setting %s"):format(state))
+
+                local inAll = {}
+                for _, entry in ipairs(Data.BuildSpellList("all", nil)) do
+                    inAll[entry.spellID] = true
+                end
+                assert(inAll[5101],
+                    ("a linked buff was missing from 'all' with the setting %s"):format(state))
+            end
+
+            ThugUI_Config.cvUseBlizzardBuffs = restore
+        end },
+
+        { "the other picker sources are untouched by the buff setting", function()
+            local restore = ThugUI_Config.cvUseBlizzardBuffs
+            local sources = { "essential", "utility", "spellbook" }
+
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local before = {}
+            for _, source in ipairs(sources) do
+                before[source] = #Data.BuildSpellList(source, nil)
+                assert(before[source] > 0, "setup: source " .. source .. " was already empty")
+            end
+
+            ThugUI_Config.cvUseBlizzardBuffs = false
+            for _, source in ipairs(sources) do
+                assert(#Data.BuildSpellList(source, nil) == before[source],
+                    ("source %s changed when the buff setting did"):format(source))
+            end
+
+            ThugUI_Config.cvUseBlizzardBuffs = restore
+        end },
+
+        -- The guide panel. Built once with the page and shown/hidden after --
+        -- never rebuilt, never SetParent(nil)'d.
+        { "the buff workaround guide builds hidden and toggles", function()
+            local BuffGuide = ThugUI.CooldownViewer.BuffGuide
+            assert(BuffGuide, "the guide module did not load")
+
+            local panel = BuffGuide:Ensure()
+            assert(panel, "the guide panel was not built")
+            assert(not panel:IsShown(), "the guide panel started visible")
+
+            BuffGuide:Toggle()
+            assert(panel:IsShown(), "the guide did not open on click")
+            assert(BuffGuide:Ensure() == panel,
+                "the guide built a second panel instead of reusing the first")
+
+            BuffGuide:Toggle()
+            assert(not panel:IsShown(), "the guide did not close again")
+        end },
+
+        -- Hovering is where the popout code actually runs; building the panel
+        -- never touches it.
+        { "hovering a step opens its screenshot, and step 1 opens none", function()
+            local BuffGuide = ThugUI.CooldownViewer.BuffGuide
+            BuffGuide:Ensure()
+
+            BuffGuide:ShowShot(BuffGuide.rows[2], BuffGuide.STEPS[2])
+            assert(BuffGuide.popout and BuffGuide.popout:IsShown(),
+                "the screenshot popout did not open")
+
+            BuffGuide:ShowShot(BuffGuide.rows[1], BuffGuide.STEPS[1])
+            assert(not BuffGuide.popout:IsShown(),
+                "a step with no screenshot still opened a popout")
+
+            BuffGuide:HideShot()
+        end },
+
+        -- A key that does not exist draws a blank frame in game and reports
+        -- nothing anywhere, so a typo would only ever be found by the player.
+        { "every screenshot a guide step names exists", function()
+            local BuffGuide = ThugUI.CooldownViewer.BuffGuide
+            local shots, guideSteps = BuffGuide.SHOTS, BuffGuide.STEPS
+            assert(shots and guideSteps, "the guide did not expose its tables")
+
+            local named = 0
+            for i, step in ipairs(guideSteps) do
+                for _, key in ipairs(step.shots or {}) do
+                    local shot = shots[key]
+                    assert(shot, ("step %d names a screenshot that does not exist: %s")
+                        :format(i, tostring(key)))
+                    assert(shot.file and shot.u and shot.v and shot.aspect,
+                        ("screenshot %s is missing its file or crop"):format(key))
+                    named = named + 1
+                end
+            end
+            assert(named > 0, "no step named a screenshot at all")
+        end },
     }
 
     for _, step in ipairs(steps) do
