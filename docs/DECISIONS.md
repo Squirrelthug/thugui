@@ -924,3 +924,106 @@ ours=… theirs=… -> scale=…`), so a wrong size on screen can be read back f
 disk instead of guessed at.
 
 **Unverified in game.** Built on branch `abundance-icon-scale`.
+
+## 18. The layout and the collapse must agree on where the cursor is
+
+Symptom: on the resto druid the columns collapsed **upwards, away from the
+cursor**; on the rogue, with what looked like the same settings, they collapsed
+down towards it. The player's own diagnosis was exactly right — "it thinks the
+cursor is above" — and it was true of the collapse only, not the layout.
+
+Two functions decide the same fact with different comparisons.
+
+`CV:FollowCursor` places the shape (`Core.lua`):
+
+```lua
+local gapY = (profile.anchorRow or 0) >= Data.GRID_ROWS / 2 and gap or -gap
+```
+
+`Data.ResolveCollapseAxes` packs it "towards the cursor":
+
+```lua
+local autoDown = (profile.anchorRow or 0) > Data.GRID_ROWS / 2   -- was strict
+```
+
+`>=` against `>`. At `anchorRow == 5` on a 10-row grid they disagree: the layout
+nudges the shape **above** the pointer, and the collapse then packs it **up**,
+away from it. Both axes had it; only the axis that landed on the boundary
+misbehaved, which is why one spec looked broken and another did not.
+
+The player's profiles made it look like a difference between specs:
+
+| | anchorRow | `>= 5` (layout) | `> 5` (collapse) | |
+|---|---|---|---|---|
+| Resto | **5** | above cursor | packs up | **disagree** |
+| Outlaw | 6 | above cursor | packs down | agree |
+
+Outlaw was correct by being one row clear of the boundary, not by being
+configured differently. Nothing was wrong with saving or loading the profile —
+that was checked first, and `anchorCol=3, anchorRow=5` on disk matched the
+picker exactly.
+
+### Which comparison is right
+
+**The layout is the source of truth.** It decides where the shape physically
+sits; "towards the cursor" is only meaningful relative to that. So the collapse
+was changed to match the layout, not the other way round.
+
+The midpoint is a real anchor position rather than a rounding artefact — the
+grid is 10×10, so intersection 5 is dead centre and is exactly what a player
+gets by aiming at the middle of the picker. It is not a rare edge case.
+
+### A test was changed, not just added
+
+`auto direction follows the anchor` asserted `dead centre should fall to left`.
+That recorded the tie-break of the old strict `>`, and this change deliberately
+reverses it to `right`. Dead centre was never genuinely ambiguous: the layout
+had already committed to putting the shape left of the pointer there, so the old
+answer was the layout's opposite. Called out here because a changed assertion is
+much easier to miss in review than an added one.
+
+Two cases were added that assert the two functions **against each other** rather
+than against a hardcoded direction, so a future change to either comparison
+fails rather than silently reintroducing the split. Reverting the fix fails
+exactly those two plus the changed one.
+
+### The boundary was a symptom; the rule itself was wrong
+
+Fixing the comparison made the player's profile behave, but only by making a bad
+rule land right. The rule asked **where the anchor sits on the grid**, which is
+merely a proxy for **where the shape sits relative to the anchor** — the thing
+"pack towards the cursor" actually depends on. The two part company as soon as a
+shape is not roughly opposite the anchor across grid centre:
+
+> `anchorRow = 7`, icons at rows 8 and 9. They are below the cursor, so towards
+> it is **up**. The midpoint test says `7 >= 5` and packs **down**, away.
+
+That case is wrong under the `>=` fix too, so the comparison was never the whole
+story.
+
+`auto` now reads the placements. `CV:FollowCursor` offsets the container by
+`anchorRow * cellH`, which makes intersection R the bottom edge of cell row R:
+a cell at or before the anchor is above the cursor, one after it is below, and
+the same holds on x. That is exact, not a heuristic. The bulk of the occupied
+cells decides the axis, and packing towards the cursor is the opposite of where
+the bulk lies.
+
+Tie-breaks, both of which are genuine judgement rather than derivable:
+
+- **An even straddle** — equal cells either side — falls back to the old
+  grid-midpoint test.
+- **An empty grid** does the same, since there is no shape to read.
+
+### One source of truth
+
+`Data.ResolveAutoAxes` is now the only place this is derived, and both the
+collapse *and* `CV:FollowCursor`'s gap nudge call it. Two functions deriving the
+same fact separately is what caused the original split, so the fix is not just
+matching the comparisons but removing the second derivation entirely. A test
+asserts the two agree, so re-inlining the test in either place fails.
+
+**This changes behaviour on existing profiles** wherever the placements disagree
+with the old grid-centre guess. That was accepted deliberately: the old answer
+was wrong in those cases, it just was not always visible.
+
+**Unverified in game.** Built on branch `collapse-anchor-boundary`.

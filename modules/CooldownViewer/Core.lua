@@ -898,9 +898,16 @@ function CV:UpdateCursorPosition()
     -- Nudge the whole shape away from the cursor along the diagonal that points
     -- from the anchor towards the shape's bulk, so the icons never sit under
     -- the pointer itself.
+    --
+    -- Same source as the collapse, on purpose. This decides which side of the
+    -- pointer the shape sits on and the collapse packs it back towards the
+    -- pointer; when the two derived that separately they disagreed, and the
+    -- shape was nudged above the cursor while its columns closed upwards, away
+    -- from it. DECISIONS.md 18. Do not inline the test again here.
     local gap = CURSOR_GAP / scale
-    local gapX = (profile.anchorCol or 0) >= Data.GRID_COLS / 2 and -gap or gap
-    local gapY = (profile.anchorRow or 0) >= Data.GRID_ROWS / 2 and gap or -gap
+    local packRight, packDown = Data.ResolveAutoAxes(profile)
+    local gapX = packRight and -gap or gap
+    local gapY = packDown and gap or -gap
 
     f:ClearAllPoints()
     f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT",
