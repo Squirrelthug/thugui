@@ -9,6 +9,37 @@ buff is recast; Blizzard's Cooldown Manager is no longer damaged by us. Sessions
 116–117 are clean. Treat that whole feature as working code, not as an
 investigation in progress.
 
+## Read this first: there is one open thread
+
+The last batch of work shipped **four changes that no one has yet seen in the
+game**, and one of them is a fix for a bug the player reported and has not
+confirmed fixed. Nothing here is verified in game. Do not let a later reader
+assume otherwise, and do not mark any of it verified yourself — only the player
+can do that.
+
+**The unfinished job, in one line:** the player placed **Opportunity** in
+`aura` mode, it vanished from Blizzard's default tracked-buff bar (so ThugUI
+adopted it) and never appeared in the grid. The cause was found and fixed —
+`DECISIONS.md` §13, "That invariant was stated here and not actually enforced" —
+but the fix is proven only in the test harness.
+
+**What to do about it, in order:**
+
+1. Ask the player to `/reload`, set Opportunity to **"show while buff active"**
+   (it was last saved as `mode=proc`, so the adoption path will not even run
+   otherwise), fight something, and `/reload` again to flush the log.
+2. Read `ThugUI_DebugLog`. It now says which stage failed instead of going
+   quiet — see §1.
+3. **A second fault is still unexplained.** In the session of 2026-08-10
+   02:30:21, `BlizzBuffs` demonstrably adopted an item, yet the
+   `blizzbuffs-adopted` line at the bottom of `BB:Apply` never fired all
+   session. Something in `Apply` was failing partway through, every pass, and a
+   bare `pcall` was discarding the error. That `pcall` now records the message
+   (`CVBUFF: Apply failed: …`). **If that line appears in the next log, that is
+   the answer to a question this project has not been able to ask.** It may or
+   may not be related to the Opportunity bug; treat them as separate until the
+   evidence joins them.
+
 The table in §2 is still the honest map: it separates what has been **confirmed
 in the running game** from what is only **correct in code**. Keep it that way —
 saying which of the two a thing is in, out loud, is what stopped a wrong
@@ -32,6 +63,16 @@ WTF/Account/SQUAZZIL/SavedVariables/!BugGrabber.lua   errors, stacks, locals
   migration results, once-only warnings)
 - `state` — snapshot taken at logout, listing every placed icon as
   `cell  name  id=  mode=  linked=N  cat=`
+- `CVBUFF:` lines — what Blizzard's buff-item adoption did. Added 2026-08-09
+  because its failures used to be silent:
+
+  | Line | Means |
+  |---|---|
+  | `adopted N Blizzard buff item(s)` | it worked, N cells are carrying a Blizzard item |
+  | `no Blizzard buff item frames found` | the Cooldown Manager itself has nothing to adopt |
+  | `spell X: no matching item frame — buff is not in Tracked Buffs or Tracked Bars` | **the common one, and the player can fix it.** The buff must be in one of the game's two active lists |
+  | `spell X: no Cooldown Manager entry` / `entry has no cooldown ID` | our lookup failed, not the player's settings |
+  | `Apply failed: …` | `BB:Apply` threw. See the open thread above — this line has never yet been seen and is expected to be informative |
 
 **`linked=N` is the field that matters.** It is evidence of which code actually
 ran. A version string tells you what is on disk; that number tells you what
@@ -62,6 +103,9 @@ wrong" from "they were on an older build".
 | Columns / both collapse | **Unverified in game** |
 | Window layout reorganisation | **Unverified visually** |
 | Always-on diagnostics | **Verified, after two faults were fixed** — see §3a |
+| Category iteration for 12.1 (`Data.lua`) | **Unverified in game** — no client has the new categories yet, so the new-category path is proven only against a stub. The negative-fake filter *does* change behaviour on 12.0.7. `DECISIONS.md` §8 |
+| `BlizzBuffs` failure logging | **Unverified in game** — logging only, cannot change behaviour. `DECISIONS.md` §13 |
+| Adopted cell reserved regardless of `IsSpellAvailable` | **Unverified in game** — this is the Opportunity fix. Harness proves the cell is wanted and keeps its collapse slot; whether the buff draws in the right place, with its radial timer and stacks of 3 and 6, is unconfirmed. See the open thread above |
 
 Everything unverified has test coverage; tests prove it does not error and the
 logic is right, not that it looks right on screen.
@@ -249,17 +293,26 @@ than assumed — `C_CooldownViewer`'s only write is `SetLayoutData`, an opaque b
 holding the entire layout. `DECISIONS.md` §15 has why both routes are worse than
 the manual step.
 
-**Category enumeration for 12.1** — see `UPCOMING-PATCH.md`. Category names are
-hardcoded in three places and will silently drop the five new 12.1 categories.
+**Category enumeration for 12.1 — done 2026-08-09.** The three hardcoded
+category lists in `Data.lua` now iterate `Enum.CooldownViewerCategory`, so the
+five new 12.1 categories arrive for free. `DECISIONS.md` §8 for the design and
+for the runtime trap that came with it (Blizzard writes two negative fakes into
+that enum). `UPCOMING-PATCH.md` was re-verified against Blizzard's `ptr` source
+at the same time and several of its wiki-sourced claims were wrong; the
+corrected version is what to work from.
 
 ## 5. The player's current setup
 
 Four spec profiles exist. Outlaw (260) is the active testbed:
 
-- anchor col 3, row 6; collapse `columns`; padding 6
-- 8 icons, including Pistol Shot (185763) in `proc` mode and Roll the Bones
+- anchor col 1, row 6; collapse `columns`; padding 6
+- 10 icons, including Pistol Shot (185763) in `proc` mode and Roll the Bones
   (1214909) in `aura` mode — now drawn by Blizzard's adopted item and
   **confirmed working in combat**
+- **Opportunity (279876) at cell 6:4** is the one being worked on. Note the ID:
+  that is the *passive*, and the buff it grants is 195627. The Cooldown Manager
+  lists it as `TrackedBuff`, `cooldownID 93055`, `linked=1`, `isKnown=true`. It
+  was last saved as `mode=proc`; it needs to be `aura` for adoption to run at all
 - Druid 102 / 104 / 105 hold the migrated legacy bars
 - **Combo pips are on**, and the player moved the grid's cursor anchor further
   out to make room for them, having found the pips drew underneath the grid.

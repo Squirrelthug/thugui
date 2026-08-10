@@ -8,19 +8,23 @@ scramble.
 `docs/DECISIONS.md` or into code comments, delete this file, and start a fresh
 one for the patch after.
 
-Every entry needs a **source**. See `docs/SOURCES.md` for the vetted list; the
-two that matter most here are townlong-yak's build **Compare** view (diff the
-live build against the PTR one directly) and the `ptr` branch of
-`Gethe/wow-ui-source`. Do not record rumours.
+Every entry needs a **source**. See `docs/SOURCES.md`.
 
-As of 2026-08-08 townlong-yak carries **build 69189 (12.1.0) PTR**, so the diff
-against live is already available — that is the fastest way to extend this file.
+**Re-verified 2026-08-09 against Blizzard's own source**, not the wiki:
+`Gethe/wow-ui-source`, `ptr` @ `a520b6c` (12.1.0 build 69189, 2026-08-07) diffed
+against `live` @ `c878310` (12.0.7 build 68974). Several claims in the earlier
+wiki-sourced version of this file were wrong and are corrected below. Prefer the
+generated documentation in `Blizzard_APIDocumentationGenerated/` over the wiki
+for anything in this file — the wiki has been wrong about this exact system more
+than once.
 
 ---
 
 ## Cooldown Manager — new categories
 
-`Enum.CooldownViewerCategory` gains five values in 12.1.0:
+`Enum.CooldownViewerCategory` gains five values, confirmed from
+`CooldownViewerConstantsDocumentation.lua` on both branches (`NumValues` goes
+4 → 9):
 
 | Value | Field | |
 |---|---|---|
@@ -31,67 +35,114 @@ against live is already available — that is the fastest way to extend this fil
 | 7 | `EquipSlotEssential` | new |
 | 8 | `EquipSlotTracked` | new |
 
-*Source: warcraft.wiki.gg API_C_CooldownViewer.GetCooldownViewerCategorySet,
-"Added in 12.1.0".*
+**Handled already.** `modules/CooldownViewer/Data.lua` iterates the enum rather
+than naming categories, so all five are picked up for free by the cache, the
+probe dump and the "Everything" picker source. The curated source menu stays
+hand-written on purpose. Reasoning: `DECISIONS.md` §8.
 
-**Impact.** `modules/CooldownViewer/Data.lua` names its categories as literal
-strings in three places — `CATEGORY_BY_SOURCE`, `BuildCooldownInfoCache` and
-`DumpCooldownViewer`. New categories will be silently ignored.
+**Also handled: the enum carries two negative fakes at runtime**
+(`HiddenSpell`/`HiddenAura` on live, renamed `HiddenActive`/`HiddenPassive` on
+ptr). They are filtered by value. `DECISIONS.md` §8 has why this matters and why
+filtering by name would have broken on patch day.
 
-**Action when it lands:** iterate `Enum.CooldownViewerCategory` instead of
-hardcoding names, so a future patch adding a category is picked up for free.
-The picker's source dropdown should grow itself.
+Two cautions from the earlier version, re-checked:
 
-Two cautions:
-- `SpecAgnostic*` entries are presumably *not* per-spec, which breaks the
-  assumption behind the per-spec cache key in `Data.GetCooldownInfoForSpell`.
+- `SpecAgnostic*` entries are presumably not per-spec. The earlier note said this
+  "breaks the assumption behind the per-spec cache key" — **overstated.** The
+  cache is keyed by spec and rebuilt on spec change, so a spec-agnostic entry
+  sitting in it is merely rebuilt more often than necessary. Harmless. Do not
+  restructure `Data.GetCooldownInfoForSpell` for it.
 - `EquipSlot*` entries pair with the new `equipSlot` field and are trinkets
-  rather than spells. They may have no usable spellID at all — the same shape
-  of problem that hid Roll the Bones. Check `Data.PickerSpellIDFor` handles
-  them before exposing those categories.
-- `TrackedBuff` and `TrackedBar` are already read **together** as the one
-  "Tracked buffs" source — they are one pool to the player but not the same
-  data. Keep any new category paired with the source it belongs to rather than
-  adding a menu entry per enum value. See `DECISIONS.md` §8.
+  rather than spells, and `spellID` is now nilable (below). `Data.PickerSpellIDFor`
+  already falls back through `overrideSpellID` → `spellID` →
+  `overrideTooltipSpellID` → first linked ID and returns nil if all are absent,
+  so a trinket with no spell ID is dropped rather than crashing. **Verify that is
+  what we want** before exposing those categories — a silently dropped trinket is
+  the same failure shape as the Roll the Bones entry that went missing.
 
-## Cooldown Manager — new cooldown fields
+## Cooldown Manager — cooldown structure changes
 
-`CooldownViewerCooldown` gains in 12.1.0:
+From `CooldownViewerDocumentation.lua`, both branches:
 
-| Field | Type | Note |
-|---|---|---|
-| `overrideSpellID` | number? | **already used** by us |
-| `overrideTooltipSpellID` | number? | **already used** by us |
-| `equipSlot` | luaIndex? | trinket slot |
-| `buffSlot` | luaIndex? | |
-| `isInvisible` | boolean | |
+| Field | Change |
+|---|---|
+| `spellID` | **now nilable** — was non-nilable on live |
+| `spellCategoryID` | **new**, number, nilable — *not previously recorded here* |
+| `equipSlot` | new, luaIndex, nilable |
+| `buffSlot` | new, luaIndex, nilable |
+| `isInvisible` | new, bool, non-nilable |
+| `overrideSpellID`, `overrideTooltipSpellID` | **unchanged, present on both** |
 
-*Source: warcraft.wiki.gg API_C_CooldownViewer.GetCooldownViewerCooldownInfo.*
+**The wiki was wrong about the override fields.** It marks them as 12.1
+additions; they are in the generated docs on `live` too, which is why our 12.0.7
+code reads them and works. Do not "fix" that code on the strength of the wiki.
 
-**Note the wiki marks `overrideSpellID` / `overrideTooltipSpellID` as 12.1
-additions, yet our 12.0.7 code already reads them and works.** Either the
-annotation is wrong or they arrived early. Harmless — both reads are guarded —
-but do not "fix" that code on the strength of the wiki alone.
+### `isInvisible` — do not filter on it
 
-**`isInvisible`** looks like "in the data but should not be shown". Worth
-filtering in `Data.BuildSpellList` so hidden entries stay out of the picker.
-Verify what it actually means before relying on it.
+The earlier guess here was "in the data but should not be shown", with a note to
+verify. Verified, and the answer is **do nothing**.
 
-## Cooldown Manager — new source files on PTR
+Blizzard's own reads of it are hard-gated:
 
-`Gethe/wow-ui-source` `ptr` branch has files absent from `live`:
+```lua
+-- CooldownViewerSettingsConstants.lua
+-- DEBUG/TESTING constants slated for removal
+CDM_HIDE_INVISIBLE_ITEMS = false;
 
-- `CooldownViewerSecure.lua`
-- `CooldownViewerDraggedItemBase.lua` / `.xml`
-- `CooldownViewerEditAlertBase.lua` / `.xml`
-
-`CooldownViewerSecure.lua` is the one to read first — if any of the viewer moves
-into a secure/protected path, addon interaction with it may change. Read it
-before 12.1 goes live:
-
-```sh
-gh api "repos/Gethe/wow-ui-source/contents/Interface/AddOns/Blizzard_CooldownViewer/CooldownViewerSecure.lua?ref=ptr" --jq .content
+-- CooldownViewerSettings.lua
+local isInvisible = CDM_HIDE_INVISIBLE_ITEMS and cooldownInfo.isInvisible;
 ```
+
+With that constant `false`, `isInvisible` changes nothing in 12.1, and Blizzard
+flag the constant itself as debug code slated for removal. Filtering on the field
+would implement a behaviour the game does not have. Re-check on a later build.
+
+It carries no secret-value flags.
+
+## Cooldown Manager — the mechanism our buff icons depend on is safe
+
+**No `C_CooldownViewer` function and no `CooldownViewerCooldown` field gains a
+`SecretWhen*` flag on ptr.** Cooldown IDs stay plain readable numbers in combat.
+
+That is the load-bearing check: `DECISIONS.md` §13 works entirely by matching our
+placements to Blizzard's item frames on `cooldownID`. If that had gone secret the
+feature would be dead. It has not.
+
+`CooldownViewerSecure.lua` (new on ptr) defines
+`addonTable.CreateSecureAuraInstanceMap()` — a proxy over the viewer's internal
+aura-instance-to-frame map, marked `DisallowSecretKeys` and
+`DisallowTaintedAccess`. It is used only inside `CooldownViewer.lua`.
+`modules/CooldownViewer/BlizzBuffs.lua` never touches that table: it enumerates
+the item pool and matches on `item:GetCooldownID()`. Anchoring and scaling pooled
+items, and hooking `RefreshLayout` with `hooksecurefunc`, all still appear
+permitted. **Appear** — this is read from source, not run on a PTR client.
+
+The other two new files are cosmetic: `CooldownViewerDraggedItemBase` is the
+cursor-follow preview when dragging entries in settings,
+`CooldownViewerEditAlertBase` is the add/edit dialog for alerts.
+
+## Aura API — a new flag whose meaning is not documented
+
+`DECISIONS.md` §12 records an expectation that in 12.1 the index/slot/instanceID
+aura calls will **Lua error** rather than return secrets, and that the fallback
+list walk in `modules/CooldownViewer/Core.lua` is on borrowed time.
+
+What the source actually shows: a new flag, **`RequiresUnitAuraAccess = true`**,
+on 16 functions on `ptr` and on **zero** on `live` — including
+`GetAuraDataByIndex`, `GetAuraDataBySlot`, `GetAuraDataByAuraInstanceID`,
+`GetUnitAuraInstanceIDs`, `DoesAuraHaveExpirationTime`, `GetAuraDuration`,
+`IsAuraFilteredOutByInstanceID`. `GetUnitAuraBySpellID` and
+`GetPlayerAuraBySpellID` do **not** get it; they keep `RequiresNonSecretAura`.
+
+**The flag is real and new. What it does when unmet is not stated anywhere in
+Blizzard's source.** The name is consistent with the expectation, and by analogy
+`RequiresNonSecretAura` means "returns nothing at all" rather than "errors" —
+which would be the opposite of what §12 predicts. Do not record this as settled
+either way. It is a flag we found, not a behaviour we observed.
+
+**Answer it with the probe, not by reasoning.** `modules/SecretProbe.lua` already
+samples these calls every session and distinguishes readable / secret / nothing /
+error. One session on a 12.1 client answers it outright.
 
 ---
 
@@ -100,12 +151,21 @@ gh api "repos/Gethe/wow-ui-source/contents/Interface/AddOns/Blizzard_CooldownVie
 - [ ] Bump `## Interface:` in `ThugUI.toc`
 - [ ] `lua Tests/loadtest.lua .` — expect breakage in the stubbed APIs first
 - [ ] `/thugcv probe` on each played spec; diff against pre-patch output
-- [ ] Confirm the picker still lists everything it did before
+      (the dump is ordered by category value, so the diff stays readable)
+- [ ] Read `ThugUI_DebugLog.secrets` — the probe answers `RequiresUnitAuraAccess`
+      for free. Record what it actually did in `DECISIONS.md` §12
+- [ ] Confirm the picker still lists everything it did before, and that the five
+      new categories arrive through "Everything" without being named anywhere
+- [ ] Check the once-only "unrecognised category" log fired for the new
+      categories and **not** for the renamed negative fakes
+- [ ] Decide where `GroupBuff` / `SpecAgnostic*` / `EquipSlot*` belong in the
+      curated source menu — a product decision, not a code one (`DECISIONS.md` §8)
 - [ ] Confirm Roll the Bones still resolves through `linkedSpellIDs`
+- [ ] Confirm `BlizzBuffs` still adopts items — watch for `CVBUFF` lines naming a
+      failed stage, and for `DisallowTaintedAccess` errors
 - [ ] Re-check `isActive` / `isOnGCD` still exist and are non-secret
       (`DECISIONS.md` §5 — the whole readiness path rests on this)
-- [ ] Read `CooldownViewerSecure.lua` for protected-path changes
-- [ ] Iterate the category enum rather than naming categories
+- [ ] Re-check whether `isInvisible` is still inert (`CDM_HIDE_INVISIBLE_ITEMS`)
 - [ ] Re-check every entry in `docs/KNOWN-ISSUES.md` — especially whether
       `UnitPower` still returns a secret number
 - [ ] Re-check every entry in `docs/SOURCES.md` and update its last-checked date

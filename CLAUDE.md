@@ -134,6 +134,32 @@ Small fixes and obvious calls: just do them.
 - Never rebuild a UI page by destroying children with `SetParent(nil)`. That
   does not free a frame in WoW, it orphans it.
 
+## 4a. Delegating to execution agents
+
+Some work on this addon is done by separate, cheaper agents driven from written
+task files in `tasks/`, with a coordinator reviewing everything before it is
+committed. If you are that coordinator, read `tasks/README.md`; if you are an
+execution agent, your task file will have told you to read
+`tasks/00-AGENT-BRIEF.md` first.
+
+The rules that made it work, kept because each one caught something:
+
+- **Decide before delegating.** Task files carry the design decision already
+  made, with the reasoning. Agents execute; they do not choose.
+- **Review the diff, not the report.** Every claim an agent makes about a test
+  failing before its fix should be re-run. They have all been true so far, and
+  checking cost minutes.
+- **Agents do not edit `docs/` and do not run state-changing git commands.**
+  They draft doc entries into their report and leave work uncommitted. Both of
+  those exist so the record and the live addon folder stay under one pair of
+  hands.
+- **No report file means the task did not happen**, whatever the agent said.
+  That has already been the difference between "the fix didn't work" and "the
+  fix was never applied".
+- **Watch for tests being repurposed rather than added.** One agent rewrote an
+  existing regression case in place, changing what it asserted, and its report
+  described three cases added and none removed.
+
 ## 5. Git
 
 Commit messages explain the reasoning, not just the change — they are part of
@@ -173,6 +199,7 @@ Ones that actually apply here:
 | File | What it is |
 |---|---|
 | `docs/HANDOFF.md` | **Start here.** Where the work stands, verified vs not, what is queued |
+| `tasks/` | Delegation workflow: house rules for execution agents, numbered task files, and their reports. See `tasks/README.md` |
 | `CLAUDE.md` | This. How to work on the addon |
 | `docs/DECISIONS.md` | Why the addon is built the way it is. The reasoning log |
 | `docs/SOURCES.md` | Where trustworthy information comes from, with last-checked dates |

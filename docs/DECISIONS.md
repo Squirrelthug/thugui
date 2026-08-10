@@ -195,6 +195,56 @@ pure duplicate and must not be read. That was wrong, and the probe dump
 disproved it. Verify against `/thugcv probe` before trusting a claim about
 category contents.)*
 
+### The category list is derived; the source menu is not
+
+Added 2026-08-09, ahead of 12.1 adding five categories.
+
+`BuildCooldownInfoCache`, `DumpCooldownViewer` and the "Everything" picker source
+**iterate `Enum.CooldownViewerCategory`** instead of naming the four categories
+they used to. All three mean "whatever the Cooldown Manager has", so a category
+added by a patch belongs in them automatically. Hardcoded names do not fail
+loudly when a patch adds one — they just quietly lose entries, which is the same
+shape of silent loss that hid the Roll the Bones outcome buffs above.
+
+`CATEGORIES_BY_SOURCE` and `Data.SOURCES` stay **hand-written**, and that is not
+an oversight to finish tidying. Which categories a player-facing menu entry pools
+together is a product decision: `TrackedBuff` and `TrackedBar` are two categories
+deliberately presented as one "Tracked buffs" source, and a menu entry per enum
+value would undo exactly that. A category no source names yet stays reachable
+through "Everything", and is logged once so the next patch announces itself.
+
+### `Enum.CooldownViewerCategory` is not a clean enum at runtime
+
+This one cost a defect, and it is invisible from the generated documentation.
+
+`Blizzard_CooldownViewer/CooldownViewerSettingsConstants.lua` writes two fake
+entries into the enum at load:
+
+```lua
+--- These values aren't actually part of the enum
+--- They exist so that disabled states can be managed using the same category enums
+Enum.CooldownViewerCategory.HiddenSpell = -1;
+Enum.CooldownViewerCategory.HiddenAura = -2;
+```
+
+That file is the **first line of `Blizzard_CooldownViewer.toc`**, and that addon
+is the Cooldown Manager itself — not a load-on-demand settings panel. So both
+keys are present in every session on 12.0.7, and anything walking the enum sees
+them. Blizzard reads them back through `CooldownViewerUtil.IsDisabledCategory`;
+they are markers for "the player switched this off", not category sets.
+
+**Filter on the value, never the name.** They are renamed on the 12.1 PTR
+(`HiddenActive = -1`, `HiddenPassive = -2`), so a name blocklist would have
+broken at the patch — which is the exact failure the enum iteration exists to
+prevent. Real categories start at 0 and count up, and Blizzard's own comment
+promises the fakes never collide with them.
+
+Left unfiltered this did three things, all live on 12.0.7: two pointless
+`GetCooldownViewerCategorySet(-1)` calls per pass; a route for deliberately
+disabled spells to leak into the cache and the picker; and worst, it made the
+"new category appeared" log fire on day one, discrediting the signal before the
+patch it was built for ever arrived.
+
 ### Entries that stand for a set of spells
 
 Some entries represent several possible buffs rather than one aura. Roll the
@@ -481,6 +531,60 @@ scaled up.
 An adopted cell is **always reserved**, buff up or not, because we cannot ask
 whether it is up. With collapse on, that cell no longer closes. The alternative
 is a row sliding over a cell Blizzard may fill a moment later.
+
+### That invariant was stated here and not actually enforced
+
+Found 2026-08-09, from a buff that adopted correctly and never appeared.
+
+`CV:UpdateState` checked `IsSpellAvailable(spellName)` **before** the `adopted`
+branch. `IsSpellAvailable` resolves **by name** — which is deliberate, since a
+by-name lookup doubles as the talent check (§5) — and a name only resolves for a
+spell the player has as a castable.
+
+That is fine until the placement is not a castable. **Opportunity is placed under
+`279876`, the passive that grants buff `195627`**; the Cooldown Manager lists it
+under `TrackedBuff` as `cooldownID 93055`. The passive answers no by-name lookup,
+so `show = false` and the branch that reserves the cell was never reached — while
+`BlizzBuffs` had already anchored Blizzard's item to it. Adopted, drawn by
+Blizzard, and parked on a cell the layout had disowned. With collapse on it is
+worse than invisible: an icon that is not `wanted` is left out of the collapse
+pass, so it keeps its uncollapsed coordinate while every live cell slides away
+from it.
+
+Roll the Bones hid the problem for months because it is placed under `1214909`,
+the spell you actually cast.
+
+**`adopted` is now checked first.** The rule it encodes is the one this whole
+section rests on: when Blizzard's untainted code is already drawing the item, we
+have no standing to ask whether the spell exists. Their frame is the stronger
+authority and our by-name lookup was overriding it.
+
+Rejected, deliberately: widening `IsSpellAvailable` to fall back on the Cooldown
+Manager's own `isKnown` flag. It would fix this case too and may be right later,
+but it changes availability semantics for every placed icon in every mode,
+including the ones that work today. Not worth the blast radius for a bug with a
+one-branch cause.
+
+**Generalise: an availability check of your own must never outrank the engine's.**
+If Blizzard is rendering it, it exists.
+
+### A bare `pcall` around the main pass throws away the only evidence there is
+
+`BB:Refresh` wrapped `Apply` in `pcall(function() self:Apply() end)` and dropped
+the result. A caught error reaches neither `ThugUI_DebugLog` nor BugGrabber, so
+the failure was invisible from both files this project debugs from.
+
+It was hiding something real: in a session where adoption demonstrably happened,
+the `blizzbuffs-adopted` line at the bottom of `Apply` never fired, which means
+`Apply` was failing partway through every pass. Diagnosing an unrelated bug in
+that same function then took an argument by elimination across three files,
+because the one line that knew the answer had discarded it.
+
+`Refresh` now records the message once per distinct error, and the adoption loop
+logs **which stage** an icon failed at — no Cooldown Manager entry, no cooldown
+ID, or no matching item frame. That third one is the common case and the only one
+the player can act on: it means the buff is in neither of Blizzard's active
+lists. See the skill file's evidence loop; this is that rule, learned again.
 
 ### And it is not free
 

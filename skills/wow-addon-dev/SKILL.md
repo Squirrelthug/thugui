@@ -210,6 +210,46 @@ It cannot tell you an icon is in the right place or that the client delivers the
 event you expect. Say so out loud rather than letting "tests pass" imply more
 than it means.
 
+### Never let your own check outrank the engine's
+
+If the game is already rendering something, it exists. An addon-side "is this
+spell available / known / talented" test placed *in front of* a branch that
+defers to a Blizzard frame will veto reality.
+
+The concrete case: a by-name spell lookup used as a talent check (sound, and the
+right idiom) ran ahead of "is Blizzard already drawing this for us". It answers
+only for spells the player has as *castables* — so any placement backed by a
+**passive that grants a buff** failed it, and the addon hid a cell that Blizzard's
+own frame was actively drawing into. The equivalent castable-backed buff worked
+for months and hid the whole class of bug.
+
+Order the checks so the engine's evidence wins.
+
+### A bare `pcall` around your main pass is a hole in the evidence loop
+
+`pcall(function() self:DoThePass() end)` with the result dropped is worse than no
+guard: the error reaches neither your log nor the error grabber, because a caught
+error is not an error. You get a feature that silently half-works and no file on
+disk that knows why.
+
+Take both return values and log the message — **keyed on the message**, so a
+second distinct failure is not masked by the first, and once-only so a hook that
+fires every layout pass cannot flood the buffer. If a "we finished" line at the
+bottom of a function never appears while the function is demonstrably doing work,
+that is the shape of a throw in the middle being swallowed. Look for it.
+
+### An enum you iterate may not be only an enum
+
+Before replacing hardcoded names with a loop over `Enum.Something`, check whether
+any UI file *writes into* that table at runtime. Blizzard does this: the cooldown
+viewer injects two negative pseudo-values for "disabled" states, with a source
+comment admitting they "aren't actually part of the enum". They are present in
+every session, and they are renamed between builds.
+
+Filter by value, not by name — the values are stable and documented, the names
+are neither. And guard `type(value) == "number"`, since companion metadata can
+share the namespace.
+
 ## Traps that cost real time
 
 - **`SetParent(nil)` does not free a frame.** It orphans it. Pool and reuse
