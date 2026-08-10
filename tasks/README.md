@@ -51,6 +51,20 @@ Worth keeping, because each cost something:
 - **Re-run the "it fails before my fix" claim.** Every agent that made it was
   telling the truth, and verifying took a minute each.
 
+## Batch 2 — the adopted cell would not collapse — COMPLETE
+
+| # | Task | Outcome |
+|---|---|---|
+| 06 | An adopted cell must collapse when the buff is down | Clean. Executed as specified, no test deleted, and it found something the task file had missed — see below. **Verified in game** by the player |
+
+The agent checked the task's own citation against Blizzard's source and found
+`CooldownViewerItemMixin:ShouldBeShown` returns `true` early unless the viewer's
+**Hide When Inactive** Edit Mode setting is on, which the coordinator had not
+accounted for. It does not change the fix, but it is the difference between the
+column closing and not. Blizzard's preset layouts default that setting to `1`.
+**An agent that verifies the brief's citation instead of trusting it is doing the
+job properly** — that finding was worth more than the code.
+
 ## Next batch — nothing written yet, on purpose
 
 The open thread is in `docs/HANDOFF.md`, "Read this first". It needs the player

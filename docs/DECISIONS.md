@@ -591,6 +591,48 @@ lists. See the skill file's evidence loop; this is that rule, learned again.
 Touching those frames appears to break Edit Mode — see `KNOWN-ISSUES.md`,
 "Edit Mode cooldown windows vanish". That is the open thread as of this writing.
 
+### Their frame's visibility is the buff state we were told we could not have
+
+For a while the adopted cell was reserved permanently, buff up or not, on the
+stated grounds that an addon cannot ask whether a buff is active. §12 proves
+that about the *aura APIs*, and it is still true of them. It was quietly
+generalised into "we cannot know", and that was wrong.
+
+Blizzard's item hides itself when the buff drops —
+`CooldownViewerItemMixin:UpdateShownState` calls `SetShown(self:ShouldBeShown())`
+— and **reading a frame's shown state is not reading an aura**. It is an ordinary
+widget query on a frame we are already allowed to read. So the answer was
+sitting in the frame we had adopted the whole time.
+
+`CV:UpdateState` now asks three sources in descending order of authority, and
+the order is the design:
+
+1. `BB:ItemIsShown(item)` — Blizzard's own answer, when readable.
+2. `ResolveAura(icon)` — truthful out of combat, blind during it.
+3. Reserve the cell.
+
+`ItemIsShown` returns `true`, `false`, or **`nil` for "cannot tell"**. Three
+states, not two, and the third is the whole point: "hidden" and "unknown" need
+opposite handling. Step 3 is a safety property rather than a convenience —
+collapsing a cell whose buff is actually up leaves Blizzard's item anchored to
+our now-hidden icon, drawing at a stale coordinate on top of a neighbour. Unsure
+must mean "keep the slot".
+
+The secret screen inside `ItemIsShown` is not defensive noise. That boolean
+descends from `CooldownViewerBuffItemMixin:IsExpired`, which compares
+`auraData.expirationTime <= GetTime()`, and `expirationTime` is secret in combat.
+Whether the derived boolean reaches us secret was unmeasured, so `BB:Apply` logs
+it once per session **per combat state** — combat is in the key, because an
+out-of-combat line logged first would suppress the only line worth having. That
+is the `GetPlayerCastAura` `Note` lesson, learned a second time.
+
+**The general shape, worth carrying to any similar problem:** when the game
+refuses to tell an addon a fact, check whether Blizzard's own UI has already
+rendered that fact into something an addon *is* allowed to read. Their frames are
+computed by untainted code from data we cannot touch, and their geometry and
+visibility are readable. That is a legitimate channel, and it needs no taint and
+no guessing.
+
 ## 14. Odds and ends worth not rediscovering
 
 - **`GetProfile` must refuse specID 0/nil.** Called before spec data loads, it

@@ -105,7 +105,9 @@ wrong" from "they were on an older build".
 | Always-on diagnostics | **Verified, after two faults were fixed** — see §3a |
 | Category iteration for 12.1 (`Data.lua`) | **Unverified in game** — no client has the new categories yet, so the new-category path is proven only against a stub. The negative-fake filter *does* change behaviour on 12.0.7. `DECISIONS.md` §8 |
 | `BlizzBuffs` failure logging | **Unverified in game** — logging only, cannot change behaviour. `DECISIONS.md` §13 |
-| Adopted cell reserved regardless of `IsSpellAvailable` | **Unverified in game** — this is the Opportunity fix. Harness proves the cell is wanted and keeps its collapse slot; whether the buff draws in the right place, with its radial timer and stacks of 3 and 6, is unconfirmed. See the open thread above |
+| Adopted cell reserved regardless of `IsSpellAvailable` | **Verified in game** 2026-08-09 — the Opportunity fix. The buff draws in its cell |
+| Adopted cell collapses when the buff is down | **Verified in game** 2026-08-09 — player confirmed the column now closes. `DECISIONS.md` §13 |
+| Is Blizzard's `IsShown()` readable in combat? | **Measured but unread** — `BB:Apply` logs `blizzbuffs-shown-readable-<combat>` once per session per combat state. Read it before assuming either way |
 
 Everything unverified has test coverage; tests prove it does not error and the
 logic is right, not that it looks right on screen.
@@ -226,9 +228,14 @@ The plan that got here, for the record:
 3. ~~Fall back to flagging the icons as combat-unavailable~~ — not needed.
 4. ~~**Combo point pips**~~ — built and verified, and they track live in combat.
 
-**The remaining cost:** with collapse on, an adopted cell is now always
-reserved, buff up or not, because we cannot ask whether it is up. And Edit Mode
-breaks — §3c.
+**The former remaining cost, now fixed:** an adopted cell used to be reserved
+permanently, buff up or not, so a column holding one never closed. The premise
+was wrong — Blizzard's item hides itself when the buff drops, and reading a
+frame's shown state is not reading an aura. `CV:UpdateState` now asks their frame
+first, our aura lookup second, and reserves only when neither can answer.
+**Verified in game 2026-08-09** by the player: the buff draws and the column
+collapses. `DECISIONS.md` §13, "Their frame's visibility is the buff state we
+were told we could not have". And Edit Mode breaks — §3c.
 
 ## 3c. Edit Mode windows vanish — CLOSED 2026-08-09
 

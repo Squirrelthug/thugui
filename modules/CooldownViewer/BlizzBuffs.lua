@@ -77,6 +77,26 @@ local baseWidth     = setmetatable({}, weak)  -- item   -> unscaled width, or fa
 local homeAnchor    = setmetatable({}, weak)  -- item   -> the anchor Blizzard gave it
 local iconStrata    = setmetatable({}, weak)  -- our icon -> strata before we lowered it
 
+--- Combat, or test mode standing in for it. Mirrors the identical helper in
+--- Core.lua rather than reaching for it: that one is file-local, and both halves
+--- of the addon have to agree about what "in combat" means or the measurement
+--- below would be keyed on a different answer from the decision it measures.
+local function InCombat()
+    local ER = ThugUI.EssentialRings
+    if ER and ER.IsInCombat then return ER:IsInCombat() end
+    return InCombatLockdown() or UnitAffectingCombat("player")
+end
+
+--- "Name (ID n)" for the log lines, falling back to the bare ID. A placement
+--- can point at a passive, which answers no by-name lookup and so has no
+--- spellName -- Opportunity 279876 is exactly that case.
+local function SpellLabel(icon)
+    if icon.spellName then
+        return ("%s (ID %s)"):format(tostring(icon.spellName), tostring(icon.spellID))
+    end
+    return ("ID %s"):format(tostring(icon.spellID))
+end
+
 function BB:IsEnabled()
     -- On by default: this is the only thing that makes an aura-mode icon work
     -- in combat at all. The switch exists because every other Blizzard-facing
@@ -221,6 +241,42 @@ function BB:AdoptedItem(icon)
     return self.adopted[icon]
 end
 
+--- Is Blizzard's item currently on screen? true, false, or NIL FOR "cannot tell".
+---
+--- Three states, not two, and the third is the point. Blizzard's own code hides
+--- the item when the buff drops, so its shown state IS the answer to "is the
+--- buff up" -- the one question an addon cannot ask directly (DECISIONS.md §12).
+--- But when we cannot read it, "hidden" and "unknown" need opposite handling:
+--- unknown must reserve the cell, because collapsing a cell whose buff is
+--- actually up leaves their item anchored to our hidden icon, drawing at a stale
+--- coordinate on top of a neighbour. A boolean return would merge those two.
+---
+--- Read-only, deliberately. Reading a Blizzard frame is free; writing to one is
+--- what killed the cooldown viewer for a session (DECISIONS.md §15).
+---
+--- The secret screen is not defensive noise. CooldownViewerItemMixin:UpdateShownState
+--- calls SetShown(self:ShouldBeShown()), and for a buff item that boolean
+--- descends from CooldownViewerBuffItemMixin:IsExpired, which compares
+--- auraData.expirationTime <= GetTime(). expirationTime is secret in combat, and
+--- this project has already measured secrecy propagating through operations
+--- (ThugUI_DebugLog.secrets: EvaluateColorValue(secret bool) -> SECRET number).
+--- So IsShown() may well hand us a secret boolean mid-fight. Whether it actually
+--- does is unmeasured -- BB:Apply now logs it -- and either answer is handled
+--- here without a further change.
+function BB:ItemIsShown(item)
+    if not item or not item.IsShown then return nil end
+
+    local ok, shown = pcall(item.IsShown, item)
+    if not ok then return nil end
+
+    -- No screening function means we cannot prove the value is safe to touch,
+    -- so we decline to trust it rather than compare and hope.
+    if not issecretvalue then return nil end
+    if issecretvalue(shown) then return nil end
+
+    return shown and true or false
+end
+
 --- Give everything back and forget it.
 function BB:Release()
     if not next(self.adopted) and not next(self.taken) and not next(self.lowered) then
@@ -288,9 +344,30 @@ function BB:Apply()
                 self.adopted[icon] = item
                 stillTaken[item] = true
                 count = count + 1
+
+                -- The measurement behind the collapse decision in
+                -- CV:UpdateState. Whether Blizzard's IsShown() survives combat
+                -- as a plain boolean decides whether an adopted cell can ever
+                -- collapse accurately mid-fight, or must always be reserved;
+                -- today we reserve on a guess. One item per pass, not all ten.
+                --
+                -- Combat is in the KEY, not just the message. An out-of-combat
+                -- line logged first would otherwise suppress the in-combat one,
+                -- which is the single line this exists to produce -- the same
+                -- mistake already made and fixed in Core.lua's GetPlayerCastAura.
+                if count == 1 and ThugUI.Diagnostics then
+                    local inCombat = InCombat()
+                    local shown = self:ItemIsShown(item)
+                    ThugUI.Diagnostics:LogOnce(
+                        ("blizzbuffs-shown-readable-%s"):format(tostring(inCombat)),
+                        "CVBUFF", "spell %s: item IsShown %s (combat=%s)",
+                        SpellLabel(icon),
+                        shown == nil and "unreadable" or ("readable = " .. tostring(shown)),
+                        tostring(inCombat))
+                end
             else
                 if ThugUI.Diagnostics then
-                    local spellStr = icon.spellName and ("%s (ID %s)"):format(tostring(icon.spellName), tostring(icon.spellID)) or ("ID %s"):format(tostring(icon.spellID))
+                    local spellStr = SpellLabel(icon)
                     if not info then
                         ThugUI.Diagnostics:LogOnce(("blizzbuffs-no-info-%s"):format(tostring(icon.spellID)), "CVBUFF",
                             "spell %s: no Cooldown Manager entry", spellStr)

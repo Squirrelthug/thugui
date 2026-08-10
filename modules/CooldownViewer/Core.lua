@@ -347,6 +347,37 @@ local function ResolveAura(icon)
     return nil
 end
 
+--- Should a cell whose buff is drawn by Blizzard's own item keep its slot?
+---
+--- Three sources, in descending order of authority. The order IS the design:
+---
+---  1. Blizzard's item frame. It hides itself when the buff drops, so its shown
+---     state is the answer -- when we are allowed to read it. Their code is
+---     untainted and can see what ours cannot.
+---  2. Our own aura lookup. Truthful out of combat, blind during it
+---     (RequiresNonSecretAura), so it only gets a say when it can see.
+---  3. Reserve the cell.
+---
+--- Step 3 is a safety property, not a convenient fallback. Collapsing a cell
+--- whose buff is actually up leaves Blizzard's item anchored to our now-hidden
+--- icon, drawing at a stale coordinate on top of a neighbour. Reserving when
+--- unsure is the difference between a gap nobody wanted and a broken UI.
+---
+--- CV.BlizzBuffs rather than the caller's self.BlizzBuffs: both name the same
+--- table (BlizzBuffs.lua assigns onto ThugUI.CooldownViewer, which is this
+--- file's CV upvalue), and a file-local helper has no self.
+local function AdoptedCellWanted(icon, item)
+    local shown = CV.BlizzBuffs and CV.BlizzBuffs:ItemIsShown(item)
+    if shown ~= nil then return shown end
+
+    -- In combat the by-ID aura lookups return nothing at all
+    -- (RequiresNonSecretAura), so "no aura" and "cannot see the aura" are the
+    -- same answer here. Keep the slot.
+    if InCombat() then return true end
+
+    return ResolveAura(icon) ~= nil
+end
+
 -- ----------------------------------------------------------------------------
 -- Geometry
 -- ----------------------------------------------------------------------------
@@ -666,16 +697,17 @@ function CV:UpdateState()
         -- Resolved once: "proc" mode gates on it and the glow visual uses it.
         local procced = ShouldGlow(icon)
 
-        -- A cell whose buff is drawn by Blizzard's own item frame. Ours stays
-        -- in the layout -- the Blizzard item is anchored to it, and with
-        -- collapse on, a cell that stopped being "wanted" would slide the rest
-        -- of the row over the top of it -- but it draws nothing itself.
+        -- A cell whose buff is drawn by Blizzard's own item frame. Ours holds
+        -- the slot -- the Blizzard item is anchored to it, so with collapse on,
+        -- a cell that stops being "wanted" while the buff is still up slides the
+        -- rest of the row over the top of it -- but it draws nothing itself.
         --
-        -- The cell is therefore reserved whether or not the buff is up, which
-        -- is a real behaviour change from the aura path: that one collapses the
-        -- cell when the buff drops. It is the price of not being able to ask
-        -- whether the buff is up. Blizzard's item hides itself, so the cell
-        -- goes empty rather than stale.
+        -- Whether the cell is reserved is now asked rather than assumed. It used
+        -- to be an unconditional yes, on the belief that we can never know if
+        -- the buff is up -- true in combat, false out of it, and the player's
+        -- column consequently never closed even at rest. AdoptedCellWanted asks
+        -- Blizzard's frame first, our aura lookup second, and reserves the slot
+        -- when neither can answer.
         --
         -- Adoption outranks our own IsSpellAvailable check. When Blizzard's
         -- untainted code is drawing the item, we have no standing to ask whether
@@ -685,7 +717,7 @@ function CV:UpdateState()
         local adopted = self.BlizzBuffs and self.BlizzBuffs:AdoptedItem(icon)
 
         if adopted then
-            show = true
+            show = AdoptedCellWanted(icon, adopted)
             icon.tex:SetAlpha(0)
             icon.cooldown:Clear()
             icon.count:Hide()

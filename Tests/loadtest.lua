@@ -1520,6 +1520,26 @@ if failures == 0 and ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs 
     local item = NewFrame()
     item.GetCooldownID = function() return 3 end
     item.GetParent = function() return viewer end
+    -- Shown by default. Blizzard's item hides itself when the buff drops, so its
+    -- shown state is now what decides whether an adopted cell keeps its slot --
+    -- and "the buff is up" is the resting assumption of every case here that is
+    -- about adoption rather than about collapse.
+    item.__shown = true
+
+    --- Drive the item's shown state: true, false, or "secret".
+    ---
+    --- "secret" stands in for the client handing us a secret boolean in combat,
+    --- which BB:ItemIsShown must report as "cannot tell" (nil) rather than as
+    --- false -- those two need opposite handling and a boolean merges them.
+    local function ItemShown(state)
+        if state == "secret" then
+            item.IsShown = function() return _G.__SECRET end
+        else
+            item.IsShown = nil    -- back to the frame stub's own modelling
+            item.__shown = state and true or false
+        end
+    end
+
     viewer.itemFramePool = {
         EnumerateActive = function()
             local i = 0
@@ -1685,6 +1705,145 @@ if failures == 0 and ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs 
 
             _G.__unknownNames["Spell 9001"] = nil
             profile.collapse = "none"
+        end },
+
+        -- The three sources that decide whether an adopted cell keeps its slot,
+        -- in descending order of authority: Blizzard's item frame, then our own
+        -- aura lookup, then "reserve it". Each case below pins one rung of that
+        -- ladder, because the whole bug was a single unconditional `show = true`
+        -- standing in for all three.
+        { "an item Blizzard is showing keeps its cell, aura or no aura", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local icon = PlaceAura(9001)
+            BB:Refresh()
+            assert(BB:AdoptedItem(icon) == item, "precondition: item was not adopted")
+
+            wipe(_G.__auras)
+            ItemShown(true)
+            _G.__inCombat = true
+            CV:UpdateState()
+            assert(icon.wanted, "a cell whose Blizzard item is shown was not wanted")
+            _G.__inCombat = false
+        end },
+
+        { "an item Blizzard has hidden gives up its cell, even in combat", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            ItemShown(false)
+            _G.__inCombat = true
+            CV:UpdateState()
+            assert(not icon.wanted, "a cell whose Blizzard item is hidden was still wanted")
+            _G.__inCombat = false
+            ItemShown(true)
+        end },
+
+        -- Unsure must mean "keep the slot": collapsing a cell whose buff is
+        -- actually up leaves Blizzard's item anchored to our hidden icon, drawing
+        -- at a stale coordinate on top of a neighbour.
+        { "an unreadable shown state reserves the cell in combat", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            wipe(_G.__auras)
+            ItemShown("secret")
+            _G.__inCombat = true
+            CV:UpdateState()
+            assert(icon.wanted, "a cell we could not read was released in combat")
+            _G.__inCombat = false
+        end },
+
+        { "out of combat an unreadable item falls back to our aura lookup", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            ItemShown("secret")
+            _G.__inCombat = false
+            -- 9003 is one of 9001's linked buffs, which is the Roll the Bones
+            -- shape: no aura is ever named after the spell that granted it.
+            _G.__auras[9003] = { spellId = 9003, sourceUnit = "player" }
+            CV:UpdateState()
+            assert(icon.wanted, "the aura path did not keep the cell for a buff that is up")
+            wipe(_G.__auras)
+        end },
+
+        { "out of combat with the buff down and the item unreadable, the cell goes", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            ItemShown("secret")
+            _G.__inCombat = false
+            wipe(_G.__auras)
+            CV:UpdateState()
+            assert(not icon.wanted,
+                "an adopted cell was reserved with the buff down, out of combat")
+        end },
+
+        -- The player's actual complaint: with columns collapse on, the gap where
+        -- an adopted buff sits never closed, in or out of combat. Asserting on
+        -- the NEIGHBOUR's position rather than on `wanted`, because the layout is
+        -- what the player sees and `wanted` was already covered above.
+        { "the column actually closes when the buff is down", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "columns"
+            profile.collapseDirection = "up"
+            profile.enabled, profile.onlyInCombat = true, false
+
+            Data.SetPlacement(profile, 1, 1, 1001, "always")
+            Data.SetPlacement(profile, 3, 1, 9001, "aura")
+            Data.SetPlacement(profile, 5, 1, 1002, "always")
+            Data.InvalidateCooldownInfoCache()
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            local iconAdopted = CV.icons[Data.CellKey(3, 1)]
+            local iconBelow = CV.icons[Data.CellKey(5, 1)]
+
+            BB:Refresh()
+            assert(BB:AdoptedItem(iconAdopted) == item, "precondition: 9001 item was not adopted")
+
+            local _, cellH, _, pad = CV:GetCellSize(profile)
+            local function SlotY(slot) return -((slot - 1) * cellH + pad / 2) end
+            local function AssertSlot(icon, slot, what)
+                local got = icon.__point and icon.__point[5]
+                assert(got == SlotY(slot),
+                    ("%s (expected y=%.1f for slot %d, got y=%s)"):format(
+                        what, SlotY(slot), slot, tostring(got)))
+            end
+
+            -- Buff up: three live cells, so the neighbour packs into slot 3.
+            ItemShown(true)
+            wipe(_G.__auras)
+            CV:UpdateState()
+            assert(iconAdopted.wanted, "precondition: adopted cell was released with its item shown")
+            AssertSlot(iconBelow, 3, "neighbour did not pack behind a live adopted cell")
+
+            -- Buff down, item unreadable, out of combat: the adopted cell is
+            -- released and the neighbour takes the slot it freed.
+            ItemShown("secret")
+            _G.__inCombat = false
+            CV:UpdateState()
+            assert(not iconAdopted.wanted, "the adopted cell held its slot with the buff down")
+            AssertSlot(iconBelow, 2, "the column did not close over the released cell")
+
+            ItemShown(true)
+            profile.collapse = "none"
+        end },
+
+        -- A client with no screening function cannot prove a value is safe to
+        -- touch, so the item's state is refused rather than trusted. The fallback
+        -- must still resolve, and nothing may throw.
+        { "no issecretvalue at all degrades safely", function()
+            local icon = PlaceAura(9001)
+            BB:Refresh()
+            assert(BB:AdoptedItem(icon) == item, "precondition: item was not adopted")
+
+            local realScreen = _G.issecretvalue
+            _G.issecretvalue = nil
+            ItemShown(true)
+            _G.__inCombat = false
+            wipe(_G.__auras)
+
+            local ok, err = pcall(CV.UpdateState, CV)
+            _G.issecretvalue = realScreen
+
+            assert(ok, "UpdateState threw with no issecretvalue: " .. tostring(err))
+            assert(not icon.wanted,
+                "a client with no secret screening still reserved the cell")
         end },
 
         -- Restored during review of task 05, which repurposed this case in place
