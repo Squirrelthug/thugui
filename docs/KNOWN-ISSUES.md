@@ -52,16 +52,20 @@ value is unreadable the ring holds its last resolved level and keeps its colour
 
 **What would make it fixable, in rough order of likelihood:**
 
-1. **Untainting ThugUI. — ATTEMPTED 2026-08-08, result unknown.** The error says
-   *"while execution tainted by `ThugUI`"*, which suggests the secrecy is a
-   consequence of taint rather than a blanket restriction. The known source —
-   `ADDON_ACTION_BLOCKED` on `ThugUI_TargetOfTargetMover:SetSize()` from
-   `TargetOfTarget/Core.lua` — now defers out of combat via
-   `ToT:MoverGeometryBlocked`. An oUF portrait error carried the same "tainted
-   by ThugUI" wording and may be a second source, or may just be downstream of
-   the first.
-2. A future radial widget that takes value/max directly.
-3. Blizzard reclassifying current power as non-secret for untainted addons.
+1. ~~**Untainting ThugUI.**~~ **CLOSED 2026-08-09 — impossible, and never the
+   cause.** Addon code always executes tainted by its own addon; `UnitPower`
+   carries `SecretWhenUnitPowerRestricted` in Blizzard's generated docs, and
+   primary resources stay secret to addons regardless. Full reasoning and
+   evidence in `DECISIONS.md` §12. Do not re-open this.
+2. **Driving the arc natively, without ever reading the value.** The blessed
+   setters accept secrets from tainted code — `Cooldown:SetCooldownDuration`
+   is the one that matters for a radial swipe. What is missing is a sanctioned
+   way to turn a secret power value into a secret fraction:
+   `CurveObject:Evaluate` is `AllowedWhenUntainted`, so we cannot map it
+   ourselves. `C_DurationUtil` is the remaining candidate and is unexamined.
+3. Blizzard reclassifying primary power as non-secret. Unlikely — the 12.1
+   relaxation is explicitly for *secondary* resources, which unblocks the combo
+   point pips and nothing else.
 
 **Do not** attempt to work around it by guessing the value, sampling it out of
 combat and extrapolating, or reading it from a Blizzard frame's displayed text.
@@ -100,13 +104,18 @@ follows a cooldown-cache rebuild — `SPELLS_CHANGED` firing as the buff lands,
 visible as the entry count moving 62↔63. Only `combat=false` SHOWN lines are
 real.
 
-**Leading explanation:** aura fields are secret values to a *tainted* addon,
-and combat is when that applies. ThugUI is provably tainted every session
-(see the resource ring entry). That would make these one bug, not two, and it
-predicts that untainting fixes both. `issecretvalue` has been confirmed to be
-a real global in 12.x, so the guard in `Mine()` meant to accept an unreadable
-source is live rather than silently skipped — if the aura is being refused, it
-is being refused for some other reason.
+**Cause, confirmed against Blizzard's generated docs 2026-08-09:**
+`GetUnitAuraBySpellID` and `GetPlayerAuraBySpellID` both carry
+`RequiresNonSecretAura`, which is why they return **nothing** in combat instead
+of erroring, and `GetAuraDataByIndex` carries `SecretWhenUnitAuraRestricted`,
+which is why the fallback list walk sees auras it cannot match a field on. It
+is one restriction, not two bugs, and **it is not fixable by untainting** —
+there is no untainted state for an addon to reach (`DECISIONS.md` §12).
+
+The route that remains is to stop asking: let Blizzard's own untainted
+`BuffIconCooldownViewer` items decide visibility and duration, and use ThugUI
+only for placement and skin. `EssentialRings.lua:930` already does this for the
+cursor-anchored case.
 
 **Narrowed to the API call itself, 2026-08-09.** In combat, with the buff up,
 `C_UnitAuras.GetUnitAuraBySpellID("player", <linked id>)` returns **nothing**.

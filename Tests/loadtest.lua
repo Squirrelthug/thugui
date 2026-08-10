@@ -1310,5 +1310,97 @@ if failures == 0 and ThugUI.ResourceRing then
     end
 end
 
+-- Secret probe: it exists to be run while values are unreadable, so the thing
+-- to prove is that it stays quiet and complete when every read is refused.
+-- A diagnostic that throws on the exact condition it was built to record is
+-- worse than no diagnostic, and this addon has already shipped one of those.
+if failures == 0 and ThugUI.SecretProbe then
+    say("\n-- secret probe --")
+    local SP = ThugUI.SecretProbe
+
+    local function Lines(phase)
+        local sample = ThugUI_DebugLog and ThugUI_DebugLog.secrets
+            and ThugUI_DebugLog.secrets[phase]
+        assert(sample, "no sample recorded for " .. phase)
+        return table.concat(sample.lines, "\n")
+    end
+
+    local steps = {
+        { "records a sample with readable values", function()
+            ThugUI_DebugLog.secrets = {}
+            _G.__power = 50
+            SP:Run("readable")
+            local text = Lines("readable")
+            assert(text:match("UnitPower primary%s+50"),
+                "did not report a readable power value:\n" .. text)
+        end },
+
+        -- The whole point. A secret must be described, never compared,
+        -- concatenated or tostring'd.
+        { "a secret power value is described, not read", function()
+            ThugUI_DebugLog.secrets = {}
+            _G.__power = _G.__SECRET
+            SP:Run("secret")
+            local text = Lines("secret")
+            assert(text:match("UnitPower primary%s+SECRET"),
+                "a secret power value was not reported as secret:\n" .. text)
+            _G.__power = 50
+        end },
+
+        { "a secret aura struct does not throw", function()
+            ThugUI_DebugLog.secrets = {}
+            local real = C_UnitAuras.GetAuraDataByIndex
+            C_UnitAuras.GetAuraDataByIndex = function(unit, index)
+                if index > 1 then return nil end
+                return _G.__SECRET
+            end
+
+            local ok, err = pcall(function() SP:Run("secret-aura") end)
+            C_UnitAuras.GetAuraDataByIndex = real
+            assert(ok, "probing a secret aura struct threw: " .. tostring(err))
+
+            local text = Lines("secret-aura")
+            assert(text:match("aura list length%s+1"),
+                "did not count the secret aura:\n" .. text)
+        end },
+
+        { "a missing API is reported, not fatal", function()
+            ThugUI_DebugLog.secrets = {}
+            local real = C_UnitAuras.GetUnitAuraBySpellID
+            C_UnitAuras.GetUnitAuraBySpellID = nil
+
+            local ok = pcall(function() SP:Run("absent-api") end)
+            C_UnitAuras.GetUnitAuraBySpellID = real
+            assert(ok, "a missing API took the probe down")
+        end },
+
+        -- A fight with nothing up is a valid sample and a useless one. It must
+        -- not overwrite the sample that actually caught a buff.
+        { "a thin sample never buries a rich one", function()
+            ThugUI_DebugLog.secrets = {}
+            _G.__auras[5101] = { spellId = 5101, name = "Spell 5101" }
+            _G.__auras[5102] = { spellId = 5102, name = "Spell 5102" }
+            SP:Run("phase")
+            local rich = ThugUI_DebugLog.secrets["phase"].auras
+            assert(rich == 2, "expected 2 auras, got " .. tostring(rich))
+
+            _G.__auras[5101], _G.__auras[5102] = nil, nil
+            SP:Run("phase")
+            assert(ThugUI_DebugLog.secrets["phase"].auras == 2,
+                "an empty sample overwrote a richer one")
+        end },
+    }
+
+    for _, step in ipairs(steps) do
+        local ok, err = pcall(step[2])
+        if ok then
+            say("ok         " .. step[1])
+        else
+            say(("STEP FAIL  %s\n           %s"):format(step[1], tostring(err)))
+            failures = failures + 1
+        end
+    end
+end
+
 say(("\n%d failure(s)"):format(failures))
 os.exit(failures == 0 and 0 or 1)

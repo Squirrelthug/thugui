@@ -217,9 +217,19 @@ local function GetPlayerCastAura(spellID, spellName)
             name = infoOK and info and info.name or nil
         end
 
+        -- Counted, because "the scan matched nothing" has two very different
+        -- causes and they were indistinguishable in the first version of this
+        -- log: the list came back empty (we are handed no auras at all), or the
+        -- list came back full but every identifying field was a secret value so
+        -- no comparison could succeed. The second is what
+        -- EssentialRings.lua:985 describes as Addon Disarmament, and it needs a
+        -- completely different fix from the first. Say which.
+        local seen, unreadable = 0, 0
+
         for i = 1, 40 do
             local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
             if not ok or not aura then break end
+            seen = seen + 1
 
             local idOK, idMatch = pcall(function() return aura.spellId == spellID end)
             local nameOK, nameMatch = false, false
@@ -227,12 +237,21 @@ local function GetPlayerCastAura(spellID, spellName)
                 nameOK, nameMatch = pcall(function() return aura.name == name end)
             end
 
+            if not idOK and not nameOK then unreadable = unreadable + 1 end
+
             if ((idOK and idMatch) or (nameOK and nameMatch)) and Mine(aura) then
                 Note("found-by-index")
                 return aura
             end
         end
-        Note("index-scan-empty")
+
+        if seen == 0 then
+            Note("index-scan-saw-no-auras")
+        elseif unreadable > 0 then
+            Note(("index-scan-%d-auras-%d-unreadable"):format(seen, unreadable))
+        else
+            Note(("index-scan-%d-auras-none-matched"):format(seen))
+        end
     end
     return nil
 end

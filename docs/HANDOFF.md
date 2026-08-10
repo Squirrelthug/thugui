@@ -46,7 +46,8 @@ wrong" from "they were on an older build".
 | Rows collapse | **Verified** |
 | Proc glow + `proc` mode | **Verified** — "pistol shot is working" |
 | Roll the Bones via `linkedSpellIDs` | **Verified in game** 2026-08-09 — `4 linked, active via 1214933` |
-| Taint fix (ToT mover deferral) | **Verified INSUFFICIENT** 2026-08-09 — taint persists, see §3 |
+| Taint fix (ToT mover deferral) | **Held, but irrelevant to secrets** — see §3 and `DECISIONS.md` §12 |
+| Secret probe (`modules/SecretProbe.lua`) | **Built 2026-08-09, awaiting one fight + reload** |
 | Resource ring showing at all | **Still blocked** — `UnitPower` is secret again |
 | Columns / both collapse | **Unverified in game** |
 | Window layout reorganisation | **Unverified visually** |
@@ -55,9 +56,31 @@ wrong" from "they were on an older build".
 Everything unverified has test coverage; tests prove it does not error and the
 logic is right, not that it looks right on screen.
 
-## 3. The open thread: taint
+## 3. The open thread: secret values — and taint was a dead end
 
-This is the highest-value thing to resolve, because it gates two features.
+**Resolved as a diagnosis, 2026-08-09. Do not chase the taint again.** The full
+reasoning and the evidence are in `DECISIONS.md` §12; the short version:
+
+Addon code always executes tainted by its own addon, so there is no untainted
+state to reach and nothing to clean. `!BugGrabber.lua` shows four addons all
+reporting "tainted by *themselves*" — they are the four that touch secret
+values, not the four that are dirty — and Blizzard's generated docs flag the
+**APIs**: `GetUnitAuraBySpellID` carries `RequiresNonSecretAura` (so it returns
+nothing in combat) and `UnitPower` carries `SecretWhenUnitPowerRestricted`.
+
+The buff icon and the ring were never broken by anything we did. A tainted
+addon is not meant to be able to answer "is buff X up" in combat.
+
+`modules/SecretProbe.lua` now measures exactly what this client hands us, at
+five points around combat, with no command to type. Read
+`ThugUI_DebugLog.secrets` after a fight and a reload. **The pivotal line is
+`aura[1].spellId read`**: if a secret aura struct can still be indexed, a
+native mapping might drive an icon without us reading it; if it errors, using
+Blizzard's own `BuffIconCooldownViewer` frames is the only route left.
+
+The historical account below is kept because it explains how the wrong
+conclusion was reached, and the description of behaviour *while* restricted is
+still accurate.
 
 `UnitPower` was returning a **secret number**, so the resource ring could not
 compute a fill level:
@@ -112,15 +135,23 @@ never "nothing happened".
 Do not build anything that depends on reading a power value until this is
 settled. See `KNOWN-ISSUES.md`.
 
-## 3b. Buff icons do not draw in combat — probably the same bug
+## 3b. Buff icons do not draw in combat — same cause, and by design
 
-Tracked in `KNOWN-ISSUES.md`. Recorded here because it changes what §3 is
-worth: the taint is no longer just blocking the resource ring and the combo
-point pips, it is the leading explanation for `aura`-mode icons never drawing
-in combat either.
+Tracked in `KNOWN-ISSUES.md`. It is the same restriction as the ring, but the
+fix is not "untaint": there is nothing to untaint. The by-spell aura lookups
+return nothing to addon code while auras are restricted, which is precisely
+what `RequiresNonSecretAura` means.
 
-If that holds, untainting fixes **three** features at once, and it stops being
-a nice-to-have. Chase the oUF `portrait.lua` lead before building anything new.
+Agreed plan, 2026-08-09, in order:
+
+1. **Probe** (built) — one fight, one reload, read `ThugUI_DebugLog.secrets`.
+2. **Adopt Blizzard's own buff frames** behind the existing grid, so the icons
+   work the way the documentation says they can. `EssentialRings.lua:930`
+   already parks `BuffIconCooldownViewer` at the cursor, so the idiom exists.
+3. If that fails, park buffs and mark those icons visually as unavailable in
+   combat rather than leaving them silently blank.
+4. **Combo point pips**, built now against the 12.1 relaxation of secondary
+   resources so they work on 12.1 launch day.
 
 ## 4. Queued work
 

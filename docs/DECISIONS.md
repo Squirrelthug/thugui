@@ -323,7 +323,66 @@ Rules for it:
 - The snapshot is taken on `PLAYER_LOGOUT`, which fires before saved variables
   are written and so captures the session that just ran.
 
-## 12. Odds and ends worth not rediscovering
+## 12. Taint cannot be cleaned, and was never the bug
+
+**Checked against Blizzard's own generated docs, 2026-08-09.** This entry
+exists to stop the next agent spending another three sessions on it, as this
+project already has.
+
+The theory was: ThugUI picked up a taint trace, taint is why `UnitPower`
+returns a secret and why aura lookups come back empty in combat, so find the
+source and both features come back. Every word of that is wrong except the
+symptom.
+
+**Addon code always executes tainted by its own addon.** There is no untainted
+state for us to reach. Two independent pieces of evidence:
+
+- `!BugGrabber.lua` carries this error shape from four different addons, and
+  each names *itself*: `tRP3_Vendor`, `Listener`, `ChonkyCharacterSheet`, and
+  us. Those are the four addons that do arithmetic or comparisons on secret
+  values — not the four that are dirty. "While execution tainted by 'ThugUI'"
+  is the engine saying *this is addon code*, not *ThugUI has a trace*.
+- Blizzard's `Blizzard_APIDocumentationGenerated` flags the **APIs**, not the
+  caller. From the `live` branch:
+
+  | API | Flag | Consequence for us |
+  |---|---|---|
+  | `GetUnitAuraBySpellID`, `GetPlayerAuraBySpellID`, `GetAuraDataBySpellName` | `SecretWhenUnitAuraRestricted` + **`RequiresNonSecretAura`** | returns **nothing** in combat |
+  | `GetAuraDataByIndex` / `BySlot` / `ByAuraInstanceID` | `SecretWhenUnitAuraRestricted` | returns a **secret struct**, so no field comparison can match |
+  | `UnitPower` | `SecretWhenUnitPowerRestricted` | primary resources (energy) stay secret to addons |
+
+That last one also explains the observation that broke the taint theory: the
+ring reported an unreadable power value five seconds into a fresh session with
+no combat and no blocked action. Inherent taint predicts exactly that. An
+accidental trace does not.
+
+So the buff icon was never failing *because of* something we did. Blizzard's
+own `CooldownViewerBuffItemMixin:IsExpired` does `auraData.expirationTime <=
+GetTime()`, which works only because their code is untainted. **A tainted addon
+is not meant to be able to answer "is buff X up" during combat.** That is the
+feature, not the bug.
+
+What follows from it:
+
+- The `ToT` mover deferral was still worth having — classic taint still exists
+  and still causes `ADDON_ACTION_BLOCKED`. It just has nothing to do with
+  secret values.
+- Displaying a secret is done by handing it to a blessed setter and never
+  looking at it: `StatusBar:SetValue`, `Cooldown:SetCooldown*`, `SetShown`,
+  `SetAlpha`, `SetVertexColor` are all `AllowedWhenTainted`.
+- `CurveObject:Evaluate` is **not** — it is `AllowedWhenUntainted`, so a curve
+  cannot map *our* secrets. Curves only work where a Blizzard API takes the
+  curve and evaluates it internally, e.g. `GetAuraDispelTypeColor`.
+- 12.1 makes this stricter, not looser: the index/slot/instanceID aura calls
+  will **Lua error** rather than return secrets. The fallback list walk in
+  `CooldownViewer/Core.lua` is on borrowed time.
+- 12.1 relaxes one thing that matters here: secondary resources (combo points)
+  stop being secret. The queued pips depend on that and nothing else.
+
+`modules/SecretProbe.lua` measures all of this on the live client rather than
+trusting the above, because the wiki has been wrong about this system before.
+
+## 13. Odds and ends worth not rediscovering
 
 - **`GetProfile` must refuse specID 0/nil.** Called before spec data loads, it
   used to create and store a junk `[0]` profile that collected edits nobody
