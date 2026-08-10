@@ -72,6 +72,23 @@ local function Apply()
     end
 end
 
+--- Flip whether Blizzard's tracked-buff frames are borrowed for buff-mode
+--- cells. The checkbox that drives this now lives in the guide panel (a
+--- different file, ui/pages/CooldownViewerGuide.lua), so this is exposed as
+--- the one function it calls rather than have it copy Apply()'s effect and
+--- the picker refresh inline.
+function Page:SetUseBlizzardBuffs(v)
+    ThugUI_Config.cvUseBlizzardBuffs = v
+    if CV.BlizzBuffs then
+        CV.BlizzBuffs:Refresh()
+    end
+    Apply()
+    -- Apply() only rebuilds the live viewer. The picker offers tracked
+    -- buffs only while this is on, so the list itself changes with the
+    -- tick and has to be re-read here.
+    self:RefreshPicker()
+end
+
 -- ----------------------------------------------------------------------------
 -- Drag follower
 -- ----------------------------------------------------------------------------
@@ -744,29 +761,6 @@ function Page:BuildInspector(host)
             .. "Blizzard's own alert art, so it reads identically to your action bars.",
         get = function() return Profile().showProcGlow ~= false end,
         set = function(v) Profile().showProcGlow = v; Apply() end,
-    }
-
-    misc:Checkbox{
-        label = "Use Blizzard's buff frames",
-        tooltip = "Buff icons cannot be drawn by an addon during combat: the game will "
-            .. "not say which aura is which while you are fighting. With this on, "
-            .. "Blizzard's own tracked-buff icon is placed in the cell you assigned it "
-            .. "instead, so it works in combat.\n\n"
-            .. "Needs the Cooldown Manager turned on, with those buffs tracked in Edit "
-            .. "Mode. Turn this off to go back to ThugUI's own icons, which only draw "
-            .. "out of combat.",
-        get = function() return ThugUI_Config.cvUseBlizzardBuffs ~= false end,
-        set = function(v)
-            ThugUI_Config.cvUseBlizzardBuffs = v
-            if ThugUI.CooldownViewer.BlizzBuffs then
-                ThugUI.CooldownViewer.BlizzBuffs:Refresh()
-            end
-            Apply()
-            -- Apply() only rebuilds the live viewer. The picker offers tracked
-            -- buffs only while this is on, so the list itself changes with the
-            -- tick and has to be re-read here.
-            Page:RefreshPicker()
-        end,
     }
 
     -- This used to be a paragraph of grey text, and it was not enough. Blizzard

@@ -71,6 +71,11 @@ local SHOTS = {
             .. "the_tracked_buffs_and_tracked_bars_areas_highlighted",
         u = 0.7305, v = 1.0000, aspect = 0.730,
     },
+    visibility = {
+        file = "tracked_buffs_settings_window_with_visibility_dropdown_highlighted_and_"
+            .. "arrows_to_both_correct_options",
+        u = 0.7227, v = 1.0000, aspect = 0.723,
+    },
     asIcon = {
         file = "buff_as_icon_with_counter",
         u = 0.6094, v = 0.4883, aspect = 1.248,
@@ -83,8 +88,10 @@ local SHOTS = {
 
 -- Deliberately terse: the picture carries the idea, the line only has to say
 -- which picture you are looking at. Step 1 has no screenshot and must still
--- render -- it is the one step that happens in THIS window rather than in the
--- game's own settings, which is exactly the distinction people miss.
+-- render -- it is the one step that happens in ThugUI rather than in the game's
+-- own settings, which is exactly the distinction people miss. It points at the
+-- checkbox directly above it in this panel; if that ever moves back to the main
+-- window, this line has to move with it.
 --
 -- The order is the order the player actually walked it, taken from when the
 -- screenshots were made rather than from anyone's idea of a sensible sequence.
@@ -95,9 +102,9 @@ local SHOTS = {
 -- being true.
 local STEPS = {
     {
-        text = "|cffffd100Use Blizzard's buff frames|r, on the main window to the left. "
-            .. "It shows the setting as it stands -- ticked means on -- so make sure it "
-            .. "is ticked. Every step below happens in the game's own settings, not here.",
+        text = "|cffffd100Use Blizzard's buff frames|r -- the tick just above. It shows "
+            .. "the setting as it stands, so make sure it is on. Everything below this "
+            .. "happens in the game's own settings, not in ThugUI.",
     },
     {
         text = "|cffffd100Esc > Edit Mode.|r",
@@ -112,9 +119,7 @@ local STEPS = {
     },
     {
         text = "|cffffd100Click the buff bar|r to edit it, then |cffffd100Advanced "
-            .. "Cooldown Settings|r. Set that frame to show |cffffd100Always|r or "
-            .. "|cffffd100In Combat|r while you are here -- the icon is pulled from this "
-            .. "frame, so if it is not displayed there is nothing to pull.",
+            .. "Cooldown Settings|r.",
         shots = { "clickToEdit", "advButton" },
         caption = "Click the bar itself, then Advanced Cooldown Settings",
     },
@@ -123,6 +128,13 @@ local STEPS = {
             .. "Either list works. ThugUI can only place a buff that is in one of them.",
         shots = { "buffsTab" },
         caption = "Both areas are highlighted. Drag any buff you want on the grid into one of them",
+    },
+    {
+        text = "|cffffd100Set the frame's visibility|r to |cffffd100Always|r or "
+            .. "|cffffd100In Combat|r, whichever arrow you like. The icon is pulled from "
+            .. "this frame, so one that is never displayed has nothing to pull.",
+        shots = { "visibility" },
+        caption = "Either highlighted option works",
     },
     {
         text = "|cffffd100Done.|r The two areas render the buff in the cell in two "
@@ -154,9 +166,10 @@ local CAPTION_PAD   = 10
 -- Screenshot popout
 --
 -- Its own frame rather than GameTooltip, which has no way to size an arbitrary
--- texture usefully. Anchored TOPRIGHT to the row's TOPLEFT so it opens back
--- over the config window: the panel already sits at the right edge of the
--- window, so opening rightwards would run off the screen.
+-- texture usefully. Anchored RIGHT to the row's LEFT so it opens back over the
+-- config window (the panel already sits at the right edge of the window, so
+-- opening rightwards would run off the screen) and centres vertically on
+-- whatever row it belongs to -- see the anchor comment in ShowShot.
 -- ----------------------------------------------------------------------------
 
 function Guide:EnsurePopout()
@@ -286,8 +299,13 @@ function Guide:ShowShot(row, step)
     box:ClearAllPoints()
     box:SetPoint("TOPRIGHT", popout, "TOPLEFT", -SHOT_GAP, 0)
     box:SetShown((step.caption or "") ~= "")
+    -- RIGHT to the row's LEFT, not TOPRIGHT to TOPLEFT: this centres the
+    -- popout on the row regardless of how tall it ended up (one image, two
+    -- stacked, or two side by side), because the popout is already sized to
+    -- its contents by the time this line runs. No per-step offset table
+    -- needed, and it cannot drift when the UI scale changes.
     popout:ClearAllPoints()
-    popout:SetPoint("TOPRIGHT", row, "TOPLEFT", -8, 0)
+    popout:SetPoint("RIGHT", row, "LEFT", -8, 0)
     popout:Show()
 end
 
@@ -332,12 +350,49 @@ function Guide:Ensure()
     intro:SetPoint("TOPLEFT", PANEL_INSET, -38)
     intro:SetWidth(PANEL_WIDTH - PANEL_INSET * 2)
     intro:SetJustifyH("LEFT")
-    intro:SetText("The buff icon in your cell is Blizzard's own. These are the game "
-        .. "settings it needs before ThugUI has anything to borrow. Hover a step "
-        .. "for the picture.")
+    intro:SetText("The buff icon in any given cell is owned and PROTECTED by Blizzard. "
+        .. "Below are the game settings needed before ThugUI is able to BORROW these "
+        .. "assets from Blizzard's UI.")
+
+    -- The checkbox that used to live on the main window. It moved here because
+    -- every step below it explains what it turns on -- reading the setting and
+    -- the explanation in the same place beats hunting back across the window
+    -- for the tick box. Page:SetUseBlizzardBuffs is the one function this file
+    -- calls so Apply() and the picker refresh do not get a second copy of
+    -- their body.
+    local useBlizzardBuffs = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+    useBlizzardBuffs:SetSize(24, 24)
+    useBlizzardBuffs:SetPoint("TOPLEFT", intro, "BOTTOMLEFT", 0, -10)
+
+    local cbLabel = useBlizzardBuffs:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    cbLabel:SetPoint("LEFT", useBlizzardBuffs, "RIGHT", 4, 0)
+    cbLabel:SetText("Use Blizzard's buff frames")
+
+    useBlizzardBuffs:SetScript("OnClick", function(self)
+        CV.Page:SetUseBlizzardBuffs(self:GetChecked() and true or false)
+    end)
+
+    -- nil means ON -- see Data.BuffsAvailable, which this mirrors. Reading it
+    -- as a plain truth test would show the checkbox unticked for every player
+    -- who never touched the setting.
+    function useBlizzardBuffs:Refresh()
+        self:SetChecked(ThugUI_Config.cvUseBlizzardBuffs ~= false)
+    end
+    useBlizzardBuffs:Refresh()
+
+    W.AttachTooltip(useBlizzardBuffs, "Use Blizzard's buff frames",
+        "Buff icons cannot be drawn by an addon during combat: the game will "
+            .. "not say which aura is which while you are fighting. With this on, "
+            .. "Blizzard's own tracked-buff icon is placed in the cell you assigned it "
+            .. "instead, so it works in combat.\n\n"
+            .. "Needs the Cooldown Manager turned on, with those buffs tracked in Edit "
+            .. "Mode. Turn this off to go back to ThugUI's own icons, which only draw "
+            .. "out of combat.")
+
+    self.blizzBuffsCB = useBlizzardBuffs
 
     self.rows = {}
-    local previous = intro
+    local previous = useBlizzardBuffs
 
     for i, step in ipairs(STEPS) do
         local row = CreateFrame("Button", nil, panel)
@@ -383,6 +438,10 @@ end
 function Guide:Show()
     local panel = self:Ensure()
     if panel then panel:Show() end
+    -- The setting can change from the guide's own checkbox next time too, but
+    -- it can also change while the panel is closed (a fresh session, or the
+    -- picker's other callers) -- read the live value every time it opens.
+    if self.blizzBuffsCB then self.blizzBuffsCB:Refresh() end
 end
 
 function Guide:Hide()

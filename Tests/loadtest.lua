@@ -73,6 +73,11 @@ frameMT.__index = function(tbl, key)
             if key == "SetFrameStrata" then a.__strata = a1 return end
             if key == "SetScale" then a.__scale = a1 return end
             if key == "GetFrameStrata" then return a.__strata or "MEDIUM" end
+            -- Recorded so a checkbox's Refresh() can be proven to have set the
+            -- widget to the right state, and so a simulated click can flip the
+            -- state before the OnClick handler reads it back -- same order
+            -- UICheckButtonTemplate does it in game.
+            if key == "SetChecked" then a.__checked = a1 and true or false return end
         end
         if key:match("^Get") then
             if key == "GetWidth" or key == "GetHeight" or key == "GetFrameLevel" then
@@ -90,7 +95,8 @@ frameMT.__index = function(tbl, key)
             if key == "GetObjectType" then return "Frame" end
             if key == "GetCenter" then return 0, 0 end
         end
-        if key == "IsMouseOver" or key == "GetChecked" then return false end
+        if key == "IsMouseOver" then return false end
+        if key == "GetChecked" then return a.__checked == true end
         return setmetatable({}, frameMT)
     end
     rawset(tbl, key, fn)
@@ -1455,6 +1461,36 @@ if failures == 0 and ThugUI.CooldownViewer then
             ThugUI_Config.cvUseBlizzardBuffs = restore
         end },
 
+        -- The checkbox moved to the guide panel and must not leave a second
+        -- copy behind on the main window.
+        { "the misc panel drops the Blizzard-buffs checkbox but keeps proc glow", function()
+            local Page = ThugUI.CooldownViewer.Page
+            local misc
+            for _, panel in ipairs(Page.panels or {}) do
+                -- The misc panel is the one built 260 wide (BuildInspector's
+                -- "This layout" band) -- the only panel at that width.
+                if panel.width == 260 then misc = panel end
+            end
+            assert(misc, "could not find the misc panel")
+
+            -- Panel:Register only keeps widgets that carry a Refresh -- Section,
+            -- Label, Button and Gap do not, so a checkbox is the only thing that
+            -- would show up here. One entry means one checkbox is left, where
+            -- there used to be two.
+            assert(#misc.widgets == 1,
+                ("misc panel has %d registered widgets, expected exactly 1 (proc glow)")
+                :format(#misc.widgets))
+
+            local profile = Data.GetActiveProfile()
+            local restore = profile.showProcGlow
+            profile.showProcGlow = true
+            misc.widgets[1]:SetChecked(false)
+            misc.widgets[1]:GetScript("OnClick")(misc.widgets[1])
+            assert(profile.showProcGlow == false,
+                "the one remaining checkbox did not drive showProcGlow")
+            profile.showProcGlow = restore
+        end },
+
         -- The guide panel. Built once with the page and shown/hidden after --
         -- never rebuilt, never SetParent(nil)'d.
         { "the buff workaround guide builds hidden and toggles", function()
@@ -1472,6 +1508,63 @@ if failures == 0 and ThugUI.CooldownViewer then
 
             BuffGuide:Toggle()
             assert(not panel:IsShown(), "the guide did not close again")
+        end },
+
+        -- The checkbox moved out of the main window and into the guide panel.
+        -- nil means ON -- the same polarity mistake that emptied the picker
+        -- once already (see the buff-category tests above) would also leave
+        -- this box unticked for every player who never touched the setting.
+        { "the guide's checkbox mirrors cvUseBlizzardBuffs, and nil means on", function()
+            local BuffGuide = ThugUI.CooldownViewer.BuffGuide
+            BuffGuide:Ensure()
+            local cb = BuffGuide.blizzBuffsCB
+            assert(cb, "the guide did not expose its Blizzard-buffs checkbox")
+
+            local restore = ThugUI_Config.cvUseBlizzardBuffs
+
+            ThugUI_Config.cvUseBlizzardBuffs = nil
+            cb:Refresh()
+            assert(cb:GetChecked(), "nil should read as ticked (on)")
+
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            cb:Refresh()
+            assert(cb:GetChecked(), "true should read as ticked")
+
+            ThugUI_Config.cvUseBlizzardBuffs = false
+            cb:Refresh()
+            assert(not cb:GetChecked(), "false should read as unticked")
+
+            ThugUI_Config.cvUseBlizzardBuffs = restore
+            cb:Refresh()
+        end },
+
+        -- The click handler routes through Page:SetUseBlizzardBuffs rather than
+        -- writing the config and calling Apply()/RefreshPicker() itself -- this
+        -- proves that route actually reaches the picker, not just the config
+        -- table.
+        { "toggling the guide's checkbox writes the setting and the picker follows", function()
+            local BuffGuide = ThugUI.CooldownViewer.BuffGuide
+            BuffGuide:Ensure()
+            local cb = BuffGuide.blizzBuffsCB
+            local restore = ThugUI_Config.cvUseBlizzardBuffs
+
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            Data.InvalidateCooldownInfoCache()
+            assert(#Data.BuildSpellList("buffs", nil) > 0,
+                "setup: the buffs source was already empty")
+
+            -- UICheckButtonTemplate flips its own checked state on a click
+            -- before running OnClick, which is what the stub's SetChecked/
+            -- GetChecked pairing models.
+            cb:SetChecked(false)
+            cb:GetScript("OnClick")(cb)
+
+            assert(ThugUI_Config.cvUseBlizzardBuffs == false,
+                "the click did not write cvUseBlizzardBuffs")
+            assert(#Data.BuildSpellList("buffs", nil) == 0,
+                "the picker still offered tracked buffs after the workaround was switched off")
+
+            ThugUI_Config.cvUseBlizzardBuffs = restore
         end },
 
         -- Hovering is where the popout code actually runs; building the panel
@@ -1510,6 +1603,24 @@ if failures == 0 and ThugUI.CooldownViewer then
                 end
             end
             assert(named > 0, "no step named a screenshot at all")
+        end },
+
+        -- The clickToEdit/advButton step used to also tell the player to set
+        -- Always/In Combat; that instruction now belongs to the visibility
+        -- step alone. Regression: a step that says it twice is confusing, not
+        -- redundant-safe, because the two visibility screenshots point at
+        -- different frames.
+        { "the Always/In Combat visibility instruction appears in exactly one step", function()
+            local BuffGuide = ThugUI.CooldownViewer.BuffGuide
+            local matches = 0
+            for _, step in ipairs(BuffGuide.STEPS) do
+                if step.text:find("Always") and step.text:find("In Combat") then
+                    matches = matches + 1
+                end
+            end
+            assert(matches == 1,
+                ("Always/In Combat wording appeared in %d steps, expected exactly 1")
+                :format(matches))
         end },
     }
 
