@@ -73,7 +73,10 @@ BB.lowered = {}   -- our icon frame -> true, for the strata restore pass
 -- discards does not stay alive because we once measured it.
 local weak = { __mode = "k" }
 local hookedViewers = setmetatable({}, weak)  -- viewer -> true
-local baseWidth     = setmetatable({}, weak)  -- item   -> unscaled width, or false
+-- Only ever holds a real measured width. A falsy entry is absent rather than
+-- stored, so an item measured too early is retried on the next pass instead of
+-- being written off for its lifetime.
+local baseWidth     = setmetatable({}, weak)  -- item   -> unscaled width
 local homeAnchor    = setmetatable({}, weak)  -- item   -> the anchor Blizzard gave it
 local iconStrata    = setmetatable({}, weak)  -- our icon -> strata before we lowered it
 
@@ -208,14 +211,49 @@ end
 --- Size the item to the cell by scale rather than SetSize: the item's own
 --- internal anchors are laid out against its configured size, and resizing it
 --- leaves the cooldown swipe and the stack text in the wrong places.
-local function FitItem(item, iconSize)
-    if baseWidth[item] == nil then
+---
+--- THE SCALE IS WORKED OUT IN SCREEN SPACE, not in our grid's numbers. The item
+--- is only *anchored* to our cell -- the adoption pass below leaves it parented
+--- to Blizzard's viewer on purpose -- so unlike our own icons it never inherits
+--- `profile.scale`. Dividing the two effective scales cancels UIParent out of
+--- both sides and absorbs whatever Edit Mode did to their viewer, which leaves
+--- the item the same on-screen size as an ordinary cooldown icon beside it.
+---
+--- This was invisible for as long as the only testbed was a profile at scale 1,
+--- where the two coordinate spaces coincide. A resto profile at scale 0.6 drew
+--- its adopted buffs 1/0.6 too large while every cooldown icon around them was
+--- correct -- same code, different profile. That is the whole of why the rogue
+--- looked right and the druid did not.
+local function FitItem(item, iconSize, cell)
+    -- Re-measured until it answers, deliberately. This used to cache `false`
+    -- for a width of 0 and guard on `~= nil`, which latched that answer for the
+    -- life of the item: SetScale was then never called at all and the item kept
+    -- Blizzard's native size inside a cell sized for ours. An item measured
+    -- before their layout has run is exactly the case that produced it.
+    if not baseWidth[item] then
         local width = item:GetWidth()
-        baseWidth[item] = (width and width > 0) and width or false
+        if not width or width <= 0 then return end
+        baseWidth[item] = width
     end
 
-    local base = baseWidth[item]
-    if base and iconSize then item:SetScale(iconSize / base) end
+    if not iconSize or not cell then return end
+
+    local parent = item:GetParent()
+    local theirs = (parent and parent:GetEffectiveScale()) or 1
+    local ours = cell:GetEffectiveScale() or 1
+    if theirs <= 0 then return end
+
+    local scale = (iconSize * ours) / (baseWidth[item] * theirs)
+    item:SetScale(scale)
+
+    -- The numbers behind one fit, so a wrong size on screen can be read back
+    -- from disk instead of guessed at. Once per session: ten items a pass and
+    -- several passes a session would bury everything else in the log.
+    if ThugUI.Diagnostics then
+        ThugUI.Diagnostics:LogOnce("blizzbuffs-fit", "CVBUFF",
+            "fit: base=%.1f icon=%d ours=%.3f theirs=%.3f -> scale=%.3f",
+            baseWidth[item], iconSize, ours, theirs, scale)
+    end
 end
 
 --- Hand one item back to Blizzard.
@@ -337,7 +375,9 @@ function BB:Apply()
                 end
 
                 RememberHome(item)
-                FitItem(item, iconSize)
+                -- The cell goes through so the fit can compare our effective
+                -- scale against theirs; the item never becomes its child.
+                FitItem(item, iconSize, icon)
                 item:ClearAllPoints()
                 item:SetPoint("CENTER", icon, "CENTER", 0, 0)
 

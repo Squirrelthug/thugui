@@ -97,7 +97,13 @@ frameMT.__index = function(tbl, key)
             if key == "GetWidth" or key == "GetHeight" or key == "GetFrameLevel" then
                 return 100
             end
-            if key == "GetScale" or key == "GetEffectiveScale" then return 1 end
+            -- Reports back what SetScale recorded. NOT a true parent-chain
+            -- product -- a test that needs an effective scale sets it on the
+            -- frame it asks about. That is enough for the adopted-buff fit,
+            -- whose whole question is the RATIO between two frames' scales.
+            if key == "GetScale" or key == "GetEffectiveScale" then
+                return a.__scale or 1
+            end
             -- Roughly life-sized, so panel height maths means something. A
             -- flat 100 per line made every wrapped note absurdly tall and any
             -- layout-fits check meaningless.
@@ -2173,6 +2179,101 @@ if ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs then
                 end
             end
             assert(count == 1, ("expected no matching item frame logged once, got %d"):format(count))
+        end },
+
+        -- The adopted item is anchored to our cell but stays parented to
+        -- Blizzard's viewer, so it never inherits profile.scale. These assert
+        -- the ON-SCREEN size rather than the raw scale number, because the
+        -- former is what the player sees and the latter is only a means to it.
+        { "an adopted item matches the cell's on-screen size at scale 1", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local profile = Data.GetActiveProfile()
+            profile.scale, profile.iconSize = 1, 32
+
+            BB:Release()
+            local icon = PlaceAura(9001)
+            icon.__scale = 1        -- the stub does not chain scale from parents
+            viewer.__scale = 1
+            BB:Refresh()
+
+            local onScreen = item:GetWidth() * item.__scale * viewer:GetEffectiveScale()
+            local want = profile.iconSize * icon:GetEffectiveScale()
+            assert(math.abs(onScreen - want) < 0.01,
+                ("adopted item drew %.2f wide, cell wanted %.2f"):format(onScreen, want))
+        end },
+
+        -- The regression. A profile at scale 0.6 drew its adopted buffs 1/0.6
+        -- too large while every cooldown icon around them was correct, because
+        -- the fit was computed in grid space and applied to a frame that lives
+        -- in Blizzard's. Resto is at 0.6; the rogue testbed was at 1, which is
+        -- the only reason this survived as long as it did.
+        { "a scaled profile does not draw its adopted buff oversized", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local profile = Data.GetActiveProfile()
+            profile.scale, profile.iconSize = 0.6, 42
+
+            BB:Release()
+            local icon = PlaceAura(9001)
+            icon.__scale = 0.6
+            viewer.__scale = 1
+            BB:Refresh()
+
+            local onScreen = item:GetWidth() * item.__scale * viewer:GetEffectiveScale()
+            local want = profile.iconSize * icon:GetEffectiveScale()
+            assert(math.abs(onScreen - want) < 0.01,
+                ("adopted item drew %.2f wide, cell wanted %.2f"):format(onScreen, want))
+        end },
+
+        -- Their viewer carries its own Edit Mode scale, which must be divided
+        -- out or it reappears as a size error in our cell.
+        { "the viewer's own scale is divided out", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local profile = Data.GetActiveProfile()
+            profile.scale, profile.iconSize = 0.6, 42
+
+            BB:Release()
+            local icon = PlaceAura(9001)
+            icon.__scale = 0.6
+            viewer.__scale = 1.4
+            BB:Refresh()
+
+            local onScreen = item:GetWidth() * item.__scale * viewer:GetEffectiveScale()
+            local want = profile.iconSize * icon:GetEffectiveScale()
+            assert(math.abs(onScreen - want) < 0.01,
+                ("adopted item drew %.2f wide, cell wanted %.2f"):format(onScreen, want))
+            viewer.__scale = 1
+        end },
+
+        -- An item measured before Blizzard has laid it out reports width 0.
+        -- That answer used to be cached for the life of the item, and SetScale
+        -- was then never called at all -- leaving Blizzard's native size in a
+        -- cell sized for ours, which looks exactly like a scaling bug.
+        { "a width of zero is retried, not cached forever", function()
+            ThugUI_Config.cvUseBlizzardBuffs = true
+            local profile = Data.GetActiveProfile()
+            profile.scale, profile.iconSize = 0.6, 42
+
+            BB:Release()
+            local realGetWidth = item.GetWidth
+            item.GetWidth = function() return 0 end
+
+            local icon = PlaceAura(9001)
+            icon.__scale = 0.6
+            viewer.__scale = 1
+            BB:Refresh()
+            assert(item.__scale == 1,
+                "an unmeasurable item was scaled off a bogus width")
+
+            -- Their layout has run by the next pass. The item must now fit.
+            item.GetWidth = realGetWidth
+            BB:Refresh()
+
+            local onScreen = item:GetWidth() * item.__scale * viewer:GetEffectiveScale()
+            local want = profile.iconSize * icon:GetEffectiveScale()
+            assert(math.abs(onScreen - want) < 0.01,
+                ("a retried item drew %.2f wide, cell wanted %.2f"):format(onScreen, want))
+
+            profile.scale, profile.iconSize = 1, 32
         end },
 
         { "an adopted icon is shown even when its spell name does not resolve", function()
