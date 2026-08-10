@@ -1,23 +1,17 @@
 # Handoff — state as of 2026-08-10
 
-## START HERE — session ended mid-thread, three things are unfinished
+## START HERE — Maul is the next job
 
-### 1. Repo state, which is not clean
+### 1. Repo state: clean, everything merged and pushed
 
-| | |
-|---|---|
-| `main` | `763548e` — **3 commits ahead of `origin/main`, never pushed** |
-| `collapse-anchor-boundary` | `a791bf6` — 2 commits, **tested and working, deliberately not merged** |
-| `abundance-icon-scale` | merged into `main`, branch left in place, safe to delete |
-| `raidframes-test` | scratch branch at `b2c54dd`, safe to delete |
+`main` carries all of this session's work and is level with `origin/main`.
+Harness: **165 passing, 0 failures**. Nothing is in flight.
 
-**Push `main` early.** Three commits of finished, player-verified work exist only
-on this machine, and the addon folder *is* the working copy — an accident here
-loses them.
+The feature branches (`collapse-anchor-boundary`, `abundance-icon-scale`,
+`raidframes-test`) are all merged or scratch and can be deleted whenever; they
+are left only as a trail.
 
-The player's instruction on the branch, verbatim in intent: *these changes seemed
-to work, but we won't merge yet until the Maul issue is figured out.* Do not
-merge it without asking. Harness on that branch: **165 passing, 0 failures**.
+**Nothing is half-done.** Start on §2.
 
 ### 2. The open bug: Maul on the Guardian druid
 
@@ -43,7 +37,7 @@ state is adjacent to that logic and the rules there (`isActive`/`isOnGCD`, never
 | Raid frames module deleted entirely | `main` | Verified — the module was already inert (`rfEnabled = false`) |
 | Adopted buffs scale correctly on scaled profiles | `main`, `DECISIONS.md` §17 | **Verified in game** by the player on resto |
 | `docs/QA.md` — pre-release in-game checklist | `main` | New file, nothing run against it yet |
-| Auto collapse direction now reads the placements | branch, `DECISIONS.md` §18 | **Player says it works**, unmerged pending Maul |
+| Auto collapse direction now reads the placements | `main`, `DECISIONS.md` §18 | **Verified in game** by the player |
 
 ## Things that cost time this session — do not rediscover them
 
