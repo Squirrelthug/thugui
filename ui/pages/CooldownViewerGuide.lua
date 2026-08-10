@@ -123,18 +123,21 @@ local STEPS = {
         shots = { "clickToEdit", "advButton" },
         caption = "Click the bar itself, then Advanced Cooldown Settings",
     },
+    -- Visibility before the Buffs tab, because both are on the window step 4
+    -- just opened: set it while you are already looking at it, rather than
+    -- opening a tab and being sent back out.
+    {
+        text = "|cffffd100Set the frame's visibility|r to |cffffd100Always|r or "
+            .. "|cffffd100In Combat|r, whichever option you like. The icon is pulled from "
+            .. "this frame, so one that is never displayed has nothing to pull.",
+        shots = { "visibility" },
+        caption = "Either highlighted option works",
+    },
     {
         text = "|cffffd100Buffs tab - drag the buff into Tracked Buffs or Tracked Bars.|r "
             .. "Either list works. ThugUI can only place a buff that is in one of them.",
         shots = { "buffsTab" },
         caption = "Both areas are highlighted. Drag any buff you want on the grid into one of them",
-    },
-    {
-        text = "|cffffd100Set the frame's visibility|r to |cffffd100Always|r or "
-            .. "|cffffd100In Combat|r, whichever arrow you like. The icon is pulled from "
-            .. "this frame, so one that is never displayed has nothing to pull.",
-        shots = { "visibility" },
-        caption = "Either highlighted option works",
     },
     {
         text = "|cffffd100Done.|r The two areas render the buff in the cell in two "
@@ -155,6 +158,11 @@ local PANEL_INSET = 16
 local SHOT_WIDTH  = 420   -- the popout is deliberately far wider than the panel
 local SHOT_GAP    = 8
 local SHOT_PAD    = 12
+
+-- Stacked shots get a wider gap than side-by-side ones. Two screenshots of the
+-- same game window sitting 8px apart read as one tall menu rather than as two
+-- separate things to look at, which is the whole point of showing both.
+local SHOT_STACK_GAP = 22
 
 -- The caption's own box, off to the left of the images. Narrow on purpose: it
 -- holds one line about what you are looking at, and a wide box would compete
@@ -296,7 +304,7 @@ function Guide:ShowShot(row, step)
                 rowHeight = math.max(rowHeight, height)
                 contentWidth = x - SHOT_GAP - SHOT_PAD
             else
-                y = y - height - SHOT_GAP
+                y = y - height - SHOT_STACK_GAP
                 contentWidth = math.max(contentWidth, shotWidth)
             end
         else
@@ -306,7 +314,11 @@ function Guide:ShowShot(row, step)
 
     if sideBySide then y = y - rowHeight - SHOT_GAP end
 
-    popout:SetSize(contentWidth + SHOT_PAD * 2, -y - SHOT_GAP + SHOT_PAD)
+    -- The loop always trails one gap past the last image, and which gap that was
+    -- depends on how they were laid out. Take back the same one that was added,
+    -- or a stacked popout gains dead space at the bottom.
+    local trailingGap = sideBySide and SHOT_GAP or SHOT_STACK_GAP
+    popout:SetSize(contentWidth + SHOT_PAD * 2, -y - trailingGap + SHOT_PAD)
 
     -- Its own box, to the LEFT of the images. Sized to the text it holds, and
     -- top-aligned with the picture it describes.
