@@ -65,6 +65,31 @@ column closing and not. Blizzard's preset layouts default that setting to `1`.
 **An agent that verifies the brief's citation instead of trusting it is doing the
 job properly** — that finding was worth more than the code.
 
+## Batch 3 — the buff workaround guide — COMPLETE
+
+| # | Task | Outcome |
+|---|---|---|
+| 07 | Give the buff workaround its own panel, with the player's screenshots | Clean |
+| 08 | Move the checkbox into the guide; new visibility step; centre the popout | Clean. Left the two stale references it created rather than editing outside its scope, and flagged both — correct call, coordinator fixed them |
+| 09 | Section heading, clear-layout confirmation, picker message | Clean |
+
+Run on a cheaper model than the coordinator, sequentially, because all three
+touch `ui/pages/CooldownViewer.lua`. That worked: the tasks were specified
+tightly enough that none of the three needed a decision made for it.
+
+### What this batch taught the process
+
+- **Both agents found real holes in the test harness, not just in the code.** 08
+  found `GetChecked` returning a constant `false`, which had made every checkbox
+  assertion in the suite weaker than it looked; 09 found `Panel:Button` never
+  registers onto `panel.widgets`, so no button on any page could be driven from
+  a test. Neither was in scope. Both were worth more than the feature work.
+- **An agent that reports a stale reference instead of fixing it is behaving
+  correctly**, and the brief should keep saying so. 08 left step 1 claiming the
+  checkbox was still on the main window, because rewriting it was not in its
+  four sections. That is the right failure mode: cheap for the coordinator to
+  fix, and it never silently rewrites something nobody asked it to touch.
+
 ## Next batch — nothing written yet, on purpose
 
 The open thread is in `docs/HANDOFF.md`, "Read this first". It needs the player

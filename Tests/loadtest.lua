@@ -40,6 +40,16 @@ frameMT.__index = function(tbl, key)
             a.__cooldown = nil
             return
         end
+        -- FontStrings are ordinary stub frames, but they're recorded in a flat
+        -- list rather than only reachable through whatever built them --
+        -- Panel:Section and friends don't stash their return value anywhere,
+        -- so a test that wants to read a heading's text back needs some way
+        -- to find it that isn't "the caller happened to keep a handle".
+        if key == "CreateFontString" and type(a) == "table" then
+            local fs = setmetatable({}, frameMT)
+            table.insert(_G.__fontStrings, fs)
+            return fs
+        end
         -- Shown-state is modelled, not stubbed away: several code paths early-
         -- return on IsShown, so a stub that always says false silently skips
         -- the very logic under test.
@@ -78,6 +88,10 @@ frameMT.__index = function(tbl, key)
             -- state before the OnClick handler reads it back -- same order
             -- UICheckButtonTemplate does it in game.
             if key == "SetChecked" then a.__checked = a1 and true or false return end
+            -- Recorded so a section heading or a message built by SetText can
+            -- be read back by GetText below -- unlike SetPoint et al, nothing
+            -- modelled text before this task needed it.
+            if key == "SetText" then a.__text = a1 return end
         end
         if key:match("^Get") then
             if key == "GetWidth" or key == "GetHeight" or key == "GetFrameLevel" then
@@ -91,7 +105,7 @@ frameMT.__index = function(tbl, key)
             if key == "GetStringWidth" then return 60 end
             if key == "GetPoint" then return "TOPLEFT", nil, "TOPLEFT", 0, 0 end
             if key == "GetChildren" or key == "GetRegions" then return end
-            if key == "GetText" then return "" end
+            if key == "GetText" then return a.__text or "" end
             if key == "GetObjectType" then return "Frame" end
             if key == "GetCenter" then return 0, 0 end
         end
@@ -115,6 +129,10 @@ function CreateFrame(frameType, name, parent, template)
     return f
 end
 
+-- Every FontString ever built, so a test can find one by the text it was
+-- given without the code under test having to keep a handle for it.
+_G.__fontStrings = {}
+
 -- ---------------------------------------------------------------- API stubs
 UIParent = NewFrame()
 GameTooltip = NewFrame()
@@ -124,6 +142,19 @@ UISpecialFrames = {}
 SlashCmdList = {}
 SOUNDKIT = { IG_MAINMENU_OPTION_CHECKBOX_ON = 1 }
 STANDARD_TEXT_FONT = "font"
+
+-- Blizzard's shared confirmation-dialog registry. Not stubbed before this
+-- task because nothing in the addon used it -- CooldownViewer.lua's clear-
+-- layout confirmation is the first. StaticPopup_Show only needs to record
+-- what it was asked to show; nothing here needs an actual dialog frame.
+StaticPopupDialogs = {}
+YES = "Yes"
+NO = "No"
+_G.__lastStaticPopup = nil
+function StaticPopup_Show(which, text_arg1, text_arg2)
+    _G.__lastStaticPopup = { which = which, text_arg1 = text_arg1, text_arg2 = text_arg2 }
+    return NewFrame()
+end
 
 -- WoW runs Lua 5.1, which has a global unpack; 5.2+ moved it to table.unpack.
 unpack = unpack or table.unpack
@@ -1489,6 +1520,71 @@ if failures == 0 and ThugUI.CooldownViewer then
             assert(profile.showProcGlow == false,
                 "the one remaining checkbox did not drive showProcGlow")
             profile.showProcGlow = restore
+        end },
+
+        -- Task 09: the red [WORKAROUND] link is now set off from "This
+        -- layout"'s controls above it by a real section heading, matching
+        -- "This layout"'s own style, rather than a plain Label.
+        { "the misc panel has an Enable Buffs section heading", function()
+            local found = false
+            for _, fs in ipairs(_G.__fontStrings) do
+                if fs.__text == "Enable Buffs" then found = true break end
+            end
+            assert(found, "no 'Enable Buffs' section heading was built")
+        end },
+
+        -- Namespaced key (a shared Blizzard table other addons also populate),
+        -- and the two fields that make a destructive confirmation safe: it
+        -- cannot time out into either answer, and Escape has to mean no.
+        { "the clear-layout confirmation is registered, namespaced and safe", function()
+            local dialog = StaticPopupDialogs["THUGUI_CV_CLEAR_LAYOUT"]
+            assert(dialog, "THUGUI_CV_CLEAR_LAYOUT was not registered")
+            assert(dialog.timeout == 0, "clear-layout popup can time out")
+            assert(dialog.hideOnEscape == true, "clear-layout popup does not close on Escape")
+        end },
+
+        -- The case that matters: a single click on the button must not
+        -- destroy the layout by itself -- only accepting the confirmation may.
+        { "clicking Clear this layout shows a confirmation instead of wiping; only OnAccept wipes", function()
+            local Page = ThugUI.CooldownViewer.Page
+            assert(Page.clearLayoutBtn, "the Clear this layout button was not exposed for the test")
+
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            Data.SetPlacement(profile, 1, 1, 999, "cooldown")
+            assert(next(profile.placements), "setup: nothing placed to clear")
+
+            _G.__lastStaticPopup = nil
+            Page.clearLayoutBtn:GetScript("OnClick")(Page.clearLayoutBtn)
+            assert(next(profile.placements), "the click wiped the layout without confirmation")
+            assert(_G.__lastStaticPopup and _G.__lastStaticPopup.which == "THUGUI_CV_CLEAR_LAYOUT",
+                "the click did not show the clear-layout confirmation")
+
+            StaticPopupDialogs["THUGUI_CV_CLEAR_LAYOUT"].OnAccept()
+            assert(not next(profile.placements), "OnAccept did not clear the layout")
+        end },
+
+        -- The empty-picker message used to name a checkbox that lived on this
+        -- page; task 08 moved it to the guide panel, so the old wording would
+        -- have sent the player hunting for a control that is no longer here.
+        { "the buffs-off picker message points at the red workaround link", function()
+            local Page = ThugUI.CooldownViewer.Page
+            local restoreSetting = ThugUI_Config.cvUseBlizzardBuffs
+            local restoreSource = Page.pickerSource
+
+            ThugUI_Config.cvUseBlizzardBuffs = false
+            Page.pickerSource = "buffs"
+            Page:RefreshPicker()
+
+            local text = Page.pickerEmpty.__text or ""
+            assert(text:find("WORKAROUND", 1, true),
+                "the empty-picker message no longer points at the workaround")
+            assert(text:find("|cff%x%x%x%x%x%x"),
+                "the empty-picker message has no colour escape for the link")
+
+            ThugUI_Config.cvUseBlizzardBuffs = restoreSetting
+            Page.pickerSource = restoreSource
+            Page:RefreshPicker()
         end },
 
         -- The guide panel. Built once with the page and shown/hidden after --

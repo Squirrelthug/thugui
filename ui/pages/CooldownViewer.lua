@@ -492,8 +492,13 @@ function Page:RefreshPicker()
         -- generic wording sends the player hunting for a problem that is not
         -- there. This is the only place they would find out.
         if empty and self.pickerSource == "buffs" and not Data.BuffsAvailable() then
-            self.pickerEmpty:SetText("Tracked buffs need |cffffd100Use Blizzard's buff frames|r, "
-                .. "which is switched off. Nothing else can draw a buff in combat.")
+            -- Points at the red [WORKAROUND] link instead of naming a checkbox
+            -- that no longer lives on this page (it moved to the guide panel).
+            -- |cffff2121 is the same red CreateLink uses for that link
+            -- (SetTextColor(1, 0.13, 0.13) in CooldownViewerGuide.lua) --
+            -- reused rather than picking a second red for the same thing.
+            self.pickerEmpty:SetText("Tracked buffs require specific settings. Look for "
+                .. "|cffff2121[WORKAROUND]|r at bottom right of this window")
         else
             self.pickerEmpty:SetText("Nothing here. Try another source, or clear the search.")
         end
@@ -619,6 +624,27 @@ local BAND_TOP = 436          -- below the grid (96 + 10*32 = 416) plus a gutter
 local BAND_COL_1 = 0
 local BAND_COL_2 = 276
 local BAND_COL_3 = 552
+
+-- Registered once at file scope rather than inside BuildInspector, which can
+-- run more than once (e.g. a fresh page build) -- StaticPopupDialogs is a
+-- shared Blizzard table, and re-registering the same key on every build is
+-- pointless churn. OnAccept closes over Profile()/Apply()/Page the same way
+-- the rest of this file does, rather than capturing anything from a build call.
+StaticPopupDialogs["THUGUI_CV_CLEAR_LAYOUT"] = {
+    text = "Remove every icon from %s's layout? Other specs are untouched.",
+    button1 = YES,
+    button2 = NO,
+    OnAccept = function()
+        wipe(Profile().placements)
+        Page.selectedKey = nil
+        Apply()
+        Page:Refresh()
+    end,
+    timeout = 0,          -- a destructive confirmation must not time out into either answer
+    whileDead = true,
+    hideOnEscape = true,  -- Escape has to mean "no"
+    preferredIndex = 3,   -- avoids a taint error when another popup is already showing
+}
 
 function Page:BuildInspector(host)
     self.panels = {}
@@ -769,19 +795,23 @@ function Page:BuildInspector(host)
     -- silent -- an empty cell looks exactly like a broken addon. The steps are
     -- now a panel of their own with the screenshots to match; this is the way
     -- in. ui/pages/CooldownViewerGuide.lua.
-    misc:Label("ENABLE BUFFS")
+    -- Section (not Label) so the red link below reads as visually separate
+    -- from the layout controls above it, matching "This layout"'s own style.
+    -- Section already opens with its own Gap(12), so nothing extra is added
+    -- here.
+    misc:Section("Enable Buffs")
     if CV.BuffGuide then CV.BuffGuide:CreateLink(misc) end
 
     misc:Gap(10)
-    misc:Button{
+    -- Stored on Page (like selectedLabel/anchorLabel/pickerEmpty above) because
+    -- Panel:Button does not register itself onto panel.widgets -- nothing else
+    -- would hold a reference to drive it.
+    self.clearLayoutBtn = misc:Button{
         label = "Clear this layout",
         width = 200,
         tooltip = "Remove every icon from this spec's grid. Does not touch other specs.",
         onClick = function()
-            wipe(Profile().placements)
-            Page.selectedKey = nil
-            Apply()
-            Page:Refresh()
+            StaticPopup_Show("THUGUI_CV_CLEAR_LAYOUT", Data.GetSpecName(Page.editSpecID))
         end,
     }
 end
