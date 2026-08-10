@@ -491,6 +491,20 @@ if ThugUI.CooldownViewer then
     say("\n-- engine --")
     local CV, Data = ThugUI.CooldownViewer, ThugUI.CooldownViewer.Data
 
+    --- Place a shape and ask the shared auto axes about it, with nothing else
+    --- on the grid. Used by the collapse-direction cases further down, which
+    --- turn entirely on where the icons sit relative to the anchor.
+    local function AxesFor(anchorRow, anchorCol, cells)
+        local profile = Data.GetActiveProfile()
+        wipe(profile.placements)
+        profile.collapseDirection = "auto"
+        profile.anchorRow, profile.anchorCol = anchorRow, anchorCol
+        for _, rc in ipairs(cells) do
+            Data.SetPlacement(profile, rc[1], rc[2], 555, "cooldown")
+        end
+        return Data.ResolveAutoAxes(profile)
+    end
+
     local steps = {
         { "initialize", function() CV:Initialize() end },
         { "migration is tracked per spec", function()
@@ -1526,53 +1540,67 @@ if ThugUI.CooldownViewer then
         -- an anchor at row 5 put the shape ABOVE the pointer and then packed it
         -- upwards, away from it. Whichever way the boundary is decided, these
         -- two must decide it the same way.
-        { "an anchor on the midpoint packs towards the cursor, not away", function()
-            local profile = Data.GetActiveProfile()
-            profile.collapse, profile.collapseDirection = "columns", "auto"
+        -- The real rule: intersection R is the bottom edge of cell row R, so a
+        -- cell at or before the anchor is above the cursor. Packing towards the
+        -- cursor is therefore the opposite of where the bulk lies.
+        { "auto packs towards the cursor from where the icons actually are", function()
+            -- The player's resto shape: rows 4-5 against an anchor at row 5, so
+            -- entirely ABOVE the cursor and it must close downwards.
+            local _, down = AxesFor(5, 3, { {4,5},{4,6},{4,7},{5,5},{5,6},{5,7},{5,9} })
+            assert(down, "a shape above the cursor did not pack down towards it")
 
-            -- Mirrors CV:FollowCursor's gapY test. True means the shape is
-            -- nudged so it sits above the pointer, which means packing DOWN is
-            -- what moves it towards the pointer.
-            local function LayoutPutsShapeAbove(p)
-                return (p.anchorRow or 0) >= Data.GRID_ROWS / 2
-            end
-
-            profile.anchorRow = Data.GRID_ROWS / 2
-            local _, down = Data.ResolveCollapseAxes(profile)
-            assert(LayoutPutsShapeAbove(profile) == down,
-                "at the midpoint the layout and the collapse disagreed about "
-                .. "which side of the cursor the shape is on")
-            assert(Data.ResolveCollapseDirection(profile) == "down",
-                "an anchor on the midpoint should pack down, towards the cursor")
-
-            -- One row either side must keep behaving, so the fix cannot be a
-            -- blanket flip of the comparison.
-            profile.anchorRow = Data.GRID_ROWS / 2 - 1
-            assert(Data.ResolveCollapseDirection(profile) == "up",
-                "an anchor above the midpoint should still pack up")
-            profile.anchorRow = Data.GRID_ROWS / 2 + 1
-            assert(Data.ResolveCollapseDirection(profile) == "down",
-                "an anchor below the midpoint should still pack down")
+            -- Same anchor, shape moved below it. The grid-midpoint rule cannot
+            -- tell these apart; that was the bug.
+            local _, down2 = AxesFor(5, 3, { {6,5},{7,5},{8,5} })
+            assert(not down2, "a shape below the cursor did not pack up towards it")
         end },
 
-        -- The same boundary on the other axis. It was never noticed because the
-        -- profile that exposed the row case had a column anchor well clear of
-        -- the midpoint, so only one axis ever misbehaved at a time.
-        { "the column midpoint agrees with the layout too", function()
+        -- The case the old midpoint rule got wrong even after the >= fix: an
+        -- anchor low on the grid with the shape lower still.
+        { "an anchor past the midpoint still follows the icons", function()
+            local _, down = AxesFor(7, 3, { {8,4},{9,4} })
+            assert(not down,
+                "anchor row 7 with icons at rows 8-9 must pack UP towards the "
+                .. "cursor, not down because the anchor is past grid centre")
+        end },
+
+        { "the horizontal axis follows the icons too", function()
+            local right = AxesFor(5, 3, { {4,5},{4,6},{4,7} })
+            assert(not right, "a shape right of the cursor did not pack left")
+
+            local right2 = AxesFor(5, 8, { {4,2},{4,3} })
+            assert(right2, "a shape left of the cursor did not pack right")
+        end },
+
+        -- Tie-break. A shape straddling the anchor evenly has no bulk to speak
+        -- of, and an empty grid has nothing at all, so both fall back to the
+        -- grid-midpoint test rather than inventing an answer.
+        { "an even straddle falls back to the anchor's place on the grid", function()
+            local _, down = AxesFor(5, 3, { {5,4},{6,4} })
+            assert(down == ((5) >= Data.GRID_ROWS / 2),
+                "an evenly straddling shape did not fall back to the midpoint")
+
+            local _, emptyDown = AxesFor(5, 3, {})
+            assert(emptyDown == ((5) >= Data.GRID_ROWS / 2),
+                "an empty grid did not fall back to the midpoint")
+        end },
+
+        -- The layout and the collapse must never derive this separately again:
+        -- CV:FollowCursor's gap nudge and the collapse both read ResolveAutoAxes.
+        { "the layout nudge and the collapse share one source", function()
             local profile = Data.GetActiveProfile()
-            profile.collapse, profile.collapseDirection = "rows", "auto"
+            wipe(profile.placements)
+            profile.collapse, profile.collapseDirection = "columns", "auto"
+            profile.anchorRow, profile.anchorCol = 5, 3
+            Data.SetPlacement(profile, 4, 6, 555, "cooldown")
 
-            local function LayoutPutsShapeLeft(p)
-                return (p.anchorCol or 0) >= Data.GRID_COLS / 2
-            end
-
-            profile.anchorCol = Data.GRID_COLS / 2
-            local right = Data.ResolveCollapseAxes(profile)
-            assert(LayoutPutsShapeLeft(profile) == right,
-                "at the midpoint the layout and the collapse disagreed on the "
-                .. "horizontal axis")
-            assert(Data.ResolveCollapseDirection(profile) == "right",
-                "an anchor on the column midpoint should pack right")
+            local autoRight, autoDown = Data.ResolveAutoAxes(profile)
+            local axesRight, axesDown = Data.ResolveCollapseAxes(profile)
+            assert(autoRight == axesRight and autoDown == axesDown,
+                "the collapse no longer agrees with the shared auto axes")
+            assert(Data.ResolveCollapseDirection(profile)
+                    == (autoDown and "down" or "up"),
+                "ResolveCollapseDirection disagreed with ResolveCollapseAxes")
         end },
 
         -- Regression: the grid used to vanish wholesale in combat because
@@ -1646,8 +1674,13 @@ if ThugUI.CooldownViewer then
             _G.__inCombat = false
         end },
 
+        -- Now specifically the TIE-BREAK path: placements are wiped, so there
+        -- is no bulk to read and the anchor's place on the grid is all that is
+        -- left to go on. With icons present the rule is the one above, which is
+        -- where the real behaviour lives.
         { "auto direction follows the anchor", function()
             local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
             profile.collapseDirection = "auto"
             profile.anchorCol = 0
             assert(Data.ResolveCollapseDirection(profile) == "left", "anchor 0 should pack left")

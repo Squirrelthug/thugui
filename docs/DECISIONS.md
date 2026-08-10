@@ -987,4 +987,43 @@ than against a hardcoded direction, so a future change to either comparison
 fails rather than silently reintroducing the split. Reverting the fix fails
 exactly those two plus the changed one.
 
+### The boundary was a symptom; the rule itself was wrong
+
+Fixing the comparison made the player's profile behave, but only by making a bad
+rule land right. The rule asked **where the anchor sits on the grid**, which is
+merely a proxy for **where the shape sits relative to the anchor** — the thing
+"pack towards the cursor" actually depends on. The two part company as soon as a
+shape is not roughly opposite the anchor across grid centre:
+
+> `anchorRow = 7`, icons at rows 8 and 9. They are below the cursor, so towards
+> it is **up**. The midpoint test says `7 >= 5` and packs **down**, away.
+
+That case is wrong under the `>=` fix too, so the comparison was never the whole
+story.
+
+`auto` now reads the placements. `CV:FollowCursor` offsets the container by
+`anchorRow * cellH`, which makes intersection R the bottom edge of cell row R:
+a cell at or before the anchor is above the cursor, one after it is below, and
+the same holds on x. That is exact, not a heuristic. The bulk of the occupied
+cells decides the axis, and packing towards the cursor is the opposite of where
+the bulk lies.
+
+Tie-breaks, both of which are genuine judgement rather than derivable:
+
+- **An even straddle** — equal cells either side — falls back to the old
+  grid-midpoint test.
+- **An empty grid** does the same, since there is no shape to read.
+
+### One source of truth
+
+`Data.ResolveAutoAxes` is now the only place this is derived, and both the
+collapse *and* `CV:FollowCursor`'s gap nudge call it. Two functions deriving the
+same fact separately is what caused the original split, so the fix is not just
+matching the comparisons but removing the second derivation entirely. A test
+asserts the two agree, so re-inlining the test in either place fails.
+
+**This changes behaviour on existing profiles** wherever the placements disagree
+with the old grid-centre guess. That was accepted deliberately: the old answer
+was wrong in those cases, it just was not always visible.
+
 **Unverified in game.** Built on branch `collapse-anchor-boundary`.

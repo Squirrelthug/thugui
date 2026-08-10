@@ -115,25 +115,89 @@ function Data.IsDirectionValid(mode, direction)
     return false
 end
 
+--- Which side of the cursor the shape's bulk ACTUALLY sits on, from the cells
+--- the player filled rather than from the shape of the grid.
+--- @return packRight boolean|nil, packDown boolean|nil  -- nil where it ties
+---
+--- `CV:FollowCursor` offsets the container by `anchorRow * cellH`, which makes
+--- intersection R the BOTTOM edge of cell row R. So a cell at or before the
+--- anchor is above the cursor and one after it is below, and the same holds on
+--- x. That is exact; nothing here is a heuristic.
+---
+--- Returns nil for an axis that ties, including an empty grid, so the caller
+--- can apply its own tie-break rather than have one invented here.
+local function AutoAxesFromPlacements(profile)
+    local anchorCol = profile.anchorCol or 0
+    local anchorRow = profile.anchorRow or 0
+
+    local left, right, above, below = 0, 0, 0, 0
+
+    for key in pairs(profile.placements or {}) do
+        local row, col = Data.ParseCellKey(key)
+        if row and col then
+            if col <= anchorCol then left = left + 1 else right = right + 1 end
+            if row <= anchorRow then above = above + 1 else below = below + 1 end
+        end
+    end
+
+    -- Packing towards the cursor is the OPPOSITE of where the bulk lies: a
+    -- shape hanging to the right packs left, one sitting above packs down.
+    local packRight, packDown
+    if left ~= right then packRight = left > right end
+    if above ~= below then packDown  = above > below end
+
+    return packRight, packDown
+end
+
+--- The auto answer for both axes, before any explicit override.
+--- @return autoRight boolean, autoDown boolean
+---
+--- ONE source of truth, deliberately. This is consumed both by the collapse and
+--- by `CV:FollowCursor`'s gap nudge, and those two disagreeing about which side
+--- of the pointer the shape is on is exactly the bug in DECISIONS.md 18 -- the
+--- layout put the shape above the cursor while the collapse packed it upwards,
+--- away from it. Route any new caller through here rather than re-deriving it.
+---
+--- The grid-midpoint test survives only as the tie-break for a shape that
+--- straddles the anchor evenly, or for a grid with nothing on it yet. It used
+--- to be the whole rule, and as a rule it was wrong: it asks where the anchor
+--- sits on the GRID, which is only a proxy for where the shape sits relative to
+--- the ANCHOR, and the two part company as soon as a player builds a shape that
+--- is not roughly opposite the anchor across the centre of the grid.
+function Data.ResolveAutoAxes(profile)
+    local fromShape, fromShapeDown = AutoAxesFromPlacements(profile)
+
+    local autoRight = fromShape
+    local autoDown  = fromShapeDown
+
+    if autoRight == nil then
+        autoRight = (profile.anchorCol or 0) >= Data.GRID_COLS / 2
+    end
+    if autoDown == nil then
+        autoDown = (profile.anchorRow or 0) >= Data.GRID_ROWS / 2
+    end
+
+    return autoRight, autoDown
+end
+
 --- The axis direction icons pack toward: "left"/"right" in rows mode,
 --- "up"/"down" in columns mode.
 ---
---- Auto reads the anchor. An anchor right of centre means the shape hangs to
---- the LEFT of the cursor, so its icons pack rightwards, towards the cursor;
---- an anchor low on the grid means the shape hangs ABOVE the cursor, so its
---- icons pack downwards. Dead centre is genuinely ambiguous and falls to the
---- first option, which is what the explicit override is for.
+--- Delegates its auto case to ResolveCollapseAxes rather than repeating the
+--- derivation, so the two can never answer differently.
 function Data.ResolveCollapseDirection(profile)
     local mode = profile.collapse or "none"
     local direction = profile.collapseDirection or "auto"
 
     if mode == "columns" then
         if direction == "up" or direction == "down" then return direction end
-        return (profile.anchorRow or 0) >= Data.GRID_ROWS / 2 and "down" or "up"
+        local _, down = Data.ResolveCollapseAxes(profile)
+        return down and "down" or "up"
     end
 
     if direction == "left" or direction == "right" then return direction end
-    return (profile.anchorCol or 0) >= Data.GRID_COLS / 2 and "right" or "left"
+    local right = Data.ResolveCollapseAxes(profile)
+    return right and "right" or "left"
 end
 
 --- Both axes at once, as booleans the layout code consumes directly.
@@ -148,24 +212,7 @@ function Data.ResolveCollapseAxes(profile)
     local mode = profile.collapse or "none"
     local direction = profile.collapseDirection or "auto"
 
-    -- >= NOT >, and it has to stay that way. `CV:FollowCursor` decides which
-    -- side of the pointer the shape physically sits on with the SAME test:
-    --
-    --     gapY = (anchorRow or 0) >= Data.GRID_ROWS / 2 and gap or -gap
-    --
-    -- Those two must agree, because one places the shape and the other packs it
-    -- towards the cursor, and "towards" is meaningless if they disagree about
-    -- where the cursor is. With a strict > here, an anchor sitting exactly on
-    -- the midpoint made the layout put the shape ABOVE the pointer while the
-    -- collapse packed it upwards, away from it.
-    --
-    -- The midpoint is a real anchor position, not a rounding artefact: the grid
-    -- is 10x10, so intersection 5 is dead centre and is exactly the value a
-    -- player gets by aiming at the middle of the picker. It only ever misfired
-    -- on the axis that landed on the boundary, which is why one spec looked
-    -- broken and another with an anchor one row further out looked fine.
-    local autoRight = (profile.anchorCol or 0) >= Data.GRID_COLS / 2
-    local autoDown  = (profile.anchorRow or 0) >= Data.GRID_ROWS / 2
+    local autoRight, autoDown = Data.ResolveAutoAxes(profile)
 
     if mode == "both" then
         if direction == "topleft"     then return false, false end
