@@ -223,23 +223,30 @@ function Guide:EnsurePopout()
     box:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.9)
     popout.captionBox = box
 
-    -- The empowered-spell glow, because a quiet box beside a big screenshot is
-    -- exactly the thing an eye skips. Blizzard's own alert art is tried first so
-    -- it reads identically to a proc on an action bar -- the same choice, and
-    -- the same fallback, as SetGlow in modules/CooldownViewer/Core.lua.
+    -- A quiet box beside a big screenshot is exactly what an eye skips, so this
+    -- one is made loud on purpose.
     --
-    -- The fallback is not paranoia: that art is built for square buttons and is
-    -- being asked to frame a tall narrow box, so if the manager refuses the
-    -- frame outright there has to be something behind it.
-    local manager = ActionButtonSpellAlertManager
-    if not (manager and pcall(manager.ShowAlert, manager, box)) then
-        local glow = box:CreateTexture(nil, "OVERLAY")
-        glow:SetPoint("TOPLEFT", -3, 3)
-        glow:SetPoint("BOTTOMRIGHT", 3, -3)
-        glow:SetColorTexture(1, 0.85, 0.25, 0.35)
-        glow:SetBlendMode("ADD")
-        box.glowFallback = glow
-    end
+    -- Blizzard's empowered-spell alert was tried first and did not work here:
+    -- ActionButtonSpellAlertManager is built around square action buttons and
+    -- gave nothing usable on a tall narrow frame. So the glow is ours, drawn
+    -- from primitives that cannot fail to load -- no art file, no manager, no
+    -- animation API.
+    box:SetBackdropBorderColor(1, 0.85, 0.1, 1)
+
+    local glow = box:CreateTexture(nil, "OVERLAY")
+    glow:SetPoint("TOPLEFT", -4, 4)
+    glow:SetPoint("BOTTOMRIGHT", 4, -4)
+    glow:SetColorTexture(1, 0.85, 0.25, 1)
+    glow:SetBlendMode("ADD")
+    box.glow = glow
+
+    -- Pulsed from OnUpdate rather than an AnimationGroup: it is three lines, it
+    -- needs no template, and it degrades to a static glow under the test
+    -- harness, where OnUpdate never fires.
+    box:SetScript("OnUpdate", function(self, elapsed)
+        self.pulse = (self.pulse or 0) + (elapsed or 0)
+        self.glow:SetAlpha(0.30 + 0.35 * math.abs(math.sin(self.pulse * 2.2)))
+    end)
 
     local caption = box:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     caption:SetPoint("TOPLEFT", box, "TOPLEFT", CAPTION_PAD, -CAPTION_PAD)

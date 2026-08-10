@@ -1,3 +1,60 @@
+# Handoff — state as of 2026-08-10
+
+## Newest first: the buff feature is finished, and the picker was lying
+
+**Verified in game by the player 2026-08-09:** an adopted buff draws in its cell
+*and* the column collapses when the buff is down. The long-standing "adopted
+cells are reserved forever" cost is gone — `DECISIONS.md` §13, "Their frame's
+visibility is the buff state we were told we could not have". The short version
+is worth carrying anywhere: **§12 proved the aura APIs cannot answer "is this
+buff up"; that got generalised into "we cannot know", and that was wrong.**
+Blizzard's item hides itself, and reading a frame's shown state is not reading an
+aura.
+
+Built since, **none of it seen in the game**:
+
+- A workaround guide panel down the right of the config window, nine steps
+  cut to seven, with the player's own screenshots. `ui/pages/CooldownViewerGuide.lua`.
+  **WoW does not load PNG** — the `.tga` files beside them are what the game
+  reads, generated on 512×512 power-of-two canvases, so every one needs
+  `SetTexCoord` or it draws the transparent padding.
+- The "Use Blizzard's buff frames" checkbox moved out of the main window and
+  into that panel.
+- `Clear this layout` now asks first.
+- The picker stopped offering buff rows that can never draw (see below), and
+  stopped greying a spell placed as a cooldown when you are looking at buffs.
+
+**One measurement is waiting to be read.** `BB:Apply` logs
+`blizzbuffs-shown-readable-<combat>` once per session per combat state. If the
+`combat=true` line says *readable*, Blizzard's frame visibility is a live
+buff-active signal that survives combat — new ground, and reusable well beyond
+the cooldown viewer. Read it before assuming either way.
+
+### The picker was offering ~20 rows that could not work
+
+It expanded each buff entry's `linkedSpellIDs` into rows of their own. Removed.
+Adoption maps **one Blizzard frame per `cooldownID`** and every linked ID shares
+its base entry's, so five cells could only ever draw one icon — the player tested
+exactly that. `DECISIONS.md` §13. Four of those rows appeared under a *different
+name*, which read as a separate buff rather than a duplicate.
+
+### The test harness was hiding its own coverage
+
+Every section after the first was gated on `failures == 0`, so **one early
+failure silently skipped four whole sections** while still printing a plausible
+short report. Coverage vanished exactly when something was known to be broken.
+Every case already runs under `pcall`, so the guard never protected anything.
+Removed, and verified by injecting a deliberate failure.
+
+Current baseline: **160 passing across six sections, 0 failures.**
+
+Three separate harness defects were found this way — by agents doing unrelated
+work and reporting them rather than fixing them (`GetChecked` returning a
+constant, `Panel:Button` never registering onto `panel.widgets`, and this). The
+harness is due a pass of its own rather than another accident.
+
+---
+
 # Handoff — state as of 2026-08-09
 
 Cold-start entry point. Read this, then `../CLAUDE.md`, then
