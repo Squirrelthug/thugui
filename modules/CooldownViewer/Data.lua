@@ -439,8 +439,21 @@ end
 
 --- Spell IDs from one Cooldown Manager category. Returns an empty list on any
 --- client where C_CooldownViewer is missing or the enum has been renamed.
---- @param expandLinked boolean? also offer each entry's linked buffs separately
-local function CooldownViewerSpellIDs(categoryName, expandLinked)
+---
+--- Used to also offer each entry's linkedSpellIDs as separate picker rows, so
+--- a player could track one outcome specifically -- "show me only when I roll
+--- Jackpot" instead of just "show me Roll the Bones". That intent was real,
+--- and it was tested in game: placing Roll the Bones plus all four outcomes
+--- in `aura` mode rendered exactly one icon, not five. The reason is
+--- structural, not a bug to fix here -- `BlizzBuffs:Apply` maps ONE Blizzard
+--- item frame per `cooldownID`, and every linked ID resolves to the SAME
+--- cooldownID as its base entry (Roll the Bones and its four outcomes are all
+--- cdID 42743 in the player's own dump). Five picker rows, one frame to
+--- adopt, one winner -- no logic makes five cells share one frame. Nothing is
+--- lost by not expanding: the base entry already covers the linked buffs at
+--- runtime, since `ResolveAura` in Core.lua walks `icon.linkedSpellIDs` and
+--- shows whichever is live regardless of what the picker offered.
+local function CooldownViewerSpellIDs(categoryName)
     if not C_CooldownViewer or not C_CooldownViewer.GetCooldownViewerCategorySet then
         return {}
     end
@@ -456,20 +469,6 @@ local function CooldownViewerSpellIDs(categoryName, expandLinked)
         if infoOK and info then
             local spellID = Data.PickerSpellIDFor(info)
             if spellID then table.insert(spellIDs, spellID) end
-
-            -- An entry standing for a SET of buffs offers only the set: pick
-            -- "Roll the Bones" and you get whichever outcome is live. Listing
-            -- the outcomes individually as well lets a player track one of
-            -- them specifically -- "show me only when I roll Jackpot".
-            --
-            -- Read from linkedSpellIDs, never from a table of IDs we wrote
-            -- down: the outcomes change between builds (they were six, they
-            -- are four now), so anything hardcoded rots silently.
-            if expandLinked then
-                for _, linkedID in ipairs(info.linkedSpellIDs or {}) do
-                    table.insert(spellIDs, linkedID)
-                end
-            end
         end
     end
     return spellIDs
@@ -699,12 +698,6 @@ function Data.BuildSpellList(source, search)
         for _, id in ipairs(list) do table.insert(ids, id) end
     end
 
-    -- Only the buff sources expand their linked spells. On a cooldown entry a
-    -- linked spell is the same button under another ID, and listing it would
-    -- just double the list; on a buff entry it is a genuinely different thing
-    -- to track.
-    local expand = (source == "buffs" or source == "all")
-
     -- Withheld, not filtered out afterwards: a buff that cannot be drawn must
     -- never be offered, in "buffs" or in "all". Only the buff categories are
     -- affected -- essential, utility and spellbook are untouched.
@@ -723,7 +716,7 @@ function Data.BuildSpellList(source, search)
             end
             local isBuff = IsBuffCategory(categoryName)
             if buffsAvailable or not isBuff then
-                collect(CooldownViewerSpellIDs(categoryName, isBuff))
+                collect(CooldownViewerSpellIDs(categoryName))
             end
         end
         collect(SpellbookSpellIDs())
@@ -733,7 +726,7 @@ function Data.BuildSpellList(source, search)
             if not buffsAvailable and IsBuffCategory(categoryName) then
                 withheld = true
             else
-                collect(CooldownViewerSpellIDs(categoryName, expand))
+                collect(CooldownViewerSpellIDs(categoryName))
             end
         end
         -- A spec Blizzard has not categorised would otherwise show an empty

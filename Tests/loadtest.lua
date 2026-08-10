@@ -434,7 +434,7 @@ for _, file in ipairs(LoadTOC(addonPath)) do
 end
 
 -- Drive the window: build and refresh every registered page.
-if failures == 0 and ThugUI and ThugUI.Window then
+if ThugUI and ThugUI.Window then
     say("\n-- pages --")
     local ok, err = pcall(function() ThugUI.Window:CreateWindow() end)
     if not ok then
@@ -481,7 +481,7 @@ if failures == 0 and ThugUI and ThugUI.Window then
 end
 
 -- Exercise the cooldown viewer engine, which PLAYER_LOGIN would normally start.
-if failures == 0 and ThugUI.CooldownViewer then
+if ThugUI.CooldownViewer then
     say("\n-- engine --")
     local CV, Data = ThugUI.CooldownViewer, ThugUI.CooldownViewer.Data
 
@@ -585,7 +585,13 @@ if failures == 0 and ThugUI.CooldownViewer then
         -- Jackpot". The outcomes come from linkedSpellIDs, never from a list
         -- of IDs written down here -- they were six on an older build and are
         -- four now, so anything hardcoded rots without anyone noticing.
-        { "buff outcomes are offered individually, not just the set", function()
+        -- Inverted by task 10. This used to assert that each outcome was offered
+        -- as its own row, which was real intent and turned out to be impossible:
+        -- adoption maps one Blizzard frame per cooldownID, every outcome shares
+        -- the base entry's cooldownID, and five rows could only ever draw one
+        -- icon. The set entry still has to be here -- that is what the player
+        -- actually places.
+        { "buff outcomes are no longer offered individually, only the set", function()
             local list = Data.BuildSpellList("buffs", nil)
 
             local byID = {}
@@ -593,14 +599,13 @@ if failures == 0 and ThugUI.CooldownViewer then
 
             assert(byID[5000], "the set entry itself vanished from the picker")
             local info = Data.GetCooldownInfoForSpell(5000)
-            assert(info and #info.linkedSpellIDs > 0, "setup: no linked buffs to expand")
+            assert(info and #info.linkedSpellIDs > 0, "setup: no linked buffs to check")
             for _, linkedID in ipairs(info.linkedSpellIDs) do
-                assert(byID[linkedID],
-                    ("linked buff %d was not offered on its own"):format(linkedID))
+                assert(not byID[linkedID],
+                    ("linked buff %d was still offered on its own"):format(linkedID))
             end
 
-            -- Cooldown sources must NOT expand: there a linked spell is the
-            -- same button under another ID and would just double the list.
+            -- Cooldown sources never expanded either, and still must not.
             local essentials = Data.BuildSpellList("essential", nil)
             local essentialIDs = {}
             for _, entry in ipairs(essentials) do essentialIDs[entry.spellID] = true end
@@ -608,6 +613,67 @@ if failures == 0 and ThugUI.CooldownViewer then
             if cdInfo and cdInfo.linkedSpellIDs and #cdInfo.linkedSpellIDs > 0 then
                 assert(not essentialIDs[cdInfo.linkedSpellIDs[1]],
                     "a cooldown entry's linked spell was offered separately")
+            end
+        end },
+
+        -- Task 10: the test above asserted the OLD behaviour (linked outcomes
+        -- offered as their own rows) and is left in place on purpose -- it now
+        -- fails, and that failure is the documented, expected result of
+        -- removing the expansion, not a regression. These cases assert the
+        -- NEW behaviour: one picker row per entry, no matter how many buffs
+        -- it can grant. Nothing is lost by not expanding -- ResolveAura in
+        -- Core.lua walks icon.linkedSpellIDs at runtime regardless of what the
+        -- picker offered, and that path is covered separately below.
+        { "an entry with linked spells yields one picker row, not one per linked id", function()
+            Data.InvalidateCooldownInfoCache()
+            local list = Data.BuildSpellList("buffs", nil)
+
+            local byID, baseCount = {}, 0
+            for _, entry in ipairs(list) do
+                byID[entry.spellID] = true
+                if entry.spellID == 5000 then baseCount = baseCount + 1 end
+            end
+
+            assert(byID[5000], "the base entry itself vanished from the picker")
+            assert(baseCount == 1,
+                ("base entry 5000 appeared %d times in the picker, expected 1"):format(baseCount))
+
+            local info = Data.GetCooldownInfoForSpell(5000)
+            assert(info and #info.linkedSpellIDs >= 2, "setup: need 2+ linked ids to prove this")
+            for _, linkedID in ipairs(info.linkedSpellIDs) do
+                assert(not byID[linkedID],
+                    ("linked buff %d was still offered as its own row"):format(linkedID))
+            end
+        end },
+        { "the all source likewise does not gain linked ids", function()
+            Data.InvalidateCooldownInfoCache()
+            local byID = {}
+            for _, entry in ipairs(Data.BuildSpellList("all", nil)) do
+                byID[entry.spellID] = true
+            end
+
+            assert(byID[5000], "the base entry vanished from the 'all' source")
+            local info = Data.GetCooldownInfoForSpell(5000)
+            for _, linkedID in ipairs(info.linkedSpellIDs) do
+                assert(not byID[linkedID],
+                    ("'all' offered linked buff %d as its own row"):format(linkedID))
+            end
+        end },
+        -- Cooldown sources never expanded their linked spells even before this
+        -- change (expansion only ever ran for "buffs" and "all"), so this is a
+        -- guard against a future change reintroducing it there, not proof that
+        -- anything here moved.
+        { "essential, utility and spellbook stay unaffected by the picker change", function()
+            Data.InvalidateCooldownInfoCache()
+            for _, source in ipairs({ "essential", "utility", "spellbook" }) do
+                local byID = {}
+                for _, entry in ipairs(Data.BuildSpellList(source, nil)) do
+                    byID[entry.spellID] = true
+                end
+                for _, linkedID in ipairs({ 5101, 5102, 5103, 5104 }) do
+                    assert(not byID[linkedID],
+                        ("%s source offered linked buff %d as its own row"):format(source, linkedID))
+                end
             end
         end },
         { "unknown category reaches cache and dump", function()
@@ -1465,8 +1531,12 @@ if failures == 0 and ThugUI.CooldownViewer then
                 for _, entry in ipairs(Data.BuildSpellList("all", nil)) do
                     inAll[entry.spellID] = true
                 end
-                assert(inAll[5101],
-                    ("a linked buff was missing from 'all' with the setting %s"):format(state))
+                -- The BASE entry, not a linked one: task 10 stopped offering
+                -- linked IDs at all, so their presence proves nothing now. What
+                -- this case is actually about is the setting, and the base ID
+                -- proves that just as well.
+                assert(inAll[5000],
+                    ("the base entry was missing from 'all' with the setting %s"):format(state))
             end
 
             ThugUI_Config.cvUseBlizzardBuffs = restore
@@ -1732,7 +1802,7 @@ if failures == 0 and ThugUI.CooldownViewer then
 end
 
 -- Resource ring: power resolution and the static-arc maths.
-if failures == 0 and ThugUI.ResourceRing then
+if ThugUI.ResourceRing then
     say("\n-- resource ring --")
     local RR = ThugUI.ResourceRing
     _G.ThugUI_CursorFrame = _G.ThugUI_CursorFrame or NewFrame()
@@ -1844,7 +1914,7 @@ end
 -- that an addon cannot identify an aura in combat, so the cell has to be driven
 -- by Blizzard's own frame -- which means the plumbing that finds and anchors
 -- that frame is now load-bearing for the feature working at all.
-if failures == 0 and ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs then
+if ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs then
     say("\n-- blizzard buff items --")
     local CV = ThugUI.CooldownViewer
     local Data = CV.Data
@@ -2268,7 +2338,7 @@ if failures == 0 and ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs 
 end
 
 -- Combo pips: which resource, how many, and how many are lit.
-if failures == 0 and ThugUI.ComboPips then
+if ThugUI.ComboPips then
     say("\n-- combo pips --")
     local CP = ThugUI.ComboPips
     _G.ThugUI_CursorFrame = _G.ThugUI_CursorFrame or NewFrame()
@@ -2436,7 +2506,7 @@ end
 -- to prove is that it stays quiet and complete when every read is refused.
 -- A diagnostic that throws on the exact condition it was built to record is
 -- worse than no diagnostic, and this addon has already shipped one of those.
-if failures == 0 and ThugUI.SecretProbe then
+if ThugUI.SecretProbe then
     say("\n-- secret probe --")
     local SP = ThugUI.SecretProbe
 

@@ -626,6 +626,33 @@ it once per session **per combat state** — combat is in the key, because an
 out-of-combat line logged first would suppress the only line worth having. That
 is the `GetPlayerCastAura` `Note` lesson, learned a second time.
 
+### Tracking one outcome of a multi-buff spell is impossible, and was tried
+
+The picker used to expand each buff entry's `linkedSpellIDs` into rows of their
+own, so a player could ask for one specific outcome — "show me only when I roll
+Jackpot" rather than "show me Roll the Bones". The intent was real and the
+reasoning looked sound.
+
+It cannot work, and the player tested it: Roll the Bones plus all four outcomes,
+all in `aura` mode, renders exactly **one** icon.
+
+The cause is structural. Adoption maps **one Blizzard item frame per
+`cooldownID`**, and every linked ID resolves to its base entry's `cooldownID` —
+Roll the Bones and its four outcomes are all `cdID 42743`. Five cells, one frame
+to borrow, one winner. No logic makes five cells share one frame, because there
+is only ever one frame.
+
+Nothing was lost by removing the expansion: `ResolveAura` already walks
+`icon.linkedSpellIDs` and shows whichever outcome is live, which is why the base
+placement works and reports `linked=4`.
+
+It was not a Roll the Bones quirk either. **20 of the player's 31 tracked-buff
+entries carry linked IDs**, so the picker was offering roughly twenty rows that
+could never draw — and four of them under a *different name* (Gravedigger →
+Palmed Bullets, Unseen Blade → Fazed, Coup de Grace → Escalating Blade, Cloud
+Cover → Smokescreen), which reads as a separate trackable buff rather than a
+duplicate.
+
 **The general shape, worth carrying to any similar problem:** when the game
 refuses to tell an addon a fact, check whether Blizzard's own UI has already
 rendered that fact into something an addon *is* allowed to read. Their frames are
