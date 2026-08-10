@@ -17,7 +17,6 @@ function Page:Build(host, panel)
         { "Acorn Orbs",      "Floating acorns standing in for hidden UI elements." },
         { "Frame Hider",     "Turn off default elements you never look at." },
         { "Cursor Rings",    "GCD and cast tracking drawn around the pointer." },
-        { "Raid Frames",     "oUF party/raid frames with click-through auras." },
         { "Target of Target","Your target's target on the full-size target art." },
     }
 

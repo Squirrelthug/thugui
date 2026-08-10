@@ -32,13 +32,9 @@ ui\Window.lua
 modules\EssentialRings.lua
 modules\EssentialRings_Settings.lua
 
-# Raid frames: Core defines ThugUI.RaidFrames, Settings hangs its panel off the
-# helpers exported by EssentialRings_Settings, so both come after those.
-modules\RaidFrames\Core.lua
-modules\RaidFrames\Settings.lua
-
-# Target of target, same arrangement: Core defines ThugUI.TargetOfTarget and
-# Settings hangs its panel off the EssentialRings_Settings helpers.
+# Target of target: Core defines ThugUI.TargetOfTarget and Settings hangs its
+# panel off the helpers exported by EssentialRings_Settings, so both come
+# after that file.
 modules\TargetOfTarget\Core.lua
 modules\TargetOfTarget\Settings.lua
 
@@ -80,7 +76,6 @@ ui\pages\CooldownViewer.lua
 ui\pages\OrbAnchors.lua
 ui\pages\FrameHider.lua
 ui\pages\CursorRings.lua
-ui\pages\RaidFrames.lua
 ui\pages\TargetOfTarget.lua
 ui\pages\About.lua
 

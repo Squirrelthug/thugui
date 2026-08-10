@@ -67,9 +67,11 @@ function FrameHider:HideCharacterFrame()
     self.applied.characterFrame = true
 end
 
--- NOTE: The raid-frame aura tooltip anchor fix that used to live here has been
--- removed. ThugUI now ships its own raid frames (modules/RaidFrames), which own
--- their aura icons outright and simply never wire a tooltip to them.
+-- NOTE: A tooltip-anchor fix for Blizzard's compact-frame auras used to live
+-- here. It was dropped when ThugUI shipped its own raid frames, which owned
+-- their aura icons outright and simply never wired a tooltip to them. Those
+-- raid frames have since been removed too, because the tooltip problem is now
+-- handled outside ThugUI. Do not re-add a tooltip fix here casually.
 
 -- Make the Prey Crystal frame (UIWidgetPowerBarContainerFrame) draggable
 -- and persist its position across sessions via ThugUI_Config.preyCrystalPoint

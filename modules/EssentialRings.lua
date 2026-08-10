@@ -380,55 +380,10 @@ ER.defaults = {
     movePreyCrystal = true,
     preyCrystalPoint = nil,  -- saved position {point, relPoint, x, y}
 
-    -- Raid Frames (modules/RaidFrames, built on oUF)
-    -- Off by default: enabling replaces the Blizzard party/raid frames, which
-    -- should be an explicit choice rather than something an update does to you.
-    rfEnabled = false,
-    rfUnlocked = false,  -- shows the drag handle over the frames
-    rfPoint = nil,  -- saved position {point, relPoint, x, y}
-
-    -- Layout (changing any of these needs a /reload to rebuild the header)
-    rfWidth = 80,
-    rfHeight = 40,
-    rfSpacing = 3,
-    rfUnitsPerColumn = 5,
-    rfMaxColumns = 8,
-    rfGroupBy = "GROUP",  -- GROUP | ROLE | CLASS | NONE
-
-    -- Health
-    rfHealthColor = "class",  -- class | gradient | static
-    rfHealthStaticColor = { r = 0.25, g = 0.25, b = 0.25 },
-    rfShowPowerBar = false,
-    rfPowerBarHeight = 3,
-
-    -- Text
-    rfShowName = true,
-    rfNameLength = 6,
-
-    -- Buff Manager
-    rfShowBuffs = true,
-    rfBuffCount = 3,
-    rfBuffSize = 14,
-    rfBuffOnlyMine = true,
-    rfBuffHideTooltips = true,
-
-    -- Debuff Display
-    rfShowDebuffs = true,
-    rfDebuffCount = 3,
-    rfDebuffSize = 16,
-    rfDebuffDispellableOnly = false,
-    rfDebuffHideTooltips = true,
-
-    -- Behaviour
-    rfRangeAlpha = 0.4,
-    rfShowParty = true,
-    rfShowSolo = false,
-    rfShowPlayerInParty = true,
-    rfHideBlizzardRaidFrames = true,
-
     -- Target of Target (modules/TargetOfTarget, built on oUF)
-    -- Off by default for the same reason as the raid frames: enabling it turns
-    -- off Blizzard's own target-of-target frame, which should be a choice.
+    -- Off by default: enabling it turns off Blizzard's own target-of-target
+    -- frame, which should be an explicit choice rather than something an
+    -- update does to you.
     totEnabled = false,
     totUnlocked = false,  -- shows the drag handle over the frame
     totPoint = nil,  -- saved position {point, relPoint, x, y}
@@ -2273,13 +2228,8 @@ LoaderFrame:SetScript("OnEvent", function(self, event, addon)
         if ThugUI.FrameHider then
             ThugUI.FrameHider:ApplyAll()
         end
-        -- Raid frames wait on PLAYER_ENTERING_WORLD internally: the secure
-        -- header must not be spawned before the roster exists.
-        if ThugUI.RaidFrames then
-            ThugUI.RaidFrames:Initialize()
-        end
-        -- Same deal as the raid frames: the unit button is protected, so it
-        -- waits on PLAYER_ENTERING_WORLD internally rather than spawning here.
+        -- The unit button is protected, so it waits on PLAYER_ENTERING_WORLD
+        -- internally rather than spawning here.
         if ThugUI.TargetOfTarget then
             ThugUI.TargetOfTarget:Initialize()
         end

@@ -181,8 +181,9 @@ function ER:GetConfig()
     return ThugUI_Config
 end
 
--- Shared with modules/RaidFrames/Settings.lua so its panel is laid out with the
--- same helpers as the rest of the ThugUI options, not a second set that drifts.
+-- Shared with modules/TargetOfTarget/Settings.lua so its panel is laid out
+-- with the same helpers as the rest of the ThugUI options, not a second set
+-- that drifts.
 ER.CreateScrollablePanel = CreateScrollablePanel
 ER.CreateSeparator = CreateSeparator
 
@@ -221,7 +222,6 @@ function ER:CreateSettingsPanel()
     local features = {
         {"|cffffffffCursor Rings|r", "Ring animations for GCD, casting, and reticle customization"},
         {"|cffffffffCooldown Viewer|r", "Essential spell cooldown bar showing ready abilities"},
-        {"|cffffffffRaid Frames|r", "ThugUI party/raid frames with tooltip-free, click-through auras"},
         {"|cffffffffTarget of Target|r", "Your target's target on the full-size target frame art"},
         {"|cffffffffFrame Hider|r", "Hide unwanted default UI elements"},
     }
@@ -273,7 +273,6 @@ function ER:CreateSettingsPanel()
         ER:CreateECVPanel(category)
         ER:CreateBCVPanel(category)
         ER:CreateGCVPanel(category)
-        ER:CreateRaidFramesPanel(category)
         ER:CreateTargetOfTargetPanel(category)
         ER:CreateFrameHiderPanel(category)
     else

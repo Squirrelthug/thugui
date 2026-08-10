@@ -198,8 +198,10 @@ local function ThugToTStyle(self, unit)
     name:SetJustifyH("LEFT")
     name:SetJustifyV("MIDDLE")
     name:SetPoint("TOPLEFT", rep, "TOPRIGHT", -106, -1)
-    -- Deliberately NOT `ThugName`: RaidFrames:RefreshFrames walks every oUF
-    -- object and treats a frame carrying that key as one of its raid buttons.
+    -- Named `ThugToTName` rather than `ThugName` because the raid frames used
+    -- to walk every oUF object and claim any frame carrying `ThugName` as one
+    -- of their raid buttons. Those frames are gone, so the collision no longer
+    -- exists — the name is kept only because renaming it buys nothing.
     self.ThugToTName = name
 
     local health = CreateFrame("StatusBar", nil, content)

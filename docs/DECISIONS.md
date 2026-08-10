@@ -15,7 +15,7 @@ The addon grew in layers and they do not know about each other.
 
 | | Config store | Defaults | Bootstrap | Owns |
 |---|---|---|---|---|
-| **A** — original | `ThugUI_Config` (flat keys) | `ER.defaults` in `modules/EssentialRings.lua` | `LoaderFrame` at the bottom of that file | EssentialRings, RaidFrames, TargetOfTarget, FrameHider, CooldownViewer |
+| **A** — original | `ThugUI_Config` (flat keys) | `ER.defaults` in `modules/EssentialRings.lua` | `LoaderFrame` at the bottom of that file | EssentialRings, TargetOfTarget, FrameHider, CooldownViewer |
 | **B** — module system | `ThugUIDB` (nested per module) | `ThugUI.defaults` in `core.lua` | `core.lua` ADDON_LOADED | OrbAnchors |
 | **C** — config window | *reads both* | — | page files register on load | `ui/` |
 
@@ -793,3 +793,61 @@ Both routes are bad for us:
 So it stays manual, and the constraint is stated in the open on the Cooldown
 Viewer page rather than only in a tooltip. Revisit only if Blizzard ships a
 scoped setter.
+
+## 16. The raid frames are gone, and this addon does not manage unit frames
+
+Removed 2026-08-10. `modules/RaidFrames/` (Core + Settings) and
+`ui/pages/RaidFrames.lua` are deleted, along with the 27 `rf*` keys in
+`ER.defaults`, the Blizzard subpanel, and the config page.
+
+**Why they existed at all.** One problem, and only one: mousing over the
+player's own buff icons in the cells of Blizzard's default raid frames popped a
+tooltip the player could not get rid of. Owning the frames meant owning the aura
+icons, and an icon we create never has a tooltip wired to it. Everything else
+the module did — layout, health colouring, range fading, group-by — was the cost
+of that one fix, not the goal.
+
+**Why they are gone.** The tooltip problem is now handled outside ThugUI, so the
+module was paying for something already solved. ThugUI enhances the default UI;
+managing unit frames is a different job with a much larger maintenance surface,
+and the player does not want it.
+
+**The removal was a no-op, and that was checked rather than assumed.**
+`ThugUI_Config.rfEnabled` was already `false` in the live SavedVariables, so
+nothing here had been drawing. The bar for the diff was therefore *zero visible
+change*, which is a far easier thing to verify than "the replacement behaves the
+same".
+
+### What had to stay, and why each one nearly went
+
+Removing a module built on a shared library is mostly an exercise in not
+over-deleting. Four things looked like raid-frame code and were not:
+
+- **`libs/oUF/` stays.** `modules/TargetOfTarget/Core.lua` is built on it too.
+  The raid frames were its largest consumer, not its only one.
+- **`ER.CreateScrollablePanel` / `ER.CreateSeparator` stay.**
+  `TargetOfTarget/Settings.lua` uses both. Only the comment naming
+  `RaidFrames/Settings.lua` as the sharer was wrong.
+- **`rfCornerLabel`, `rfCornerDropdown`, `rfScaleSlider` and the rest of the
+  `rf*` locals in `EssentialRings_Settings.lua` (~946–1180) stay.** These are
+  **Reforestation** controls on the legacy ECV panel — they read
+  `ecvReforestationCorner` and `ecvReforestationScale`. The `rf` prefix is a
+  coincidence. A blind `rf*` sweep is the obvious way to do this job and it
+  would have silently gutted the fallback bars that exist precisely to be the
+  escape hatch.
+- **`RAID_CLASS_COLORS` in `Tests/loadtest.lua`** is a stub the vendored oUF
+  reads. Deleting it breaks the harness for Target of Target.
+
+### Leftovers that were deliberately not cleaned
+
+The `rf*` keys still sitting in the player's `ThugUI_Config` are left alone.
+Nothing reads them now, so they are inert; WoW was running at the time, which
+means any edit would have been overwritten at logout anyway (see `CLAUDE.md`);
+and keeping them means a revert costs nothing.
+
+Harness after the change: **156 passing, 0 failures**, down from 160. The four
+that went are exactly the two file-load assertions, the page-load assertion, and
+`page raidframes` — `loadtest.lua` derives those from `ThugUI.toc` and
+`ThugUI.Window.pages`, so they disappeared mechanically. No behavioural
+assertion was lost, and that was confirmed by diffing the `ok` lines against a
+stashed clean tree rather than by reading the count.

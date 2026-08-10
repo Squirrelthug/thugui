@@ -1,6 +1,36 @@
 # Handoff — state as of 2026-08-10
 
-## Newest first: the buff feature is finished, and the picker was lying
+## Newest first: the raid frames are gone
+
+`modules/RaidFrames/` and `ui/pages/RaidFrames.lua` are deleted, with every
+reference — 27 `rf*` defaults, the Blizzard subpanel, the config page, the
+feature rows. `DECISIONS.md` §16.
+
+They existed to solve exactly one problem: the tooltip that popped when the
+player moused over their own buff icons in the cells of Blizzard's default raid
+frames. That is now handled **outside ThugUI**, so the module was paying for
+something already solved, and this addon does not want to be in the unit-frame
+business.
+
+**It was a no-op and that was verified, not assumed.** `rfEnabled` was already
+`false` in the live SavedVariables, so nothing had been drawing — the bar for
+the diff was zero visible change. Harness went 160 → **156 passing, 0 failures**;
+the four that went are file-load and page-load assertions that `loadtest.lua`
+derives from the TOC, confirmed by diffing `ok` lines against a stashed clean
+tree rather than by trusting the count.
+
+**If the tooltip ever comes back, do not look in ThugUI for the fix.** There
+isn't one and there hasn't been since `0c2d4e2` — `FrameHider:FixTooltipAnchor`
+was deleted then and never replaced. The note at `modules/FrameHider.lua:70` now
+records that history so nobody re-derives it.
+
+The trap worth carrying: **not every `rf` prefix is a raid frame.** The
+`rfCorner*`/`rfScale*` locals in `EssentialRings_Settings.lua` (~946–1180) are
+*Reforestation* controls on the legacy ECV panel. A blind `rf*` sweep would have
+gutted the fallback bars. `libs/oUF/` also stays — Target of Target is built on
+it too.
+
+## The buff feature is finished, and the picker was lying
 
 **Verified in game by the player 2026-08-09:** an adopted buff draws in its cell
 *and* the column collapses when the buff is down. The long-standing "adopted
