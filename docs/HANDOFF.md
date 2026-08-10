@@ -1,5 +1,75 @@
 # Handoff — state as of 2026-08-10
 
+## START HERE — session ended mid-thread, three things are unfinished
+
+### 1. Repo state, which is not clean
+
+| | |
+|---|---|
+| `main` | `763548e` — **3 commits ahead of `origin/main`, never pushed** |
+| `collapse-anchor-boundary` | `a791bf6` — 2 commits, **tested and working, deliberately not merged** |
+| `abundance-icon-scale` | merged into `main`, branch left in place, safe to delete |
+| `raidframes-test` | scratch branch at `b2c54dd`, safe to delete |
+
+**Push `main` early.** Three commits of finished, player-verified work exist only
+on this machine, and the addon folder *is* the working copy — an accident here
+loses them.
+
+The player's instruction on the branch, verbatim in intent: *these changes seemed
+to work, but we won't merge yet until the Maul issue is figured out.* Do not
+merge it without asking. Harness on that branch: **165 passing, 0 failures**.
+
+### 2. The open bug: Maul on the Guardian druid
+
+Reported, **not diagnosed**, nothing written for it yet:
+
+- **Maul (Guardian)** draws its icon but **no radial cooldown sweep**, and it has
+  **two charges**.
+- **Grappling Hook (Outlaw)** is a two-charge spell that **disappears entirely
+  when both charges are spent**.
+
+The player suspects a common cause in how charges are handled and asked to take
+them one alt at a time, Guardian first. Nothing in `Data.lua` or `Core.lua` has
+been read with charges in mind yet — treat this as unstarted.
+
+Start from `DECISIONS.md` §5, "Spell readiness: never from duration" — charge
+state is adjacent to that logic and the rules there (`isActive`/`isOnGCD`, never
+`startTime`/`duration`, query by name) constrain any fix.
+
+### 3. What changed this session, and what is verified
+
+| Change | Where | State |
+|---|---|---|
+| Raid frames module deleted entirely | `main` | Verified — the module was already inert (`rfEnabled = false`) |
+| Adopted buffs scale correctly on scaled profiles | `main`, `DECISIONS.md` §17 | **Verified in game** by the player on resto |
+| `docs/QA.md` — pre-release in-game checklist | `main` | New file, nothing run against it yet |
+| Auto collapse direction now reads the placements | branch, `DECISIONS.md` §18 | **Player says it works**, unmerged pending Maul |
+
+## Things that cost time this session — do not rediscover them
+
+**SavedVariables line numbers are void the moment the game runs.** WoW rewrites
+that file at every logout. Line numbers read in one session pointed at a
+different profile in the next, and a conclusion was stated confidently off the
+wrong block ([102] Balance mistaken for [105] Resto). Re-derive positions from
+the current file, every time, and prefer loading the file in Lua over grepping
+it — the nesting makes a flat grep genuinely ambiguous.
+
+**`sed -i` is not byte-safe on SavedVariables on Windows.** It silently stripped
+all 1,660 carriage returns from `ThugUI.lua`. Harmless as it happened, but that
+file makes the game discard *every* ThugUI setting if it is malformed. Check the
+byte count against the expected delta afterwards, not just that it parses.
+
+**Profiles are per-spec and account-wide.** `## SavedVariables`, no
+`SavedVariablesPerCharacter`. The player has **two resto druids — Eowyn and
+Ixloatel — that share one profile** and cannot be configured apart. This is a
+real design limitation, is recorded in `QA.md` §2, and needs a decision before
+anyone else uses this addon.
+
+**The player scaled their UI up and down to test the §17 fix.** The fix is
+designed to be UI-scale independent (it divides two `GetEffectiveScale()`
+values), but that is reasoning, not evidence, and `QA.md` §1 exists to make it
+evidence.
+
 ## Newest first: the raid frames are gone
 
 `modules/RaidFrames/` and `ui/pages/RaidFrames.lua` are deleted, with every

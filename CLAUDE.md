@@ -142,6 +142,18 @@ committed. If you are that coordinator, read `tasks/README.md`; if you are an
 execution agent, your task file will have told you to read
 `tasks/00-AGENT-BRIEF.md` first.
 
+**Default to delegating the code generation, and use Sonnet for it.** Spin up an
+isolated agent per task file rather than writing the change yourself. The
+coordinator's job is deciding what to build, writing the task file, and
+reviewing the diff — not typing the Lua. This is a deliberate cost decision: the
+expensive model should be spent on diagnosis, design and review, where it earns
+its keep, and not on mechanical edits a cheaper model does just as well under a
+task file that has already made every decision.
+
+Judgement still applies at the margin. A change of a few lines whose difficulty
+is entirely in *knowing what to write* can cost more to specify than to make —
+if you skip delegation, say so and why, rather than quietly absorbing the work.
+
 The rules that made it work, kept because each one caught something:
 
 - **Decide before delegating.** Task files carry the design decision already
