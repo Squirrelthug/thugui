@@ -82,17 +82,19 @@ local SHOTS = {
 -- which picture you are looking at. Step 1 has no screenshot and must still
 -- render -- it is the one step that happens in THIS window rather than in the
 -- game's own settings, which is exactly the distinction people miss.
+--
+-- The order is the order the player actually walked it, taken from when the
+-- screenshots were made rather than from anyone's idea of a sensible sequence.
+-- Two shots that were captured -- the Options and Gameplay Enhancements route to
+-- the Cooldown Manager -- are deliberately NOT used: the checkbox in step 1
+-- already reflects and sets that state, so sending the player through Blizzard's
+-- options menu as well would be busywork. They stay in SHOTS in case that stops
+-- being true.
 local STEPS = {
     {
-        text = "|cffffd100Tick \"Use Blizzard's buff frames\"|r above. That only tells "
-            .. "ThugUI to use their frames; it turns nothing on in the game. Steps 2-7 "
-            .. "are the game's own settings.",
-    },
-    {
-        text = "|cffffd100Options > Gameplay Enhancements > Cooldown Manager.|r "
-            .. "Turn the Cooldown Manager on.",
-        shots = { "options", "cdmOption" },
-        caption = "Game Menu, then Gameplay Enhancements, then Cooldown Manager",
+        text = "|cffffd100Use Blizzard's buff frames|r, on the main window to the left. "
+            .. "It shows the setting as it stands -- ticked means on -- so make sure it "
+            .. "is ticked. Every step below happens in the game's own settings, not here.",
     },
     {
         text = "|cffffd100Esc > Edit Mode.|r",
@@ -100,38 +102,31 @@ local STEPS = {
         caption = "Edit Mode lives in the game menu",
     },
     {
-        text = "|cffffd100Tick Cooldown Manager|r in the Edit Mode panel.",
-        shots = { "editModeTick" },
-        caption = "The frames only exist once this is ticked",
+        text = "|cffffd100Open Advanced Options|r, and make sure |cffffd100Cooldown "
+            .. "Manager|r is ticked. The buff frames do not exist until it is.",
+        shots = { "advArrow", "editModeTick" },
+        caption = "Advanced Options, then the Cooldown Manager tick",
     },
     {
-        text = "|cffffd100Click the buff frame|r to edit it.",
-        shots = { "clickToEdit", "advArrow" },
-        caption = "Click the frame itself, then Advanced Options",
-    },
-    {
-        text = "|cffffd100Advanced Cooldown Settings.|r",
-        shots = { "advButton" },
-        caption = "The button at the bottom of the frame's settings",
+        text = "|cffffd100Click the buff bar|r to edit it, then |cffffd100Advanced "
+            .. "Cooldown Settings|r. Set that frame to show |cffffd100Always|r or "
+            .. "|cffffd100In Combat|r while you are here -- the icon is pulled from this "
+            .. "frame, so if it is not displayed there is nothing to pull.",
+        shots = { "clickToEdit", "advButton" },
+        caption = "Click the bar itself, then Advanced Cooldown Settings",
     },
     {
         text = "|cffffd100Buffs tab - drag the buff into Tracked Buffs or Tracked Bars.|r "
             .. "Either list works. ThugUI can only place a buff that is in one of them.",
         shots = { "buffsTab" },
-        caption = "Both lists are highlighted. Drag any buff you want on the grid into one of them",
+        caption = "Both areas are highlighted. Drag any buff you want on the grid into one of them",
     },
     {
-        text = "|cffffd100Set that frame to Always or In Combat.|r The icon is pulled from "
-            .. "that frame, so if it is not displayed there is nothing to pull.",
-        shots = { "advButton" },
-        caption = "Visibility is on the same settings panel",
-    },
-    {
-        text = "|cffffd100Done.|r The buff arrives in your cell exactly as the default UI "
-            .. "draws it - Tracked Buffs gives an icon with a timer, Tracked Bars gives an "
-            .. "icon with its bar.",
+        text = "|cffffd100Done.|r The two areas render the buff in the cell in two "
+            .. "different ways, exactly as the default UI draws it.",
         shots = { "asIcon", "asBar" },
-        caption = "The same buff, as an icon and as a bar, sitting in a ThugUI cell",
+        layout = "row",
+        caption = "Tracked Buffs on the left, Tracked Bars on the right - both in one ThugUI cell",
     },
 }
 
@@ -206,24 +201,46 @@ function Guide:ShowShot(row, step)
     local popout = self:EnsurePopout()
     if not popout then return end
 
+    -- Side by side rather than stacked, for the one step whose whole point is
+    -- that these are two renderings of the SAME thing. Stacked, they read as
+    -- two sequential steps; beside each other, they read as a comparison.
+    local sideBySide = step.layout == "row" and #step.shots > 1
+    local width = SHOT_WIDTH
+    if sideBySide then
+        width = (SHOT_WIDTH - SHOT_GAP * (#step.shots - 1)) / #step.shots
+    end
+
     local y = -SHOT_PAD
+    local x = SHOT_PAD
+    local rowHeight = 0
+
     for i, tex in ipairs(popout.shots) do
         local shot = step.shots[i] and SHOTS[step.shots[i]]
         if shot then
-            local height = SHOT_WIDTH / shot.aspect
+            local height = width / shot.aspect
             tex:SetTexture(MEDIA .. shot.file)
             -- Without this the transparent padding on the power-of-two canvas
             -- is drawn as if it were part of the screenshot.
             tex:SetTexCoord(0, shot.u, 0, shot.v)
-            tex:SetSize(SHOT_WIDTH, height)
+            tex:SetSize(width, height)
             tex:ClearAllPoints()
-            tex:SetPoint("TOPLEFT", popout, "TOPLEFT", SHOT_PAD, y)
+            tex:SetPoint("TOPLEFT", popout, "TOPLEFT", x, y)
             tex:Show()
-            y = y - height - SHOT_GAP
+
+            if sideBySide then
+                -- One row: advance across, and the row is as tall as its
+                -- tallest image so the caption clears both.
+                x = x + width + SHOT_GAP
+                rowHeight = math.max(rowHeight, height)
+            else
+                y = y - height - SHOT_GAP
+            end
         else
             tex:Hide()
         end
     end
+
+    if sideBySide then y = y - rowHeight - SHOT_GAP end
 
     popout.caption:SetText(step.caption or "")
     popout.caption:ClearAllPoints()
