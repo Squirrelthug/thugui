@@ -2166,6 +2166,11 @@ function ER:SetupUI()
         ThugUI.ResourceRing:Initialize()
     end
 
+    -- Same dependency: the pips space themselves off the cast ring's diameter.
+    if ThugUI.ComboPips then
+        ThugUI.ComboPips:Initialize()
+    end
+
     TrackerFrame:UnregisterEvent("PLAYER_ENTERING_WORLD")
 end
 

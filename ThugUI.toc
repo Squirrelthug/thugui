@@ -48,6 +48,10 @@ modules\FrameHider.lua
 # geometry, so it must load after EssentialRings defines both.
 modules\ResourceRing.lua
 
+# Combo pips: the class's secondary resource as dots around the same ring, so
+# it sizes itself off ER.CastFrame too and is initialised alongside the ring.
+modules\ComboPips.lua
+
 # Cooldown viewer: the generic per-spec grid engine that supersedes the
 # ECV/BCV/GCV bars in EssentialRings.lua. Data holds the profiles and the spell
 # catalogue; Core renders them. Loads after EssentialRings because its one-time

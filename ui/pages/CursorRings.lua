@@ -197,6 +197,92 @@ function Page:Build(host, panel)
         end,
     }
 
+    panel:Section("Combo pips")
+
+    panel:Note("Your class's secondary resource — combo points, Holy Power, Soul Shards, "
+        .. "Chi, Arcane Charges, Essence — as dots around the ring. Classes without one "
+        .. "show nothing, and the count follows talents on its own.\n\n"
+        .. "Blizzard makes secondary resources readable to addons in 12.1. Before then "
+        .. "the pips hold their last count during combat rather than tracking live.")
+
+    panel:Checkbox{
+        label = "Show combo pips",
+        get = function() return Cfg().showComboPips end,
+        set = function(v)
+            Cfg().showComboPips = v
+            if ThugUI.ComboPips then ThugUI.ComboPips:Refresh() end
+        end,
+    }
+
+    panel:Dropdown{
+        label = "Show:", width = 170,
+        options = {
+            { value = "always", text = "Always" },
+            { value = "combat", text = "Only in combat" },
+            { value = "rings",  text = "With the cursor rings" },
+        },
+        get = function() return Cfg().comboPipVisibility or "combat" end,
+        set = function(v)
+            Cfg().comboPipVisibility = v
+            if ThugUI.ComboPips then ThugUI.ComboPips:Refresh() end
+        end,
+    }
+
+    panel:Dropdown{
+        label = "Colour:", width = 170,
+        options = {
+            { value = "power",  text = "Match the resource" },
+            { value = "class",  text = "Class colour" },
+            { value = "custom", text = "Custom colour" },
+        },
+        get = function() return Cfg().comboPipColorMode or "power" end,
+        set = function(v)
+            Cfg().comboPipColorMode = v
+            if ThugUI.ComboPips then ThugUI.ComboPips:Refresh() end
+        end,
+    }
+    panel:Color{
+        get = function()
+            local c = Cfg().comboPipCustomColor
+            if not c then return 1, 1, 1 end
+            return c.r, c.g, c.b
+        end,
+        set = function(r, g, b)
+            Cfg().comboPipCustomColor = { r = r, g = g, b = b }
+            if ThugUI.ComboPips then ThugUI.ComboPips:Refresh() end
+        end,
+        sameLine = true,
+    }
+
+    panel:Slider{
+        label = "Pip size", min = 4, max = 20, step = 1, format = "%d",
+        get = function() return Cfg().comboPipSize or 9 end,
+        set = function(v)
+            Cfg().comboPipSize = v
+            if ThugUI.ComboPips then ThugUI.ComboPips:Refresh() end
+        end,
+    }
+
+    panel:Slider{
+        label = "Distance from the ring", min = -10, max = 30, step = 1, format = "%d",
+        tooltip = "Negative values sit the pips inside the band rather than outside it.",
+        get = function() return Cfg().comboPipOffset or 7 end,
+        set = function(v)
+            Cfg().comboPipOffset = v
+            if ThugUI.ComboPips then ThugUI.ComboPips:Refresh() end
+        end,
+    }
+
+    panel:Slider{
+        label = "Unspent pip opacity", min = 0, max = 1, step = 0.05, format = "%.2f",
+        tooltip = "How visible a pip is before the point is earned.",
+        get = function() return Cfg().comboPipDimAlpha or 0.25 end,
+        set = function(v)
+            Cfg().comboPipDimAlpha = v
+            if ThugUI.ComboPips then ThugUI.ComboPips:Refresh() end
+        end,
+    }
+
     panel:Section("Visibility")
 
     panel:Checkbox{

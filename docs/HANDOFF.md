@@ -155,16 +155,25 @@ Agreed plan, 2026-08-09, in order:
 
 ## 4. Queued work
 
-**Combo point pips** — design agreed with the player, not started.
+**Combo point pips** — **built 2026-08-09**, `modules/ComboPips.lua`, off by
+default. Controls are on the Cursor Rings page.
 
 - N pips evenly spaced around the cursor ring, lit as points are gained.
 - Chosen over a segmented arc because a changing max (Deeper Stratagem, procs)
   falls out for free, and per-point colour is needed for DK runes.
-- Generalises to Holy Power, Soul Shards, Chi, Arcane Charges, Essence. oUF's
-  vendored `classpower.lua` already maps class → power type; `runes.lua` is
-  separate because runes have per-rune cooldowns rather than a count.
-- **Blocked on §3.** `UnitPower` for combo points is secret in exactly the same
-  way as energy.
+- Covers combo points, Holy Power, Soul Shards, Chi, Arcane Charges, Essence.
+  Which resource comes from a class table mirroring oUF's `classpower.lua`, but
+  the per-spec conditions are deliberately *not* copied: `UnitPowerMax` returns
+  0 for a spec without the resource, so gating on the maximum is self-
+  correcting. The druid is the one exception and uses oUF's test (primary power
+  is energy ⇒ cat form).
+- Not covered: DK runes (per-rune cooldowns, different widget) and oUF's
+  aura-backed pseudo-resources (Hunter, Shaman, Devourer) — those read auras,
+  which is the thing addons cannot do in combat.
+- **Live behaviour depends on the patch.** Secondary resources are secret on
+  12.0.7, so in combat the pips freeze at their last count; 12.1 is expected to
+  make them readable and the same code then tracks live. Verified in the test
+  harness both ways; **unverified in game**.
 
 **Category enumeration for 12.1** — see `UPCOMING-PATCH.md`. Category names are
 hardcoded in three places and will silently drop the five new 12.1 categories.

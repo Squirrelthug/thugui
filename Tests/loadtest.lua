@@ -60,6 +60,11 @@ frameMT.__index = function(tbl, key)
             if key == "Hide" then a.__shown = false return end
             if key == "SetShown" then a.__shown = a1 and true or false return end
             if key == "IsShown" then return a.__shown == true end
+            -- Alpha and vertex colour are recorded because that is the whole
+            -- observable state of a combo pip: lit or dim, and what colour.
+            if key == "SetAlpha" then a.__alpha = a1 return end
+            if key == "GetAlpha" then return a.__alpha == nil and 1 or a.__alpha end
+            if key == "SetVertexColor" then a.__color = { a1, a2, a3 } return end
         end
         if key:match("^Get") then
             if key == "GetWidth" or key == "GetHeight" or key == "GetFrameLevel" then
@@ -146,12 +151,36 @@ _G.__SECRET = SECRET
 _G.__powerToken = "MANA"
 _G.__power, _G.__powerMax = 50, 100
 _G.__form = 0
-function UnitPowerType() return 0, _G.__powerToken end
-function UnitPower() return _G.__power end
-function UnitPowerMax() return _G.__powerMax end
+-- The numeric power type has to agree with the token, because the combo pips
+-- decide whether a druid is in cat form by asking whether the PRIMARY power is
+-- energy -- which a stub returning a constant 0 would answer wrongly.
+local POWER_IDS = { MANA = 0, RAGE = 1, ENERGY = 3, LUNAR_POWER = 8 }
+function UnitPowerType() return POWER_IDS[_G.__powerToken] or 0, _G.__powerToken end
+
+-- The class's secondary resource is tracked separately from the primary one:
+-- the pips and the resource ring read different power types at the same time,
+-- and a single value cannot model both.
+_G.__classPower, _G.__classPowerMax = 0, 5
+local function IsClassPower(powerType)
+    if powerType == nil then return false end
+    for _, name in ipairs({ "ComboPoints", "HolyPower", "SoulShards", "Chi",
+                            "ArcaneCharges", "Essence" }) do
+        if Enum.PowerType[name] == powerType then return true end
+    end
+    return false
+end
+function UnitPower(_, powerType)
+    if IsClassPower(powerType) then return _G.__classPower end
+    return _G.__power
+end
+function UnitPowerMax(_, powerType)
+    if IsClassPower(powerType) then return _G.__classPowerMax end
+    return _G.__powerMax
+end
 function GetShapeshiftFormID() return _G.__form end
 MOONKIN_FORM = 31
 PowerBarColor = {
+    COMBO_POINTS = { r = 1, g = 0.96, b = 0.41 },
     MANA = { r = 0, g = 0, b = 1 },
     RAGE = { r = 1, g = 0, b = 0 },
     ENERGY = { r = 1, g = 1, b = 0 },
@@ -183,7 +212,13 @@ Enum = {
     CooldownViewerCategory = { Essential = 0, Utility = 1, TrackedBuff = 2, TrackedBar = 3 },
     SpellBookSpellBank = { Player = 0, Pet = 1 },
     SpellBookItemType = { None = 0, Spell = 1 },
-    PowerType = { Mana = 0, Rage = 1, Energy = 3, LunarPower = 8 },
+    -- Values match the live client's. Only distinctness matters to the harness,
+    -- but a stub that disagrees with the game is a trap for whoever reads it
+    -- next, and the combo pips resolve these BY NAME anyway.
+    PowerType = {
+        Mana = 0, Rage = 1, Energy = 3, ComboPoints = 4, SoulShards = 7,
+        LunarPower = 8, HolyPower = 9, Chi = 12, ArcaneCharges = 16, Essence = 19,
+    },
 }
 
 _G.__unknownNames = {}
@@ -1296,6 +1331,155 @@ if failures == 0 and ThugUI.ResourceRing then
 
             ThugUI_CursorFrame:Show()
             ThugUI_Config.resourceRingVisibility = "always"
+        end },
+    }
+
+    for _, step in ipairs(steps) do
+        local ok, err = pcall(step[2])
+        if ok then
+            say("ok         " .. step[1])
+        else
+            say(("STEP FAIL  %s\n           %s"):format(step[1], tostring(err)))
+            failures = failures + 1
+        end
+    end
+end
+
+-- Combo pips: which resource, how many, and how many are lit.
+if failures == 0 and ThugUI.ComboPips then
+    say("\n-- combo pips --")
+    local CP = ThugUI.ComboPips
+    _G.ThugUI_CursorFrame = _G.ThugUI_CursorFrame or NewFrame()
+    ThugUI_CursorFrame:Show()
+
+    local realUnitClass = UnitClass
+    local function AsClass(class)
+        _G.UnitClass = function() return class:lower(), class end
+    end
+
+    local function Lit()
+        local count = 0
+        for _, pip in ipairs(CP.pips) do
+            if pip.__shown and (pip.__alpha == nil or pip.__alpha == 1) then
+                count = count + 1
+            end
+        end
+        return count
+    end
+
+    local function Visible()
+        local count = 0
+        for _, pip in ipairs(CP.pips) do
+            if pip.__shown then count = count + 1 end
+        end
+        return count
+    end
+
+    local steps = {
+        { "initialize", function()
+            AsClass("ROGUE")
+            ThugUI_Config.showComboPips = true
+            ThugUI_Config.comboPipVisibility = "always"
+            _G.__classPower, _G.__classPowerMax = 0, 5
+            CP:Initialize()
+            assert(CP.frame, "no combo pip frame")
+        end },
+
+        { "one pip per point of maximum", function()
+            CP:Refresh()
+            assert(Visible() == 5, "expected 5 pips, got " .. Visible())
+            assert(CP.frame:IsShown(), "pips did not show")
+        end },
+
+        { "gaining a point lights another pip", function()
+            _G.__classPower = 3
+            CP:Update()
+            assert(Lit() == 3, "expected 3 lit pips, got " .. Lit())
+        end },
+
+        -- Deeper Stratagem and its equivalents move the maximum mid-fight. The
+        -- pips must re-lay out, not just light a sixth that was never placed.
+        { "a changed maximum re-lays out", function()
+            _G.__classPowerMax = 6
+            CP:Update()
+            assert(Visible() == 6, "expected 6 pips, got " .. Visible())
+        end },
+
+        { "pips are evenly spaced around the ring", function()
+            _G.__classPowerMax = 4
+            CP:Update()
+            local seen = {}
+            for i = 1, 4 do
+                local point = CP.pips[i].__point
+                assert(point, "pip " .. i .. " was never anchored")
+                seen[i] = { x = point[4], y = point[5] }
+            end
+            local radius = math.sqrt(seen[1].x ^ 2 + seen[1].y ^ 2)
+            assert(radius > 0, "pips were placed on top of the centre")
+
+            -- Same distance from the centre, and a quarter turn apart. Radius
+            -- alone would pass a layout that stacked every pip in one spot.
+            for i = 2, 4 do
+                local r = math.sqrt(seen[i].x ^ 2 + seen[i].y ^ 2)
+                assert(math.abs(r - radius) < 0.001,
+                    ("pip %d sits at a different radius (%.3f vs %.3f)"):format(i, r, radius))
+
+                local previous = math.atan(seen[i - 1].x, seen[i - 1].y)
+                local current = math.atan(seen[i].x, seen[i].y)
+                local step = (current - previous) % (2 * math.pi)
+                assert(math.abs(step - math.pi / 2) < 0.001,
+                    ("pip %d is %.3f rad from the last, wanted %.3f"):format(i, step, math.pi / 2))
+            end
+        end },
+
+        { "no pips for a class without a secondary resource", function()
+            AsClass("WARRIOR")
+            CP:Refresh()
+            assert(not CP.frame:IsShown(), "a warrior was given combo pips")
+            AsClass("ROGUE")
+        end },
+
+        -- Combo points exist in the API for a druid in any form. Only cat form
+        -- generates them, and the primary power type is what says so.
+        { "a druid gets pips only in cat form", function()
+            AsClass("DRUID")
+            _G.__powerToken = "MANA"
+            CP:Refresh()
+            assert(not CP.frame:IsShown(), "a caster-form druid was given combo pips")
+
+            _G.__powerToken = "ENERGY"
+            CP:Refresh()
+            assert(CP.frame:IsShown(), "a cat-form druid was denied combo pips")
+
+            _G.__powerToken = "MANA"
+            AsClass("ROGUE")
+        end },
+
+        -- Before 12.1 this is the normal state in combat. Freezing is fine;
+        -- throwing, or silently vanishing with no explanation, is not.
+        { "a secret power value holds the last layout", function()
+            _G.__classPowerMax = 5
+            _G.__classPower = 2
+            CP:Refresh()
+            assert(CP.frame:IsShown(), "pips were hidden before the secret test")
+
+            _G.__classPower = _G.__SECRET
+            CP:Update()
+            assert(CP.frame:IsShown(), "an unreadable power value hid the pips")
+            assert(Visible() == 5, "the frozen layout lost its pips")
+            _G.__classPower = 2
+        end },
+
+        { "hidden when switched off", function()
+            ThugUI_Config.showComboPips = false
+            CP:Update()
+            assert(not CP.frame:IsShown(), "pips showed while disabled")
+            ThugUI_Config.showComboPips = true
+        end },
+
+        { "restore", function()
+            _G.UnitClass = realUnitClass
+            ThugUI_Config.showComboPips = false
         end },
     }
 
