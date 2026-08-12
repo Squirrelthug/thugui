@@ -183,6 +183,101 @@ local function ApplySweep(icon, spellName)
     end
 end
 
+-- ----------------------------------------------------------------------------
+-- Item-backed cells
+--
+-- An icon is item-backed when its Cooldown Manager entry carries `equipSlot`
+-- (set on the icon in Rebuild) -- 12.1 puts trinkets in the manager this way,
+-- identified by the slot they sit in rather than by a spell the player knows.
+--
+-- Item cooldowns carry no SecretWhen* flag at all (DECISIONS.md 20; Blizzard's
+-- own CooldownViewer.lua:1020 reads one with plain GetInventoryItemCooldown),
+-- so none of this needs the secret-value machinery the spell path above needs
+-- -- including in combat. What it CANNOT use is IsSpellAvailable: that resolves
+-- by NAME, which is spellbook-scoped, and a trinket's on-use spell is not in
+-- the spellbook -- it answers "not talented" and the icon never draws. That is
+-- the bug this whole section exists to route around.
+-- ----------------------------------------------------------------------------
+
+--- Is something actually equipped in this slot? Blizzard's own test
+--- (CooldownViewerItemData.lua:286, live branch):
+--- ItemLocation:CreateFromEquipmentSlot(equipSlot) then :IsValid(). Guarded so
+--- a client missing the ItemLocation global entirely cannot throw.
+local function IsItemAvailable(equipSlot)
+    if not equipSlot or not ItemLocation or not ItemLocation.CreateFromEquipmentSlot then
+        return false
+    end
+    local ok, loc = pcall(ItemLocation.CreateFromEquipmentSlot, equipSlot)
+    if not ok or not loc then return false end
+    local ok2, valid = pcall(loc.IsValid, loc)
+    return ok2 and valid and true or false
+end
+
+--- Is the item in this slot off cooldown right now?
+---
+--- A separate function from IsSpellReady rather than a branch inside it: the
+--- two share no logic, and IsSpellReady's comment block is load-bearing
+--- documentation about secret values that simply does not apply here.
+---
+--- GetInventoryItemCooldown is what Blizzard's own item mixin reads
+--- (CooldownViewer.lua:1020) and carries no secrecy flag, so duration == 0 is
+--- a plain, ordinary "nothing is running" test -- the same idiom every
+--- action-button cooldown in the default UI uses, and one that needs no
+--- comparison against GetTime().
+---
+--- Every value is still routed through Readable() anyway: that global is not
+--- in the generated API documentation, so nothing was measured about its
+--- secrecy posture here, and an unreadable answer fails VISIBLE (treats the
+--- item as ready) rather than hiding a reminder mid-fight -- the same rule
+--- IsSpellReady already follows, for the same reason.
+local function IsItemReady(equipSlot)
+    if not equipSlot or not GetInventoryItemCooldown then return true end
+
+    local ok, startTime, duration = pcall(GetInventoryItemCooldown, "player", equipSlot)
+    if not ok then
+        if ThugUI.Diagnostics then
+            ThugUI.Diagnostics:LogOnce(("item-cd-threw-%s"):format(tostring(equipSlot)),
+                "CV", "GetInventoryItemCooldown threw for slot %s -- treating as ready",
+                tostring(equipSlot))
+        end
+        return true
+    end
+
+    if not Readable(startTime) or not Readable(duration) then
+        if ThugUI.Diagnostics then
+            ThugUI.Diagnostics:LogOnce(("item-cd-unreadable-%s"):format(tostring(equipSlot)),
+                "CV", "item cooldown for slot %s unreadable -- failing visible",
+                tostring(equipSlot))
+        end
+        return true
+    end
+
+    return duration == 0
+end
+
+--- Drive an item cell's sweep, for "always" and "recharging" modes.
+---
+--- Unlike ApplySweep these are ordinary numbers even in combat, so plain
+--- SetCooldown works with no secret screen -- but the pcall discipline stays:
+--- DECISIONS.md 19, an uncaught throw anywhere in the per-icon loop leaves
+--- every icon UpdateState has not yet reached frozen at its previous state.
+local function ApplyItemSweep(icon, equipSlot)
+    if not equipSlot or not GetInventoryItemCooldown then
+        icon.cooldown:Clear()
+        return
+    end
+
+    local ok, startTime, duration = pcall(GetInventoryItemCooldown, "player", equipSlot)
+    if not ok or not Readable(startTime) or not Readable(duration) or duration == 0 then
+        icon.cooldown:Clear()
+        return
+    end
+
+    if not pcall(icon.cooldown.SetCooldown, icon.cooldown, startTime, duration) then
+        icon.cooldown:Clear()
+    end
+end
+
 --- A buff on the player cast by the player, for one spell ID.
 ---
 --- Blizzard's CooldownViewerItemDataMixin:FindLinkedSpellForCurrentAuras uses
@@ -569,6 +664,11 @@ function CV:Rebuild()
         -- cooldown IDs.
         local cooldownInfo = Data.GetCooldownInfoForSpell(placement.spellID)
         icon.linkedSpellIDs = cooldownInfo and cooldownInfo.linkedSpellIDs or nil
+        -- Set only when the Cooldown Manager entry actually carries one --
+        -- explicitly nil otherwise, because icons are pooled and a cell that
+        -- used to be item-backed must not leave a stale slot on the spell that
+        -- reuses its frame next.
+        icon.equipSlot = cooldownInfo and cooldownInfo.equipSlot or nil
         -- Resolved by ID (which works for any spell in the game) and cached, so
         -- the per-frame path can query by name. Rebuild re-runs on
         -- SPELLS_CHANGED / PLAYER_TALENT_UPDATE, so this stays current.
@@ -782,6 +882,40 @@ function CV:UpdateState()
             icon.tex:SetAlpha(0)
             icon.cooldown:Clear()
             icon.count:Hide()
+        elseif icon.equipSlot then
+            -- Item-backed cell. MUST NOT go through IsSpellAvailable below --
+            -- that resolves by NAME, which is spellbook-scoped, and an item's
+            -- on-use spell is not in the spellbook: it answered "not talented"
+            -- and the icon never drew (the Radiant Blessing bug task 14 exists
+            -- for). An item is identified by the slot it sits in instead, and
+            -- its cooldown is a plain number even in combat, so this needs none
+            -- of the secret-value handling the spell path below needs.
+            if not IsItemAvailable(icon.equipSlot) then
+                show = false
+                icon.cooldown:Clear()
+                icon.count:Hide()
+            else
+                local ready = IsItemReady(icon.equipSlot)
+
+                if icon.mode == "always" then
+                    show = true
+                    ApplyItemSweep(icon, icon.equipSlot)
+                elseif icon.mode == "recharging" then
+                    -- Exact inverse of "ready", from the SAME answer "cooldown"
+                    -- mode uses below, so the two modes can never disagree.
+                    show = not ready
+                    ApplyItemSweep(icon, icon.equipSlot)
+                elseif icon.mode == "proc" then
+                    show = (ready and procced) and true or false
+                    icon.cooldown:Clear()
+                else
+                    -- "cooldown" mode: nothing to sweep, it just disappears.
+                    show = ready and true or false
+                    icon.cooldown:Clear()
+                end
+                -- Items do not report a charge count through this path.
+                icon.count:Hide()
+            end
         elseif not IsSpellAvailable(spellName) then
             show = false
         elseif icon.mode == "aura" then
@@ -846,6 +980,13 @@ function CV:UpdateState()
                 -- hidden until it is actually pressable.
                 show = (ready and procced) and true or false
                 icon.cooldown:Clear()
+            elseif icon.mode == "recharging" then
+                -- Exact inverse of "cooldown" mode below, from the SAME `ready`
+                -- answer, so the two can never disagree about the same spell.
+                -- Unlike cooldown mode it gets a sweep -- the sweep is the
+                -- whole point of the mode.
+                show = not ready
+                ApplySweep(icon, spellName)
             else
                 -- "cooldown" mode: the icon IS the readiness signal, so there is
                 -- nothing to sweep -- it simply disappears once spent.

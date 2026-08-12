@@ -204,9 +204,16 @@ end
 ---     about that -- it would sit there permanently and the mode would lose the
 ---     one behaviour it exists for. A charge spell the player wants Blizzard to
 ---     draw belongs in cooldown or always mode.
+---   * **recharging mode is NOT adopted either, task 14.** For a spell, isActive
+---     is readable in combat, so our own rendering is already correct -- same
+---     reasoning as an ordinary single-charge cooldown, just inverted. For an
+---     item nothing here is secret at all. Without this exclusion a charge
+---     spell placed in recharging mode would fall through to IsChargeSpell and
+---     be adopted anyway, exactly as it would in cooldown mode.
 function BB:ShouldAdopt(icon)
     if not icon.spellID then return false end
     if icon.mode == "proc" then return false end
+    if icon.mode == "recharging" then return false end
     if icon.mode == "aura" or icon.mode == "always" then return true end
     return self:IsChargeSpell(icon)
 end

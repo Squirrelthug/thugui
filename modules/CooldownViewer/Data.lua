@@ -36,20 +36,27 @@ Data.GRID_COLS = 10
 Data.GRID_ROWS = 10
 
 -- How a placed icon decides whether to draw.
---   cooldown -- visible while the spell is READY, hidden while on cooldown.
---               This is the "use it now" signal the original bars were built
---               around and stays the default.
---   always   -- always visible, with a cooldown sweep over it.
---   aura     -- visible only while its buff is on the player (procs).
---   proc     -- visible only when the spell is BOTH off cooldown and lit up by
---               a proc. Narrower than "cooldown": a spell that is merely usable
---               stays hidden until something actually makes it worth pressing,
---               e.g. Pistol Shot only once Opportunity is up.
+--   cooldown   -- visible while the spell is READY, hidden while on cooldown.
+--                 This is the "use it now" signal the original bars were built
+--                 around and stays the default.
+--   recharging -- the exact inverse of cooldown: visible while NOT ready,
+--                 hidden once it is. Derived from the same readiness answer as
+--                 cooldown mode (Core.lua), so the two can never disagree. For
+--                 a trinket or a potion timer the inverse is what you actually
+--                 want -- show it while it is coming back, hide it once it is
+--                 up -- so unlike cooldown mode it gets a sweep.
+--   always     -- always visible, with a cooldown sweep over it.
+--   aura       -- visible only while its buff is on the player (procs).
+--   proc       -- visible only when the spell is BOTH off cooldown and lit up
+--                 by a proc. Narrower than "cooldown": a spell that is merely
+--                 usable stays hidden until something actually makes it worth
+--                 pressing, e.g. Pistol Shot only once Opportunity is up.
 Data.MODES = {
-    { value = "cooldown", text = "Show when ready" },
-    { value = "proc",     text = "Show when ready and procced" },
-    { value = "always",   text = "Always show (with sweep)" },
-    { value = "aura",     text = "Show while buff active" },
+    { value = "cooldown",   text = "Show when ready" },
+    { value = "recharging", text = "Show while recharging" },
+    { value = "proc",       text = "Show when ready and procced" },
+    { value = "always",     text = "Always show (with sweep)" },
+    { value = "aura",       text = "Show while buff active" },
 }
 
 -- What happens to the hole when an icon goes on cooldown.
