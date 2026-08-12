@@ -99,6 +99,36 @@ local function SampleCall(fn, ...)
     return "accepted"
 end
 
+--- As Sample, but for a two-return function. IsSpellUsable's second value
+--- (insufficientPower) is exactly as interesting as the first, and Sample
+--- only keeps one.
+local function SamplePair(fn, ...)
+    if type(fn) ~= "function" then return "absent", "absent" end
+
+    local ok, a, b = pcall(fn, ...)
+    if not ok then
+        local err = "ERROR: " .. tostring(a)
+        return err, err
+    end
+    return Describe(a), Describe(b)
+end
+
+--- Read one field off a value that may itself be secret, absent, or an error.
+--- Indexing a secret struct is allowed -- ProbeAuraList already proved that
+--- for `aura[1].spellId` -- only COMPARING what comes out is restricted, and
+--- this never compares: IsNothing asks issecretvalue before nil, same as
+--- everywhere else in this file, and the field read itself goes through a
+--- pcall rather than a raw index in case the struct is a type that refuses
+--- indexing outright.
+local function FieldOf(ok, struct, field)
+    if not ok then return "ERROR: " .. tostring(struct) end
+    if IsNothing(struct) then return "nothing" end
+
+    local fieldOK, value = pcall(function() return struct[field] end)
+    if not fieldOK then return "ERROR: " .. tostring(value) end
+    return Describe(value)
+end
+
 local function Record(lines, label, text)
     lines[#lines + 1] = ("%-30s %s"):format(label, text)
 end
@@ -235,11 +265,139 @@ local function ProbeAuraInstances(lines)
     return firstID
 end
 
+--- Charge spells drawn from the Cooldown Manager itself, not from what the
+--- player has placed. AuraSpellIDs (below) only sees aura-mode placements,
+--- but DECISIONS.md §19's adoption rule reaches cooldown and always mode too
+--- -- a charge spell can sit in either without ever being in aura mode, so
+--- this has to walk the same category set BlizzBuffs and Data.lua do rather
+--- than reading a placement.
+---
+--- Reimplemented here rather than calling into CooldownViewer/Data.lua: this
+--- probe exists to keep working even if that module fails to load, and it is
+--- the diagnostics path -- it must not gain a dependency on the feature it is
+--- measuring.
+---
+--- Capped at 3 entries so a busy spec cannot bloat ThugUI_DebugLog.
+local function ChargeSpellCandidates()
+    local out = {}
+    if not C_CooldownViewer
+        or type(C_CooldownViewer.GetCooldownViewerCategorySet) ~= "function"
+        or type(C_CooldownViewer.GetCooldownViewerCooldownInfo) ~= "function" then
+        return out
+    end
+    if not Enum or not Enum.CooldownViewerCategory then
+        return out
+    end
+
+    -- Real categories only. Blizzard injects negative pseudo-categories
+    -- (HiddenActive/HiddenPassive on 12.1, HiddenSpell/HiddenAura before it)
+    -- into this same enum for disabled-state bookkeeping -- filtering by
+    -- value rather than name is what survived that rename. Mirrors
+    -- CooldownViewerCategories() in CooldownViewer/Data.lua.
+    local categories = {}
+    for name, value in pairs(Enum.CooldownViewerCategory) do
+        if type(value) == "number" and value >= 0 then
+            categories[#categories + 1] = { name = name, value = value }
+        end
+    end
+    table.sort(categories, function(a, b) return a.value < b.value end)
+
+    local seen = {}
+    for _, category in ipairs(categories) do
+        local ok, cooldownIDs = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category.value)
+        if ok and type(cooldownIDs) == "table" then
+            for _, cooldownID in ipairs(cooldownIDs) do
+                local infoOK, info = pcall(C_CooldownViewer.GetCooldownViewerCooldownInfo, cooldownID)
+                if infoOK and info and info.charges == true then
+                    -- overrideSpellID first, matching Blizzard's own
+                    -- CooldownViewerItemDataMixin:GetSpellChargeInfo (live
+                    -- branch, CooldownViewerItemData.lua) -- a talent-swapped
+                    -- spell is probed as the version actually cast.
+                    local chargeSpellID = info.overrideSpellID or info.spellID
+                    if chargeSpellID and not seen[chargeSpellID] then
+                        seen[chargeSpellID] = true
+                        local nameOK, spellInfo = pcall(C_Spell.GetSpellInfo, chargeSpellID)
+                        local name = (nameOK and spellInfo and spellInfo.name) or nil
+                        out[#out + 1] = {
+                            -- Queried by name where one resolved, per CLAUDE.md
+                            -- §3 -- name doubles as the talent check and is
+                            -- what the rest of the addon queries charge spells
+                            -- by (BlizzBuffs.lua's DetectChargeSpell).
+                            query = name or chargeSpellID,
+                            label = name or ("ID " .. tostring(chargeSpellID)),
+                        }
+                        if #out >= 3 then return out end
+                    end
+                end
+            end
+        end
+    end
+
+    return out
+end
+
+--- Whether any of 12.1's new charge-adjacent APIs actually distinguish "a
+--- charge is banked" from "no charge is banked" during combat is unknown, and
+--- reasoning will not settle it -- DECISIONS.md §20. One combat sample
+--- answers it; this is that sample.
+---
+--- Returns the candidate list, so ProbeDisplayPath can reuse the first one for
+--- the duration-object setter test below -- probing the same spell twice from
+--- two different angles is more useful than probing two different spells once
+--- each.
+local function ProbeCharges(lines)
+    if not C_CooldownViewer then
+        Record(lines, "charges", "C_CooldownViewer absent")
+        return {}
+    end
+
+    local candidates = ChargeSpellCandidates()
+    if #candidates == 0 then
+        Record(lines, "charges", "no multi-charge spell found in Cooldown Manager")
+        return candidates
+    end
+
+    for _, c in ipairs(candidates) do
+        local label = c.label
+
+        local chargesOK, chargeInfo = Raw(C_Spell.GetSpellCharges, c.query)
+        Record(lines, ("charges %s"):format(label),
+            chargesOK and Describe(chargeInfo) or ("ERROR: " .. tostring(chargeInfo)))
+        Record(lines, ("charges.current %s"):format(label),
+            FieldOf(chargesOK, chargeInfo, "currentCharges"))
+        Record(lines, ("charges.max %s"):format(label),
+            FieldOf(chargesOK, chargeInfo, "maxCharges"))
+
+        -- Neither carries a SecretWhen* flag on live 12.1.0 build 69273
+        -- (DECISIONS.md §20) -- MayReturnNothing is the only documented
+        -- failure mode, and Sample/Describe already tell "nothing" apart from
+        -- "secret" apart from "error".
+        Record(lines, ("cooldownDuration %s"):format(label),
+            Sample(C_Spell.GetSpellCooldownDuration, c.query, true))
+        Record(lines, ("chargeDuration %s"):format(label),
+            Sample(C_Spell.GetSpellChargeDuration, c.query))
+
+        local usableDesc, insufficientDesc = SamplePair(C_Spell.IsSpellUsable, c.query)
+        Record(lines, ("isUsable %s"):format(label), usableDesc)
+        Record(lines, ("insufficientPower %s"):format(label), insufficientDesc)
+
+        local cdOK, cdInfo = Raw(C_Spell.GetSpellCooldown, c.query)
+        Record(lines, ("cd.isActive %s"):format(label), FieldOf(cdOK, cdInfo, "isActive"))
+    end
+
+    return candidates
+end
+
 --- Whether the sanctioned display path exists here, and whether the blessed
 --- setters really do accept a secret from tainted code. Everything is fed the
 --- genuine secret from UnitPower rather than a stand-in, because a setter that
 --- accepts a plain number proves nothing.
-local function ProbeDisplayPath(lines, instanceID)
+---
+--- `chargeQuery` is the first charge spell ProbeCharges found (its `query`
+--- field, name-or-ID), used to obtain a real duration object rather than a
+--- stand-in. Nil when no charge spell was found -- see the duration-object
+--- block at the end of this function.
+local function ProbeDisplayPath(lines, instanceID, chargeQuery)
     Record(lines, "issecretvalue", type(issecretvalue) == "function" and "present" or "absent")
     Record(lines, "C_CurveUtil", C_CurveUtil and "present" or "absent")
     Record(lines, "C_DurationUtil", C_DurationUtil and "present" or "absent")
@@ -300,6 +458,38 @@ local function ProbeDisplayPath(lines, instanceID)
         Record(lines, "GetAuraApplicationDisplayCount",
             Sample(C_UnitAuras and C_UnitAuras.GetAuraApplicationDisplayCount,
                 "player", instanceID, 2))
+    end
+
+    -- The highest-value measurement in this file. DECISIONS.md §20 reads
+    -- (from Blizzard's source, never run) that the duration-object route may
+    -- let ThugUI draw its own in-combat sweep for exactly the cells §19 had to
+    -- hand to Blizzard's viewer -- SetCooldown refuses a secret startTime, but
+    -- neither duration getter carries a SecretWhen* flag at all, so the
+    -- object itself might never be a value that needs refusing.
+    --
+    -- Skipped entirely, not recorded as absent/nothing, when there is no
+    -- charge spell to test with or the getter handed back nothing -- a line
+    -- reading "skipped" every session is worse than no line, and this one is
+    -- cheap to re-derive from the charges block above if it goes missing.
+    if chargeQuery ~= nil then
+        local gotDuration, duration = Raw(C_Spell.GetSpellCooldownDuration, chargeQuery, true)
+        if gotDuration and not IsNothing(duration) then
+            local widgets = P:EnsureWidgets()
+            if widgets then
+                -- Guarded on the method existing, not just handed to
+                -- SampleCall, so this still loads on a client that predates
+                -- the 12.1 duration-object API.
+                if type(widgets.cooldown.SetCooldownFromDurationObject) == "function" then
+                    Record(lines, "SetCooldownFromDurationObject",
+                        SampleCall(widgets.cooldown.SetCooldownFromDurationObject,
+                            widgets.cooldown, duration))
+                end
+                if type(widgets.bar.SetTimerDuration) == "function" then
+                    Record(lines, "SetTimerDuration",
+                        SampleCall(widgets.bar.SetTimerDuration, widgets.bar, duration))
+                end
+            end
+        end
     end
 end
 
@@ -401,7 +591,9 @@ function P:Run(phase)
 
     local seen = ProbeAuraList(lines)
     local instanceID = ProbeAuraInstances(lines)
-    ProbeDisplayPath(lines, instanceID)
+    local chargeCandidates = ProbeCharges(lines)
+    local chargeQuery = chargeCandidates[1] and chargeCandidates[1].query
+    ProbeDisplayPath(lines, instanceID, chargeQuery)
 
     local store = Store()
     local previous = store.secrets[phase]

@@ -3186,6 +3186,114 @@ if ThugUI.SecretProbe then
             assert(ThugUI_DebugLog.secrets["phase"].auras == 2,
                 "an empty sample overwrote a richer one")
         end },
+
+        -- Task 13: what 12.1's charge-adjacent APIs actually hand back.
+        -- cooldownID 8 is a scratch entry, unused by any other test, added to
+        -- Essential and removed again so it cannot leak into the sections
+        -- that come after this one.
+        { "a charge spell's secret maxCharges is described, not read, and does not throw", function()
+            ThugUI_DebugLog.secrets = {}
+            _G.__cooldownEntries[8] = { cooldownID = 8, spellID = 8000, charges = true, linkedSpellIDs = {} }
+            _G.__categorySets.Essential = { 1, 2, 4, 8 }
+            _G.__spellCharges[8000] = { maxCharges = _G.__SECRET, currentCharges = _G.__SECRET }
+
+            local ok, err = pcall(function() SP:Run("charge-secret-max") end)
+
+            _G.__cooldownEntries[8] = nil
+            _G.__categorySets.Essential = { 1, 2, 4 }
+            _G.__spellCharges[8000] = nil
+
+            assert(ok, "a secret maxCharges threw rather than being described: " .. tostring(err))
+            local text = Lines("charge-secret-max")
+            assert(text:match("charges%.max Spell 8000%s+SECRET"),
+                "a secret maxCharges was not described as secret:\n" .. text)
+        end },
+
+        { "GetSpellCooldownDuration returning nothing is distinguishable from secret", function()
+            ThugUI_DebugLog.secrets = {}
+            _G.__cooldownEntries[8] = { cooldownID = 8, spellID = 8000, charges = true, linkedSpellIDs = {} }
+            _G.__categorySets.Essential = { 1, 2, 4, 8 }
+            local realDuration = C_Spell.GetSpellCooldownDuration
+
+            C_Spell.GetSpellCooldownDuration = function() return nil end
+            local ok1, err1 = pcall(function() SP:Run("charge-duration-nothing") end)
+
+            C_Spell.GetSpellCooldownDuration = function() return _G.__SECRET end
+            local ok2, err2 = pcall(function() SP:Run("charge-duration-secret") end)
+
+            C_Spell.GetSpellCooldownDuration = realDuration
+            _G.__cooldownEntries[8] = nil
+            _G.__categorySets.Essential = { 1, 2, 4 }
+
+            assert(ok1, "GetSpellCooldownDuration returning nothing threw: " .. tostring(err1))
+            assert(ok2, "GetSpellCooldownDuration returning a secret threw: " .. tostring(err2))
+
+            local nothingText = Lines("charge-duration-nothing")
+            assert(nothingText:match("cooldownDuration Spell 8000%s+nothing"),
+                "a nil duration was not recorded as nothing:\n" .. nothingText)
+
+            local secretText = Lines("charge-duration-secret")
+            assert(secretText:match("cooldownDuration Spell 8000%s+SECRET"),
+                "a secret duration was not recorded as secret:\n" .. secretText)
+        end },
+
+        -- Both directions matter: a version that always skips the line would
+        -- pass a "missing skips it" check for free even with the feature
+        -- deleted entirely, which is exactly the "repurposed test" trap
+        -- 00-AGENT-BRIEF.md warns about. Asserting the line APPEARS when the
+        -- method is present is what makes this catch a regression instead of
+        -- passing vacuously.
+        { "SetCooldownFromDurationObject line depends on the method existing", function()
+            _G.__cooldownEntries[8] = { cooldownID = 8, spellID = 8000, charges = true, linkedSpellIDs = {} }
+            _G.__categorySets.Essential = { 1, 2, 4, 8 }
+            local realDuration = C_Spell.GetSpellCooldownDuration
+            C_Spell.GetSpellCooldownDuration = function() return { __duration = true } end
+
+            -- Present: the frame stub auto-synthesises every Capitalised
+            -- method as a no-op the moment it is READ (see frameMT's
+            -- __index near the top of this file), so no setup is needed to
+            -- model "the client has this API" -- it already does.
+            ThugUI_DebugLog.secrets = {}
+            local ok1, err1 = pcall(function() SP:Run("charge-duration-setter-present") end)
+            local presentText = ok1 and Lines("charge-duration-setter-present")
+
+            -- Missing: overwritten with a non-function value directly. The
+            -- metatable only fires for a key that is not already present on
+            -- the table, so a plain assignment sticks where deleting it
+            -- (assigning nil) would not -- this is the only way this harness
+            -- can model a client that genuinely lacks the 12.1 API.
+            ThugUI_DebugLog.secrets = {}
+            local widgets = SP:EnsureWidgets()
+            widgets.cooldown.SetCooldownFromDurationObject = false
+            local ok2, err2 = pcall(function() SP:Run("charge-duration-setter-missing") end)
+            widgets.cooldown.SetCooldownFromDurationObject = nil
+            local missingText = ok2 and Lines("charge-duration-setter-missing")
+
+            C_Spell.GetSpellCooldownDuration = realDuration
+            _G.__cooldownEntries[8] = nil
+            _G.__categorySets.Essential = { 1, 2, 4 }
+
+            assert(ok1, "SetCooldownFromDurationObject present threw: " .. tostring(err1))
+            assert(ok2, "SetCooldownFromDurationObject missing threw: " .. tostring(err2))
+            assert(presentText:match("SetCooldownFromDurationObject"),
+                "the line never appeared even with the method present:\n" .. presentText)
+            assert(not missingText:match("SetCooldownFromDurationObject"),
+                "recorded a line for a method the client does not have:\n" .. missingText)
+        end },
+
+        { "no C_CooldownViewer records the fact and does not throw", function()
+            ThugUI_DebugLog.secrets = {}
+            local real = C_CooldownViewer
+            C_CooldownViewer = nil
+
+            local ok, err = pcall(function() SP:Run("no-cooldownviewer") end)
+            C_CooldownViewer = real
+
+            assert(ok, "a missing C_CooldownViewer took the probe down: " .. tostring(err))
+            local text = Lines("no-cooldownviewer")
+            assert(text:match("charges%s+C_CooldownViewer absent"),
+                "did not record the missing API:\n" .. text)
+        end },
     }
 
     for _, step in ipairs(steps) do
