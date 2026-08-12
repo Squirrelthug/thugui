@@ -127,7 +127,7 @@ local STEPS = {
     -- just opened: set it while you are already looking at it, rather than
     -- opening a tab and being sent back out.
     {
-        text = "|cffffd100Set the frame's visibility|r to |cffffd100Always|r or "
+        text = "|cffffd100Set the frame's visibility|r to |cffffd100Always Show|r or "
             .. "|cffffd100In Combat|r, whichever option you like. The icon is pulled from "
             .. "this frame, so one that is never displayed has nothing to pull.",
         shots = { "visibility" },
@@ -139,8 +139,19 @@ local STEPS = {
         shots = { "buffsTab" },
         caption = "Both areas are highlighted. Drag any buff you want on the grid into one of them",
     },
+    -- No screenshot: the cooldown tabs are the same window and the same drag as
+    -- the step above, and a near-identical picture would read as a different
+    -- window rather than as the same one. The step exists at all because the
+    -- failure is silent -- a charge spell that is in neither list simply sits
+    -- there looking permanently ready, which is indistinguishable from a bug.
     {
-        text = "|cffffd100Done.|r The two areas render the buff in the cell in two "
+        text = "|cffffd100For spells with charges, do the same on the Cooldowns tabs|r -- "
+            .. "drag them into |cffffd100Essential Cooldowns|r or |cffffd100Utility "
+            .. "Cooldowns|r. A charge count cannot be read in combat either, so these "
+            .. "cells are borrowed exactly like buffs are.",
+    },
+    {
+        text = "|cffffd100Done.|r The two |cffffd100Tracked Buffs|r or |cffffd100Tracked Bars|r areas render the buff in the cell in two "
             .. "different ways, exactly as the default UI draws it.",
         shots = { "asIcon", "asBar" },
         layout = "row",
@@ -377,7 +388,7 @@ function Guide:Ensure()
 
     local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", PANEL_INSET, -16)
-    title:SetText("|cff00ffccBUFF WORKAROUND|r")
+    title:SetText("|cff00ffccPROTECTED SPELL WORKAROUND|r")
 
     local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -4, -4)
@@ -387,9 +398,13 @@ function Guide:Ensure()
     intro:SetPoint("TOPLEFT", PANEL_INSET, -38)
     intro:SetWidth(PANEL_WIDTH - PANEL_INSET * 2)
     intro:SetJustifyH("LEFT")
-    intro:SetText("The buff icon in any given cell is owned and PROTECTED by Blizzard. "
-        .. "Below are the game settings needed before ThugUI is able to BORROW these "
-        .. "assets from Blizzard's UI.")
+    intro:SetText("Two kinds of cell are owned and PROTECTED by Blizzard: |cffffd100buffs|r, "
+        .. "and |cffffd100spells with charges|r. In combat the game will not tell an addon "
+        .. "which buff is up, how long a cooldown has left, or how many charges are "
+        .. "banked -- so ThugUI cannot draw those honestly and would show them as "
+        .. "permanently ready.\n\n"
+        .. "The fix is the same for both: ThugUI BORROWS Blizzard's own icon and puts it "
+        .. "in your cell. Below are the game settings that makes possible.")
 
     -- The checkbox that used to live on the main window. It moved here because
     -- every step below it explains what it turns on -- reading the setting and
@@ -417,14 +432,18 @@ function Guide:Ensure()
     end
     useBlizzardBuffs:Refresh()
 
-    W.AttachTooltip(useBlizzardBuffs, "Use Blizzard's buff frames",
-        "Buff icons cannot be drawn by an addon during combat: the game will "
-            .. "not say which aura is which while you are fighting. With this on, "
-            .. "Blizzard's own tracked-buff icon is placed in the cell you assigned it "
-            .. "instead, so it works in combat.\n\n"
-            .. "Needs the Cooldown Manager turned on, with those buffs tracked in Edit "
-            .. "Mode. Turn this off to go back to ThugUI's own icons, which only draw "
-            .. "out of combat.")
+    W.AttachTooltip(useBlizzardBuffs, "Use Blizzard's frames",
+        "Some cells cannot be drawn by an addon during combat. The game will not "
+            .. "say which aura is up, how long a cooldown has left, or how many "
+            .. "charges are banked while you are fighting. With this on, Blizzard's "
+            .. "own icon is placed in the cell you assigned it instead, so it works "
+            .. "in combat.\n\n"
+            .. "This covers buffs and spells with charges. An ordinary cooldown is "
+            .. "unaffected -- ThugUI can already draw those correctly in combat and "
+            .. "keeps doing so.\n\n"
+            .. "Needs the Cooldown Manager turned on, with those spells tracked in "
+            .. "Edit Mode. Turn this off to go back to ThugUI's own icons, which only "
+            .. "draw out of combat.")
 
     self.blizzBuffsCB = useBlizzardBuffs
 

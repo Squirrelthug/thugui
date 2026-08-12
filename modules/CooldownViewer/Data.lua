@@ -596,6 +596,40 @@ local function Preferred(existing, candidate)
     return existing
 end
 
+--- Every spell ID that could name a Cooldown Manager entry, gaps closed up.
+---
+--- Appended one at a time rather than written as a table constructor, because
+--- `{ info.spellID, info.overrideSpellID, info.overrideTooltipSpellID }` leaves
+--- a HOLE wherever one of those is nil, and ipairs stops dead at the first hole.
+--- With spellID absent and an override present, that loop ran zero times and the
+--- entry was never indexed under anything -- so a placement pointing at it
+--- resolved to no entry at all, which surfaces as `no Cooldown Manager entry` in
+--- the CVBUFF log and an empty cell in the grid.
+---
+--- On 12.0.7 this could not bite: `spellID` was documented non-nilable and the
+--- one entry shape with no base spell (Roll the Bones) had all three absent, so
+--- the hole was at index 1 and the linked IDs happened to fill it in. **On 12.1
+--- `spellID` is officially nilable** -- CooldownViewerDocumentation.lua on the
+--- live branch, build 69273 -- and the item entries the patch adds (trinkets
+--- keyed by `equipSlot`, potions and healthstones keyed by `spellCategoryID`)
+--- are exactly the shape that has no base spell.
+local function IndexableSpellIDs(info)
+    local ids = {}
+
+    local function Add(id)
+        if id then ids[#ids + 1] = id end
+    end
+
+    Add(info.spellID)
+    Add(info.overrideSpellID)
+    Add(info.overrideTooltipSpellID)
+    for _, id in ipairs(info.linkedSpellIDs or {}) do
+        Add(id)
+    end
+
+    return ids
+end
+
 local function BuildCooldownInfoCache()
     local cache = {}
     if not C_CooldownViewer or not C_CooldownViewer.GetCooldownViewerCategorySet then
@@ -606,24 +640,15 @@ local function BuildCooldownInfoCache()
         local categoryName = item.name
         local category = item.value
         if category ~= nil then
-            local ok, ids = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category)
-            if ok and type(ids) == "table" then
-                for _, cooldownID in ipairs(ids) do
+            local ok, cooldownIDs = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category)
+            if ok and type(cooldownIDs) == "table" then
+                for _, cooldownID in ipairs(cooldownIDs) do
                     local infoOK, info = pcall(C_CooldownViewer.GetCooldownViewerCooldownInfo, cooldownID)
                     if infoOK and info then
                         -- Indexed under every ID that could name this entry, so
                         -- a placement made from any of them finds it again.
-                        local ids = {
-                            info.spellID, info.overrideSpellID, info.overrideTooltipSpellID,
-                        }
-                        for _, id in ipairs(info.linkedSpellIDs or {}) do
-                            table.insert(ids, id)
-                        end
-
-                        for _, id in ipairs(ids) do
-                            if id then
-                                cache[id] = Preferred(cache[id], info)
-                            end
+                        for _, id in ipairs(IndexableSpellIDs(info)) do
+                            cache[id] = Preferred(cache[id], info)
                         end
                     end
                 end
@@ -695,6 +720,18 @@ function Data.DumpCooldownViewer()
                             charges = info.charges,
                             isKnown = info.isKnown,
                             linkedSpellIDs = table.concat(names, ", "),
+                            -- 12.1 fields. equipSlot and spellCategoryID are how
+                            -- the Cooldown Manager names an ITEM -- a trinket by
+                            -- the slot it sits in, a potion or healthstone by its
+                            -- shared cooldown category -- and those entries carry
+                            -- no spellID at all, so these three are the only
+                            -- handle on them. Dumped because a placement model
+                            -- keyed on spell ID cannot see them, and the probe is
+                            -- what tells us what to key on instead.
+                            equipSlot = info.equipSlot,
+                            spellCategoryID = info.spellCategoryID,
+                            buffSlot = info.buffSlot,
+                            isInvisible = info.isInvisible,
                         })
                     end
                 end

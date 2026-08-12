@@ -29,7 +29,18 @@ frameMT.__index = function(tbl, key)
             return
         end
         -- Recorded so the resource ring's arc maths can be asserted on.
+        --
+        -- Secret start/duration are REFUSED, exactly as the live client refuses
+        -- them. This stub used to accept anything, which is why it never caught
+        -- ApplySweep handing it a secret startTime in combat -- an uncaught
+        -- throw that unwound the whole UpdateState loop and froze every icon it
+        -- had not reached. A stub that is more permissive than the game cannot
+        -- fail a test the game fails.
         if key == "SetCooldown" and type(a) == "table" then
+            if issecretvalue(a1) or issecretvalue(a2) then
+                error("bad argument #1 to 'SetCooldown' (Secret values are only "
+                    .. "allowed during untainted execution for this argument.)", 2)
+            end
             a.__cooldown = { a1, a2, a3 }
             return
         end
@@ -297,15 +308,27 @@ C_Spell = {
         -- Keyed by ID, but the addon queries by name, so map back.
         local id = tonumber(q) or tonumber(tostring(q):match("^Spell (%d+)$") or "")
         local state = _G.__cooldownState and _G.__cooldownState[id]
+        -- secretTiming models being in combat: the live client hands back a
+        -- secret startTime/duration there, and SetCooldown refuses them.
+        local secret = state and state.secretTiming
         return {
             isActive = state and state.isActive or false,
             isOnGCD = state and state.isOnGCD or false,
-            startTime = -1, duration = -1, modRate = 1,
+            startTime = secret and _G.__SECRET or -1,
+            duration = secret and _G.__SECRET or -1,
+            modRate = 1,
         }
     end,
-    GetSpellCharges = function() return nil end,
+    -- Charge spells, keyed by spell ID. A nil entry means "not a charge
+    -- spell", which is what the real API returns for one -- the addon uses the
+    -- table's mere presence to decide it is looking at a charge build.
+    GetSpellCharges = function(q)
+        local id = tonumber(q) or tonumber(tostring(q):match("^Spell (%d+)$") or "")
+        return _G.__spellCharges and _G.__spellCharges[id] or nil
+    end,
 }
 _G.__cooldownState = {}
+_G.__spellCharges = {}
 -- Auras present on the player, keyed by spell ID.
 _G.__auras = {}
 C_UnitAuras = {
@@ -339,10 +362,14 @@ _G.__cooldownEntries = {
     [3] = { cooldownID = 3, spellID = nil, linkedSpellIDs = { 9001, 9002, 9003 } },
     [4] = { cooldownID = 4, spellID = 5000, linkedSpellIDs = {} },
     [5] = { cooldownID = 5, spellID = 5000, linkedSpellIDs = { 5101, 5102, 5103, 5104 } },
+    -- A plain Utility cooldown, unique to one category. This is the Grappling
+    -- Hook shape: a multi-charge spell whose charge count our own code cannot
+    -- read in combat, so Blizzard's utility viewer has to draw the cell.
+    [7] = { cooldownID = 7, spellID = 7000, linkedSpellIDs = {} },
 }
 _G.__categorySets = {
     Essential   = { 1, 2, 4 },
-    Utility     = {},
+    Utility     = { 7 },
     TrackedBuff = { 3 },
     TrackedBar  = { 5 },
 }
@@ -844,6 +871,27 @@ if ThugUI.CooldownViewer then
             _G.__cooldownEntries[99] = nil
             _G.__categorySets.HiddenSpell = nil
             _G.__categorySets.HiddenAura = nil
+            Data.InvalidateCooldownInfoCache()
+        end },
+        -- 12.1 made cooldownInfo.spellID nilable. An entry with no base spell
+        -- but an override, and no linked spells to fall back on, used to leave a
+        -- nil at index 1 of the id list -- ipairs stopped there and the entry was
+        -- never indexed, so the placement resolved to no Cooldown Manager entry
+        -- and the cell silently stayed empty. This is the trinket/potion shape.
+        { "an entry with no base spell is still indexed by its override", function()
+            _G.__cooldownEntries[98] = {
+                cooldownID = 98, spellID = nil, overrideSpellID = 9801,
+                linkedSpellIDs = {},
+            }
+            _G.__categorySets.Essential = { 1, 2, 4, 98 }
+            Data.InvalidateCooldownInfoCache()
+
+            local info = Data.GetCooldownInfoForSpell(9801)
+            assert(info and info.cooldownID == 98,
+                "entry with nil spellID was not indexed under its overrideSpellID")
+
+            _G.__cooldownEntries[98] = nil
+            _G.__categorySets.Essential = { 1, 2, 4 }
             Data.InvalidateCooldownInfoCache()
         end },
         { "grid page refresh after edits", function()
@@ -1500,6 +1548,112 @@ if ThugUI.CooldownViewer then
                 "glow appeared while the setting was off")
             profile.showProcGlow = true
             wipe(_G.__overlayed)
+        end },
+
+        -- Regression: BugGrabber session 150, 36 occurrences of
+        --   Core.lua:126: bad argument #1 to 'SetCooldown' (Secret values are
+        --   only allowed during untainted execution for this argument.)
+        -- ApplySweep handed SetCooldown a secret startTime, the client refused
+        -- it, and nothing caught the throw -- so UpdateState unwound and every
+        -- icon the pairs() loop had not yet reached kept its previous state.
+        -- Charge spells surfaced it because their recharge timer runs
+        -- essentially always, so they take this path on nearly every pass.
+        { "a secret cooldown start does not throw", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 777, "always")
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            _G.__cooldownState[777] =
+                { isOnGCD = false, isActive = true, secretTiming = true }
+            local ok, err = pcall(function() CV:UpdateState() end)
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
+            assert(ok, "UpdateState threw on a secret cooldown start: " .. tostring(err))
+
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(icon.cooldown.__cooldown == nil,
+                "a sweep was drawn from secret timing")
+        end },
+
+        { "a secret sweep does not freeze the rest of the grid", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            -- 777 is the icon that threw under the bug; 888 is the bystander.
+            -- pairs() order is undefined, which is why the live symptom moved
+            -- around between sessions -- so what is asserted is that the
+            -- bystander is correct, which only holds if the loop ran to the end.
+            Data.SetPlacement(profile, 1, 1, 777, "always")
+            Data.SetPlacement(profile, 1, 2, 888, "cooldown")
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            _G.__cooldownState[777] =
+                { isOnGCD = false, isActive = true, secretTiming = true }
+            _G.__cooldownState[888] = { isOnGCD = false, isActive = false }
+            CV:UpdateState()
+            assert(CV.icons[Data.CellKey(1, 2)].wanted, "a ready bystander was not shown")
+
+            -- Spend the bystander. Under the bug this update never reached it
+            -- and it stayed on screen looking permanently ready.
+            _G.__cooldownState[888] = { isOnGCD = false, isActive = true }
+            CV:UpdateState()
+            assert(not CV.icons[Data.CellKey(1, 2)].wanted,
+                "a spent bystander stayed visible -- the loop aborted early")
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
+        end },
+
+        { "a charge spell shows while a charge is banked", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 777, "cooldown")
+            CV:Rebuild()
+            CV.container.__shown = true
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            -- isActive is true throughout: a charge spell's recharge timer runs
+            -- even with charges banked, which is exactly why readiness cannot
+            -- come from it.
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = true }
+            _G.__spellCharges[777] = { maxCharges = 2, currentCharges = 1 }
+            CV:UpdateState()
+            assert(icon.wanted, "a spell with a charge banked was hidden")
+            -- SetText is handed the raw number, so compare as text.
+            assert(tostring(icon.count.__text) == "1",
+                "charge count read " .. tostring(icon.count.__text))
+
+            _G.__spellCharges[777] = { maxCharges = 2, currentCharges = 0 }
+            CV:UpdateState()
+            assert(not icon.wanted, "a spell with both charges spent stayed visible")
+
+            _G.__spellCharges[777] = nil
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
+        end },
+
+        { "unreadable charges fail open rather than hiding", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = true }
+            _G.__spellCharges[777] = { maxCharges = 2, currentCharges = _G.__SECRET }
+            CV:UpdateState()
+            assert(icon.wanted,
+                "a charge spell hid itself when its charge count was secret")
+
+            -- Secret maxCharges too: issecretvalue has to be asked before the
+            -- `> 1` comparison, because that comparison is what errors on the
+            -- very value it is meant to be testing.
+            _G.__spellCharges[777] = { maxCharges = _G.__SECRET, currentCharges = _G.__SECRET }
+            local ok, err = pcall(function() CV:UpdateState() end)
+            assert(ok, "UpdateState threw on a secret maxCharges: " .. tostring(err))
+            assert(icon.wanted, "a charge spell hid itself when maxCharges was secret")
+
+            _G.__spellCharges[777] = nil
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
         end },
 
         { "direction validity is per axis", function()
@@ -2170,6 +2324,27 @@ if ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs then
     }
     _G.BuffIconCooldownViewer = viewer
 
+    -- Stands in for UtilityCooldownViewer, where Grappling Hook lives. Cooldown
+    -- ID 7 is the stub's plain Utility entry (spell 7000), which is the
+    -- shape of an ordinary cooldown rather than a buff.
+    local utilityViewer = NewFrame()
+    local utilityItem = NewFrame()
+    utilityItem.GetCooldownID = function() return 7 end
+    utilityItem.GetParent = function() return utilityViewer end
+    -- A cooldown item does not hide when the spell is spent -- it sweeps and
+    -- dims -- so shown is its resting state, unlike a buff item.
+    utilityItem.__shown = true
+    utilityViewer.itemFramePool = {
+        EnumerateActive = function()
+            local i = 0
+            return function()
+                i = i + 1
+                if i == 1 then return utilityItem end
+            end
+        end,
+    }
+    _G.UtilityCooldownViewer = utilityViewer
+
     local function PlaceAura(spellID)
         local profile = Data.GetActiveProfile()
         wipe(profile.placements)
@@ -2624,9 +2799,132 @@ if ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs then
             assert(ranSecondPass, "subsequent BB:Refresh did not run after error")
         end },
 
+        -- Adoption beyond buffs. Our own code cannot render two things in
+        -- combat -- a sweep (secret startTime, SetCooldown refuses it) and a
+        -- charge count (secret currentCharges, so readiness fails open) -- so
+        -- Blizzard's cooldown viewers draw those cells too. Confirmed in game:
+        -- Grappling Hook is correct out of combat and lies during it.
+        { "a charge spell in cooldown mode is adopted from the utility bar", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            -- 7000 is cooldownID 7 in the stub data, which utilityItem carries.
+            Data.SetPlacement(profile, 1, 1, 7000, "cooldown")
+            Data.InvalidateCooldownInfoCache()
+            BB:ResetChargeCache()
+            _G.__spellCharges[7000] = { maxCharges = 2, currentCharges = 2 }
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            BB:Refresh()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(BB:AdoptedItem(icon) == utilityItem,
+                "a charge spell was not adopted from the utility viewer")
+        end },
+
+        -- The cell must survive out of combat too. A cooldown item sweeps and
+        -- dims rather than hiding, so the buff-shaped fallback ("is the aura
+        -- up") answers no forever and would collapse the cell at rest --
+        -- exactly when the player is looking at their layout.
+        { "an adopted cooldown cell is kept out of combat", function()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            _G.__inCombat = false
+            wipe(_G.__auras)
+            ItemShown(false)
+            CV:UpdateState()
+            assert(icon.wanted, "an adopted cooldown cell collapsed out of combat")
+            ItemShown(true)
+        end },
+
+        { "an ordinary single-charge cooldown is left to us", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            Data.SetPlacement(profile, 1, 1, 7000, "cooldown")
+            Data.InvalidateCooldownInfoCache()
+            BB:ResetChargeCache()
+            -- No charge entry at all: GetSpellCharges returns nil, which is what
+            -- the real API does for a spell with no charge mechanic.
+            _G.__spellCharges[7000] = nil
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            BB:Refresh()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(BB:AdoptedItem(icon) == nil,
+                "a plain cooldown was adopted -- isActive is readable in combat, "
+                .. "so our own rendering is already correct for it")
+        end },
+
+        -- Proc mode's whole point is "show only while the proc is up", and
+        -- Blizzard's item knows nothing about that. Adopting one would leave it
+        -- on screen permanently and lose the only behaviour the mode has.
+        { "a charge spell in proc mode is not adopted", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            Data.SetPlacement(profile, 1, 1, 7000, "proc")
+            Data.InvalidateCooldownInfoCache()
+            BB:ResetChargeCache()
+            _G.__spellCharges[7000] = { maxCharges = 2, currentCharges = 2 }
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            BB:Refresh()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(BB:AdoptedItem(icon) == nil, "a proc-mode icon was adopted")
+        end },
+
+        { "an always-mode icon is adopted so it gets a real sweep", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            Data.SetPlacement(profile, 1, 1, 7000, "always")
+            Data.InvalidateCooldownInfoCache()
+            BB:ResetChargeCache()
+            _G.__spellCharges[7000] = nil   -- not a charge spell; mode alone decides
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            BB:Refresh()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(BB:AdoptedItem(icon) == utilityItem,
+                "an always-mode icon was not adopted, so its sweep stays broken "
+                .. "in combat")
+        end },
+
+        -- A secret maxCharges must not be cached. Caching it would latch a
+        -- wrong answer for the session, which is the mistake FitItem's
+        -- baseWidth already made once with a falsy measurement.
+        { "an unreadable charge count is never cached", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            Data.SetPlacement(profile, 1, 1, 7000, "cooldown")
+            Data.InvalidateCooldownInfoCache()
+            BB:ResetChargeCache()
+            CV:Rebuild()
+            CV.container.__shown = true
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            _G.__spellCharges[7000] = { maxCharges = _G.__SECRET, currentCharges = _G.__SECRET }
+            assert(BB:IsChargeSpell(icon) == false,
+                "an unreadable charge count was treated as a charge spell")
+
+            -- Now readable: the earlier unreadable pass must not have poisoned it.
+            _G.__spellCharges[7000] = { maxCharges = 2, currentCharges = 2 }
+            assert(BB:IsChargeSpell(icon) == true,
+                "a secret answer was cached and outlived the fight")
+            _G.__spellCharges[7000] = nil
+        end },
+
         { "restore", function()
             ThugUI_Config.cvUseBlizzardBuffs = nil
             _G.BuffIconCooldownViewer = nil
+            _G.UtilityCooldownViewer = nil
+            wipe(_G.__spellCharges)
+            BB:ResetChargeCache()
             local profile = Data.GetActiveProfile()
             wipe(profile.placements)
             CV:Rebuild()

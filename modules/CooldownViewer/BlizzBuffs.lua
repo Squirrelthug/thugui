@@ -1,20 +1,23 @@
 -- ============================================================================
--- ThugUI: Blizzard buff items in our grid cells
+-- ThugUI: Blizzard cooldown-viewer items in our grid cells
 --
--- Takes the item frames out of Blizzard's BuffIconCooldownViewer and anchors
--- each one over the grid cell the player assigned that buff to. Blizzard's
--- untainted code decides whether it is shown, what artwork it uses and how the
--- timer sweeps; ThugUI decides where it sits and how big it is.
+-- Takes the item frames out of Blizzard's cooldown viewers -- the two buff ones
+-- and the two cooldown ones -- and anchors each over the grid cell the player
+-- assigned that spell to. Blizzard's untainted code decides whether it is shown,
+-- what artwork it uses, how the timer sweeps and what charge count it prints;
+-- ThugUI decides where it sits and how big it is.
 --
 -- WHY, IN ONE PARAGRAPH
 --
--- An addon cannot tell which aura is which during combat. The list comes back,
--- the structs can be indexed, and `aura.spellId` is right there -- as a secret
--- number, and comparing it errors. Every other piece is available; the one
--- operation that would let us say "this aura is that spell" is the deliberate
--- choke point. Measured, not assumed: docs/DECISIONS.md §12 has the table.
--- So our own aura-mode icons cannot work in combat by any route, and the only
--- code on the machine that CAN identify the buff is Blizzard's own.
+-- Combat hides the values this addon would need. An addon cannot tell which
+-- aura is which -- the list comes back, the structs index, `aura.spellId` is
+-- right there as a secret number, and comparing it errors. The same wall stands
+-- in front of cooldowns: `startTime` is secret so SetCooldown refuses to draw a
+-- sweep, and `currentCharges` is secret so "has this spell a charge banked" has
+-- no answer. Measured, not assumed: docs/DECISIONS.md §12 has the table, and
+-- the charge half was confirmed in game -- Grappling Hook renders correctly out
+-- of combat and lies during it. The only code on the machine that can still
+-- answer any of these is Blizzard's own, because it is not tainted.
 --
 -- WHAT THIS DELIBERATELY DOES NOT DO
 --
@@ -59,10 +62,24 @@ if not CV then return end
 local BB = {}
 CV.BlizzBuffs = BB
 
+-- Every viewer a placement can be drawn from.
+--
 -- Both buff categories, because a placement can come from either: TrackedBuff
 -- draws icons and TrackedBar draws bars, and Roll the Bones lives in the
--- second one on this build (see DECISIONS.md on the duplicate entry).
-local VIEWER_NAMES = { "BuffIconCooldownViewer", "BuffBarCooldownViewer" }
+-- second one on this build (see DECISIONS.md on the duplicate entry). Essential
+-- and Utility followed for the cooldowns we cannot render in combat either --
+-- Maul sits on Essential and Grappling Hook on Utility, so both are needed.
+--
+-- These are BLIZZARD's global names. Ours are all ThugUI_-prefixed, and have
+-- been since the collision that killed Edit Mode for a session: ER:CreateECV
+-- once created its bar as a bare "EssentialCooldownViewer", and this very
+-- lookup would have found our frame instead of theirs. DECISIONS.md §15.
+local VIEWER_NAMES = {
+    "BuffIconCooldownViewer",
+    "BuffBarCooldownViewer",
+    "EssentialCooldownViewer",
+    "UtilityCooldownViewer",
+}
 
 BB.adopted = {}   -- our icon frame -> Blizzard item frame
 BB.taken = {}     -- Blizzard item frame -> true, for the release pass
@@ -106,6 +123,92 @@ function BB:IsEnabled()
     -- feature in this addon has one, and because "put it back the way it was"
     -- has to stay one click away.
     return ThugUI_Config.cvUseBlizzardBuffs ~= false
+end
+
+-- ----------------------------------------------------------------------------
+-- Which placements Blizzard should draw
+-- ----------------------------------------------------------------------------
+
+-- spellID -> boolean, "does this spell have more than one charge".
+--
+-- Cached because the answer is only trustworthy OUT of combat: maxCharges is a
+-- secret number mid-fight, and this decides whether a cell is adopted at all,
+-- so a wrong answer latched during a fight would hold for the rest of the
+-- session. An unreadable answer is deliberately NOT stored -- absent means
+-- "ask again next pass", which is the same mistake FitItem's baseWidth once
+-- made by caching a falsy measurement for the life of the item.
+local chargeSpell = {}
+
+--- Called from Core when the cooldown info cache is invalidated. A talent can
+--- add charges to a spell that had none, so the two have to expire together.
+function BB:ResetChargeCache()
+    wipe(chargeSpell)
+end
+
+--- true / false / nil, where nil means "cannot tell yet, ask again".
+---
+--- Queried BY NAME for the reason in DECISIONS.md §5 -- the name resolves to
+--- whichever version of the spell is currently talented -- falling back to the
+--- ID for a placement pointing at a passive, which answers no by-name lookup.
+local function DetectChargeSpell(icon)
+    local query = icon.spellName or icon.spellID
+    if not query then return false end
+
+    local ok, info = pcall(C_Spell.GetSpellCharges, query)
+    if not ok or not info then return false end
+
+    -- issecretvalue FIRST: comparing a secret against nil is itself a
+    -- comparison, and that is the operation that errors.
+    local maxCharges = info.maxCharges
+    if issecretvalue and issecretvalue(maxCharges) then return nil end
+    if maxCharges == nil then return false end
+    return maxCharges > 1
+end
+
+function BB:IsChargeSpell(icon)
+    local id = icon.spellID
+    if not id then return false end
+
+    local known = chargeSpell[id]
+    if known ~= nil then return known end
+
+    local detected = DetectChargeSpell(icon)
+    if detected == nil then return false end
+    chargeSpell[id] = detected
+    return detected
+end
+
+--- Should Blizzard draw this cell instead of us?
+---
+--- The rule is "everything our own code provably cannot render during combat",
+--- and there are exactly three such cases:
+---
+---   * **aura mode** -- an addon cannot identify an aura in combat by any
+---     route. DECISIONS.md §12. This is what the module was originally built
+---     for and is unchanged.
+---   * **always mode** -- the radial sweep IS the readiness signal there, and
+---     SetCooldown refuses the secret startTime combat hands us, so the icon
+---     draws and never sweeps. It reads as permanently ready.
+---   * **a multi-charge spell** -- currentCharges is secret in combat, so
+---     IsSpellReady fails open and the icon shows whether or not a charge is
+---     banked. Confirmed in game on Grappling Hook: correct out of combat,
+---     wrong during it.
+---
+--- Two exclusions, both deliberate:
+---
+---   * an ordinary single-charge cooldown is NOT adopted. isActive is readable
+---     in combat, so our own rendering is already right, and adopting would
+---     trade away the proc glow and the hide-when-spent behaviour for nothing.
+---   * **proc mode is NOT adopted even for a charge spell.** Its whole point is
+---     "show only while the proc is up", and Blizzard's item knows nothing
+---     about that -- it would sit there permanently and the mode would lose the
+---     one behaviour it exists for. A charge spell the player wants Blizzard to
+---     draw belongs in cooldown or always mode.
+function BB:ShouldAdopt(icon)
+    if not icon.spellID then return false end
+    if icon.mode == "proc" then return false end
+    if icon.mode == "aura" or icon.mode == "always" then return true end
+    return self:IsChargeSpell(icon)
 end
 
 -- ----------------------------------------------------------------------------
@@ -329,7 +432,8 @@ function BB:Release()
     wipe(self.lowered)
 end
 
---- Anchor every aura-mode icon's Blizzard counterpart over its cell.
+--- Anchor the Blizzard counterpart of every adoptable icon over its cell.
+--- BB:ShouldAdopt decides which those are, and says why.
 function BB:Apply()
     local container = CV.container
 
@@ -356,14 +460,14 @@ function BB:Apply()
     -- frames to adopt, and an empty cell looks exactly like a broken addon.
     if next(map) == nil and ThugUI.Diagnostics then
         ThugUI.Diagnostics:LogOnce("blizzbuffs-no-items", "CVBUFF",
-            "no Blizzard buff item frames found — is the Cooldown Manager enabled "
-            .. "and are these buffs tracked in Edit Mode?")
+            "no Blizzard cooldown-viewer item frames found — is the Cooldown Manager "
+            .. "enabled and are these spells tracked in Edit Mode?")
     end
 
     wipe(self.adopted)
 
     for _, icon in pairs(CV.icons) do
-        if icon.mode == "aura" and icon.spellID then
+        if self:ShouldAdopt(icon) then
             local info = Data.GetCooldownInfoForSpell(icon.spellID)
             local item = info and info.cooldownID and map[info.cooldownID]
 
@@ -416,7 +520,8 @@ function BB:Apply()
                             "spell %s: entry has no cooldown ID", spellStr)
                     else
                         ThugUI.Diagnostics:LogOnce(("blizzbuffs-no-item-%s"):format(tostring(icon.spellID)), "CVBUFF",
-                            "spell %s: no matching item frame — buff is not in Tracked Buffs or Tracked Bars", spellStr)
+                            "spell %s: no matching item frame — it is not in Tracked Buffs, Tracked Bars, "
+                            .. "Essential Cooldowns or Utility Cooldowns", spellStr)
                     end
                 end
             end
@@ -437,7 +542,7 @@ function BB:Apply()
     -- linked-spell count in the state snapshot.
     if count > 0 and ThugUI.Diagnostics then
         ThugUI.Diagnostics:LogOnce("blizzbuffs-adopted", "CVBUFF",
-            "adopted %d Blizzard buff item(s) into grid cells", count)
+            "adopted %d Blizzard cooldown-viewer item(s) into grid cells", count)
     end
 end
 

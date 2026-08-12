@@ -106,10 +106,28 @@ Two independent reasons, either fatal:
 2. In 12.x `startTime`/`duration` are **secret values**. Comparing them yields a
    secret boolean, and feeding that to `SetShown` hides the icon.
 
-Passing secret values *to* Blizzard's API is fine —
-`cooldown:SetCooldown(cd.startTime, cd.duration, cd.modRate)` works. Reading
-them yourself is what breaks. Aura timing and stack reads are `pcall`-guarded
-for the same reason.
+Reading secret values yourself is what breaks. Aura timing and stack reads are
+`pcall`-guarded for the same reason.
+
+**Correction, 2026-08-10.** This section used to say that passing secrets *to*
+Blizzard's API is fine and that
+`cooldown:SetCooldown(cd.startTime, cd.duration, cd.modRate)` works. **It does
+not.** BugGrabber session 150 carried 36 copies of
+
+```
+Core.lua:126: bad argument #1 to 'SetCooldown' (Secret values are only allowed
+during untainted execution for this argument.)
+```
+
+with the locals showing `startTime`, `duration` and `modRate` all secret and
+`isActive`/`isOnGCD` plain. §12 had **already measured** `SetCooldownDuration`
+refusing secrets; nobody joined that to the claim here, and the wrong sentence
+survived in the file the project treats as its reasoning log. The general rule
+is narrower than it looked: *some* setters are `AllowedWhenTainted`
+(`SetAlpha`, `StatusBar:SetValue`), and **the Cooldown radial setters are not
+among them**. Check the specific setter; do not generalise from another one.
+
+The throw was uncaught, which cost more than the missing sweep — see §19.
 
 **Query by NAME, not ID.** `C_Spell.GetSpellInfo` resolves a name only for a
 spell the player actually has, so it doubles as the talent check, and the name
@@ -1027,3 +1045,266 @@ with the old grid-centre guess. That was accepted deliberately: the old answer
 was wrong in those cases, it just was not always visible.
 
 **Unverified in game.** Built on branch `collapse-anchor-boundary`.
+
+## 19. Combat hides charges too, so Blizzard draws those cells as well
+
+**Diagnosed and built 2026-08-10.** §13 established that an addon cannot
+identify an aura in combat and that the answer is to borrow Blizzard's own buff
+item. The same wall turns out to stand in front of *cooldowns*, and the fix
+generalises to exactly the same shape.
+
+### What was actually wrong
+
+Two reports that looked like one bug and were two:
+
+| Report | Path | Mechanism |
+|---|---|---|
+| Bear icon draws but never sweeps | `always` mode → `ApplySweep` | `SetCooldown` refuses the secret `startTime`, so the radial never draws. `always` shows the icon unconditionally, so the missing sweep IS the whole symptom |
+| Grappling Hook "always ready" | `cooldown` mode → `IsSpellReady` | `currentCharges` is secret in combat, so the charge branch fails open |
+
+Both read as "the icon lies about being ready", which is why they looked like
+one fault with a shared cause in charge handling. They share a *theme* — combat
+hides the value — not a code path.
+
+**The player's own test separated them**, and it is the cleanest evidence in
+this whole investigation: Grappling Hook behaves correctly out of combat and
+lies during it. That is the secrecy boundary and nothing else.
+
+### Three things that cost time, kept so they are not re-derived
+
+**An uncaught throw in `UpdateState` is far worse than the thing that threw.**
+The loop at `Core.lua` iterates `pairs(self.icons)`; the `SetCooldown` refusal
+unwound it, so every icon not yet visited kept its previous state and
+`ApplyLayout` never ran. `pairs()` order is undefined, so *which* icons froze
+changed between sessions and the symptom appeared to move around on its own.
+Anything called per-icon in that loop needs to be incapable of throwing.
+
+**The harness stub was more permissive than the game.** `SetCooldown` in
+`Tests/loadtest.lua` accepted secrets happily, so no test could ever have caught
+this. It now refuses them exactly as the client does. A stub that is kinder than
+reality cannot fail a test reality fails — that is worth a sweep of the other
+stubs.
+
+**"Maul" was Mangle.** The Guardian profile had no Maul in it; the icon that
+threw was Mangle (33917) in `always` mode. Read the captured locals in
+BugGrabber before trusting the spell name in a bug report — they carry the mode,
+the cell and the whole `cdInfo` struct.
+
+### The rule for which cells Blizzard draws
+
+`BB:ShouldAdopt`. Adopt exactly what we provably cannot render in combat:
+
+- **aura mode** — cannot identify an aura at all (§12, §13)
+- **always mode** — the sweep is the readiness signal and it is refused
+- **any multi-charge spell** — `currentCharges` is secret, readiness fails open
+
+And deliberately not:
+
+- **an ordinary single-charge cooldown.** `isActive` is readable in combat, so
+  our own rendering is already correct. Adopting it would trade away the proc
+  glow and hide-when-spent for nothing.
+- **proc mode, even for a charge spell.** Its entire point is "show only while
+  the proc is up", and Blizzard's item knows nothing about that — it would sit
+  on screen permanently and the mode would lose the one behaviour it has. A
+  charge spell the player wants borrowed belongs in `cooldown` or `always` mode.
+
+Charge-ness is cached per spell ID and resolved **out of combat only**, because
+`maxCharges` is secret mid-fight and this decides whether a cell is adopted for
+the session. An unreadable answer is not stored — absent means "ask again",
+which is the mistake `FitItem`'s `baseWidth` already made once by caching a
+falsy measurement for the life of an item. The cache expires with
+`Data.InvalidateCooldownInfoCache`, since a talent can add charges to a spell
+that had none.
+
+### Two consequences the player accepted
+
+An adopted charge spell **stops disappearing when spent**. Blizzard's cooldown
+item sweeps and dims instead of hiding, and hiding it ourselves would need the
+charge count we cannot read. Better information, different look.
+
+`AdoptedCellWanted` needed a second branch for the same reason: its fallback
+asks "is the aura up", which answers no forever for a cooldown item and would
+have collapsed the cell **out** of combat — precisely when the player is looking
+at their layout.
+
+### The risk to watch in game
+
+§15 records that when we tainted Blizzard's viewer, the field their code choked
+on 17,768 times in session 114 was **`previousCooldownChargesCount`**. Charges
+are exactly what blew up last time. The BlizzBuffs discipline — no field writes
+on their frames, no strata on the viewer, never call their methods, anchor and
+scale only — is what made buff adoption safe and is unchanged here, but this
+path is more likely to trip it than buffs were. Watch BugGrabber for
+`Blizzard_CooldownViewer` errors on the first combat test.
+
+**Unverified in game.** 175 passing, 0 failures.
+
+## 20. 12.1 went live and changed the rules we built around
+
+**Read from Blizzard's source on 2026-08-11**, `Gethe/wow-ui-source` branch
+`live` @ 12.1.0 build **69273** — the exact build installed on this machine
+(`.build.info`). **None of it has been run on the client yet.** Everything below
+is a documented flag or enum, not an observed behaviour, and the probe is what
+turns it into evidence.
+
+`## Interface:` is now **120100**, confirmed against other addons on disk rather
+than assumed from the version number.
+
+### The header: secrecy stopped being all-or-nothing
+
+12.0.7 gave us one rule — *a tainted addon cannot read a protected value, and
+cannot pass one to a setter either.* Every design decision in §5, §12, §13 and
+§19 follows from that second half.
+
+**12.1 splits the two.** A new `Enum.SecretAspect` (30 values: `Shown`, `Alpha`,
+`Text`, `BarValue`, `Cooldown`, `RadialProgress`, `Desaturation`, …) names each
+property of a widget that can be *holding* a secret, and every setter now
+declares one of two postures:
+
+| Declaration | Meaning for us |
+|---|---|
+| `SecretArguments = "AllowedWhenUntainted"` | unchanged from 12.0.7 — we may not pass a secret |
+| `SecretArguments = "AllowedWhenTainted"` + `SecretArgumentsAddAspect` | **we may pass a secret.** The widget takes on that aspect: it renders correctly and we can never read the value back |
+
+That second row did not exist before. It is the whole of "more flexibility with
+your UI", and it means the addon can now *display* things it still cannot
+*know*. Reading is as restricted as it ever was — the change is that we no
+longer have to read in order to draw.
+
+Setters that now accept a secret from us: `StatusBar:SetValue`,
+`StatusBar:SetMinMaxValues`, `FontString:SetText`, `FontString:SetFormattedText`,
+`Texture:SetDesaturated`, `Texture:SetDesaturation`, `Cooldown:SetDrawSwipe`,
+`SetDrawEdge`, `SetDrawBling`, `SetSwipeColor`, `SetEdgeColor`.
+
+Setters that **still refuse** one, so do not plan around them:
+`Region:SetShown`, `Cooldown:SetCooldown`, `SetCooldownDuration`,
+`SetCooldownUNIX`, `SetCooldownFromExpirationTime`.
+
+**`SetShown` refusing a secret is the load-bearing negative.** "Hide this cell
+when the buff drops" is still unanswerable from a secret boolean, which is why
+§13's adoption of Blizzard's frames is not obsolete. `SetDesaturated` accepting
+one is the near-miss worth knowing: we can *grey* a cell on a secret condition
+even though we cannot *hide* it.
+
+### Duration objects: an opaque handle for a timer we may not read
+
+The other half of the change is a new object type, `LuaDurationObject` — a live
+timer held without ever seeing a number in it. Two producers matter:
+
+```
+C_Spell.GetSpellCooldownDuration(spell, ignoreGCD)  -> LuaDurationObject
+C_Spell.GetSpellChargeDuration(spell)               -> LuaDurationObject
+```
+
+**Neither carries a `SecretWhen*` flag.** `C_Spell.GetSpellCharges`, a few
+entries above them in the same file, carries `SecretWhenCooldownsRestricted` —
+so the contrast is deliberate, not an omission. Both are `MayReturnNothing`.
+
+Consumers: `Cooldown:SetCooldownFromDurationObject`,
+`StatusBar:SetTimerDuration`, and a new `DurationTextBinding` object that drives
+a FontString from a duration with its own formatter, colour curve and update
+interval.
+
+This is the exact shape of §19's wall. §19 concluded that `always` mode cannot
+sweep in combat because `SetCooldown` refuses the secret `startTime`, and that
+Blizzard's item therefore has to draw the cell. **`SetCooldown` still refuses
+it** — but we no longer need to call `SetCooldown`, because the duration-object
+route never surfaces a number to refuse. If it behaves as documented, ThugUI can
+draw its own sweep in combat and §19's adoption rule shrinks towards aura mode
+alone.
+
+`MayReturnNothing` is a second prize: *no duration returned* means *no cooldown
+running*, which is a non-secret readiness test that does not go through
+`isActive` at all.
+
+### The ring was written off too early
+
+`KNOWN-ISSUES.md` records the resource ring's exact level as permanently
+impossible, on the reasoning that "a straight bar could take a secret; a ring
+cannot". `UnitPower` is indeed still `SecretWhenUnitPowerRestricted`.
+
+But 12.1 adds `StatusBarRenderMode.Radial` — *"render the status bar by driving
+the managed texture's radial progress fill percent instead of resizing the
+texture anchors"* — and `StatusBar:SetValue` is one of the setters that now
+takes a secret from tainted code. **A radial StatusBar is a ring, and it accepts
+the value we are not allowed to look at.** The premise held; the conclusion drawn
+from it did not survive the patch.
+
+### Items are not protected the way spells are
+
+12.1 puts trinkets, potions and healthstones in the Cooldown Manager, in four new
+categories (`EquipSlotEssential`, `EquipSlotTracked`, `SpecAgnosticEssential`,
+`SpecAgnosticTracked`) plus `GroupBuff`, and they surface in Blizzard's settings
+under **"Not Displayed: Items"**.
+
+`C_Item.GetItemCooldown` carries **no `SecretWhen*` flag at all**. Item cooldowns
+are plain numbers in combat. So an item cell needs none of the machinery a spell
+cell needs — our own icon, our own sweep, and hide-when-used all work with the
+ordinary logic that predates the whole secret-value problem.
+
+**They cannot be placed today, and the reason is structural.** Every placement in
+this addon is keyed by spell ID. These entries are identified by `equipSlot` (the
+trinket in that slot, whatever it happens to be) or by `spellCategoryID` (4 =
+combat potion, 30 = health potion, 1711 = healthstone — the constants are in
+`CooldownViewerItemData.lua`), and their `spellID` is nil. `Data.PickerSpellIDFor`
+returns nil for them and they are dropped from the picker silently, which is the
+same failure shape as the Roll the Bones entry that once went missing.
+
+Note what the shared-cooldown potion entry actually is: **one cell that tracks
+whichever potion was last drunk**, resolved at use time through
+`C_Spell.GetLastCategoryCooldownSource(spellCategoryID)`. There is no fixed spell
+behind it, by design.
+
+### The nilable `spellID` had already broken the cache
+
+`CooldownViewerCooldown.spellID` became nilable in 12.1. `BuildCooldownInfoCache`
+built its index list as a table constructor —
+`{ info.spellID, info.overrideSpellID, info.overrideTooltipSpellID }` — which
+leaves a **hole** at index 1 when `spellID` is nil, and `ipairs` stops dead at a
+hole. An entry with no base spell but a non-nil override, and no linked spells to
+fill the gap in, was never indexed under anything, so any placement naming it
+resolved to `no Cooldown Manager entry` and drew an empty cell.
+
+On 12.0.7 this could not bite: `spellID` was non-nilable, and the one entry shape
+with no base spell (Roll the Bones) had all three fields absent, so the hole sat
+at index 1 and `table.insert` happened to fill it in. Fixed by appending non-nil
+IDs one at a time (`Data.IndexableSpellIDs`), with a regression case that fails
+against the old constructor. **The lesson outlives the bug: a table constructor
+is the wrong container for a list of maybe-nil values, and a field going nilable
+in a patch is enough to turn one into silence.**
+
+### Checklist items now answered from source, without the game
+
+- `isInvisible` is **still inert** — `CDM_HIDE_INVISIBLE_ITEMS = false` on live,
+  still flagged as debug code slated for removal.
+- The negative pseudo-categories **were renamed** to `HiddenActive` /
+  `HiddenPassive`, exactly as the PTR predicted. Filtering by value rather than
+  by name is why nothing had to change. Blizzard's own
+  `CooldownViewerUtil.IsDisabledCategory` still names the old
+  `HiddenSpell`/`HiddenAura` and now compares against nil.
+- No `C_CooldownViewer` function and no `CooldownViewerCooldown` field gained a
+  `SecretWhen*` flag, so §13's cooldownID matching is safe.
+- Still only **four** viewer frames — `BuffIcon`, `BuffBar`, `Essential`,
+  `Utility`. The new categories get no frame of their own; the player assigns
+  entries into one of the four, so `BB`'s `VIEWER_NAMES` needs nothing added.
+- `GroupBuff` is **not** in Blizzard's own `cooldownCategories` list. It is a
+  separate system (`C_CooldownViewer.GetGroupBuffItems`,
+  `C_UnitAuras.SetHiddenGroupBuffs`) for filtering raid buffs, with no viewer
+  frame behind it. Our "Everything" picker iterates the enum, so it will ask for
+  that category — if the game answers with rows, they are rows nothing can draw.
+  **Check the probe before deciding whether to exclude it.**
+- `RequiresUnitAuraAccess` now has a documented failure mode: **`Error`**, not
+  "return nothing". `RequiresNonSecretAura` is separately documented as returning
+  no values. §12's expectation that the index/slot/instanceID aura calls would
+  start erroring is now Blizzard's stated behaviour, so the fallback list walk in
+  `Core.lua` is on borrowed time exactly as predicted.
+
+### What the player confirmed on patch day, before any of this was written
+
+Swiftmend gained a second charge overnight and **the existing code picked it up
+with no change** — it is adopted as a charge spell by §19's rule, drawn by
+Blizzard's item with a radial sweep and a charge count. Nothing was hardcoded and
+nothing had to be. That is the §5 "resolve by name at runtime, never hardcode a
+spell ID" rule paying out on a patch nobody had tested against.
+
+**176 passing, 0 failures.**

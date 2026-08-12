@@ -1,4 +1,4 @@
-## Interface: 120007
+## Interface: 120100
 ## Title: ThugUI
 ## Notes: Enhanced UI features including per-spec cursor-anchored cooldown grids
 ## Author: Thug

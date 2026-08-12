@@ -91,21 +91,39 @@ end
 --- Queried BY NAME for the same reason as IsSpellAvailable: the name resolves
 --- to whichever version of the spell the player currently has talented, so the
 --- cooldown read always matches the button they actually press.
+--- A value we are allowed to look at: present, and not a secret.
+---
+--- `issecretvalue` is asked FIRST and the nil test comes second, because
+--- comparing a secret against nil is itself a comparison and comparison is the
+--- thing that errors. Writing it the other way round reads as harmless and is
+--- not -- see tasks/00-AGENT-BRIEF.md and SecretProbe.lua, which both state the
+--- ordering rule, and which this file used to get backwards.
+local function Readable(v)
+    if issecretvalue and issecretvalue(v) then return false end
+    return v ~= nil
+end
+
 local function IsSpellReady(spellName)
     -- Charge builds are ready whenever a charge is banked, even though the
     -- recharge timer is always running.
     local ok, chargeInfo = pcall(C_Spell.GetSpellCharges, spellName)
-    if ok and chargeInfo and chargeInfo.maxCharges and chargeInfo.maxCharges > 1 then
-        local current = chargeInfo.currentCharges
-        if current ~= nil and not (issecretvalue and issecretvalue(current)) then
-            return current > 0, current
+    if ok and chargeInfo then
+        -- A table at all means this IS a charge spell: GetSpellCharges returns
+        -- nil for a spell with no charge mechanic. So when maxCharges is
+        -- unreadable we still know that much, and fail open below rather than
+        -- falling through to the recharge timer -- which for a charge spell is
+        -- essentially always running, and would hide the icon permanently.
+        local maxCharges = chargeInfo.maxCharges
+        if not Readable(maxCharges) or maxCharges > 1 then
+            local current = chargeInfo.currentCharges
+            if Readable(current) then
+                return current > 0, current
+            end
+            -- Charges are secret this tick (they often are in combat). Fail
+            -- open: a reminder that shows slightly too eagerly beats one that
+            -- disappears mid-fight.
+            return true
         end
-        -- Charges are secret this tick (they often are in combat). Falling
-        -- through to isActive would read the *recharge* timer, which for a
-        -- charge spell is essentially always running, and the icon would sit
-        -- hidden even with charges banked. Fail open instead: a reminder that
-        -- shows slightly too eagerly beats one that disappears mid-fight.
-        return true
     end
 
     local ok2, cdInfo = pcall(C_Spell.GetSpellCooldown, spellName)
@@ -117,14 +135,50 @@ local function IsSpellReady(spellName)
     return true
 end
 
---- Drive an icon's sweep for "always" mode. start/duration are passed straight
---- to SetCooldown without ever being compared here -- handing secret values to
---- Blizzard's own API is fine, inspecting them is not.
+--- Drive an icon's sweep for "always" mode.
+---
+--- **The sweep is skipped whenever the timing is secret, which in practice
+--- means "in combat".** `SetCooldown` REFUSES a secret start value. That is
+--- measured, not reasoned: BugGrabber session 150 carried 36 copies of
+---
+---     Core.lua:126: bad argument #1 to 'SetCooldown' (Secret values are only
+---     allowed during untainted execution for this argument.)
+---
+--- and nothing caught it, so the throw unwound the whole UpdateState loop.
+--- Every icon the loop had not reached yet kept its previous state and
+--- ApplyLayout never ran, which looks exactly like "the icon is stuck showing
+--- ready" -- it is not reporting anything, it is frozen. The loop iterates with
+--- pairs(), so which icons froze changed from session to session and made the
+--- symptom look like it was moving around.
+---
+--- Charge spells are what surfaced it. Their recharge timer runs essentially
+--- always, so isActive is true on nearly every pass and this path is taken on
+--- nearly every pass, where an ordinary spell only reaches it while genuinely
+--- on cooldown.
+---
+--- This corrects DECISIONS.md §5, which claimed handing secrets to SetCooldown
+--- works. §12 had already measured SetCooldownDuration refusing them; the two
+--- facts were never joined up. Passing a secret to a blessed setter is fine
+--- only for the setters that are actually blessed, and the Cooldown radial
+--- setters are not among them.
+---
+--- The pcall is a backstop for the case where issecretvalue is absent
+--- altogether -- an unsweept icon is a cosmetic loss, an uncaught throw here
+--- costs the entire grid.
 local function ApplySweep(icon, spellName)
     local ok, cdInfo = pcall(C_Spell.GetSpellCooldown, spellName)
-    if ok and cdInfo and cdInfo.isActive and not cdInfo.isOnGCD then
-        icon.cooldown:SetCooldown(cdInfo.startTime, cdInfo.duration, cdInfo.modRate)
-    else
+    if not (ok and cdInfo and cdInfo.isActive and not cdInfo.isOnGCD) then
+        icon.cooldown:Clear()
+        return
+    end
+
+    if not (Readable(cdInfo.startTime) and Readable(cdInfo.duration)) then
+        icon.cooldown:Clear()
+        return
+    end
+
+    if not pcall(icon.cooldown.SetCooldown, icon.cooldown,
+                 cdInfo.startTime, cdInfo.duration, cdInfo.modRate) then
         icon.cooldown:Clear()
     end
 end
@@ -374,6 +428,13 @@ local function AdoptedCellWanted(icon, item)
     -- (RequiresNonSecretAura), so "no aura" and "cannot see the aura" are the
     -- same answer here. Keep the slot.
     if InCombat() then return true end
+
+    -- Only an aura-mode cell has an aura to fall back on. A cooldown item is
+    -- shown by Blizzard whenever the spell is tracked -- it sweeps and dims
+    -- rather than disappearing -- so asking "is the buff up" about one answers
+    -- no forever and would collapse the cell out of combat, which is precisely
+    -- when the player is looking at their layout.
+    if icon.mode ~= "aura" then return true end
 
     return ResolveAura(icon) ~= nil
 end
@@ -1020,6 +1081,10 @@ driver:SetScript("OnEvent", function(_, event, arg1)
         -- Talents change what each category contains and which spells are
         -- overridden, so the linked-spell lookup has to be rebuilt with them.
         Data.InvalidateCooldownInfoCache()
+
+        -- Charge-ness expires with it: a talent can add charges to a spell that
+        -- had none, and that decides whether Blizzard draws the cell or we do.
+        if CV.BlizzBuffs then CV.BlizzBuffs:ResetChargeCache() end
 
         if event == "PLAYER_SPECIALIZATION_CHANGED" then
             -- Retry migration for the spec just switched TO. The ECV list is
