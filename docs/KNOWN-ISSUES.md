@@ -45,9 +45,14 @@ ThugUI — not an error in ours.
 
 ## Resource ring cannot show an exact level in combat
 
-**Status: still open, checked 2026-08-09.** The ring is now switched **on**
-(`showResourceRing = true`, visibility `"combat"`), so this is live, not
+**Status: still open, re-checked 2026-08-11 on 12.1.** The ring is switched
+**on** (`showResourceRing = true`, visibility `"combat"`), so this is live, not
 hypothetical.
+
+**Open, but no longer believed impossible.** 12.1 made this fixable and nobody
+has built the fix — see item 2 below. Do not quote the "permanently impossible"
+framing this entry used to carry; it was reasoning from a widget that no longer
+has a monopoly on drawing an arc.
 
 **Checked and answered.** The ToT mover deferral was not sufficient. The log
 shows, five seconds into a fresh session and before any combat:
@@ -90,14 +95,25 @@ value is unreadable the ring holds its last resolved level and keeps its colour
    carries `SecretWhenUnitPowerRestricted` in Blizzard's generated docs, and
    primary resources stay secret to addons regardless. Full reasoning and
    evidence in `DECISIONS.md` §12. Do not re-open this.
-2. ~~**Driving the arc natively.**~~ **CLOSED 2026-08-09 — measured.**
-   `Cooldown:SetCooldownDuration(secret)` is **refused** from tainted code,
-   despite the wiki listing the `Cooldown` setters as `AllowedWhenTainted`, and
-   `CurveObject:Evaluate(secret)` is refused too. A radial swipe cannot be fed
-   a secret by any route. `StatusBar:SetValue(secret)` and `SetAlpha(secret)`
-   *are* accepted — so a straight **bar** could show exact energy in combat
-   where a ring cannot. That is a design change, not a bug fix, and has not
-   been offered to the player.
+2. ~~**Driving the arc natively.**~~ **RE-OPENED 2026-08-11 by the 12.1 patch.**
+
+   The 2026-08-09 measurement still holds exactly as written, and is repeated
+   verbatim on 12.1: `Cooldown:SetCooldownDuration(secret)` is **refused** from
+   tainted code and `CurveObject:Evaluate(secret)` is refused too. What was
+   wrong was the sentence drawn from it — *"a straight bar could show exact
+   energy in combat where a ring cannot"*. That treated "radial" as a property
+   of the `Cooldown` widget, which was the only radial thing in the API at the
+   time.
+
+   **12.1 adds `StatusBarRenderMode.Radial`** — *"render the status bar by
+   driving the managed texture's radial progress fill percent instead of
+   resizing the texture anchors"* — and `StatusBar:SetValue(secret)` is still
+   measured **accepted** in combat (`ThugUI_DebugLog.secrets`, 2026-08-11
+   21:05). A radial StatusBar is a ring, and it takes the value we may not read.
+
+   The premise survived the patch; the conclusion did not. `DECISIONS.md` §20.
+   This is a design change rather than a bug fix, and the player has been shown
+   it as an option and has not chosen it yet.
 3. Blizzard reclassifying primary power as non-secret. Unlikely, and note that
    the 12.1 relaxation for *secondary* resources turns out to have shipped
    already: combo points read fine in combat on 12.0.7.
