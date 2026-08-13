@@ -1512,6 +1512,21 @@ Two things fell out:
   disappeared. Two correct behaviours composing into something that reads as
   broken.
 
+### ANSWERED 2026-08-13: `cooldown` mode stays exactly as it is
+
+The open question — should a two-charge spell in `cooldown` mode also sweep
+toward its next charge, now that it hides when spent? — was put to the player
+twice and answered on 2026-08-13: **"should just do whatever it is doing now."**
+
+So: hide when spent, no sweep. Option 1 of the three offered. **This is a
+decision, not an omission** — do not re-open it, and do not build the
+`SetCooldownFromDurationObject` route on the strength of it being measured
+possible. It is possible and it is not wanted. If a sweep is ever wanted for a
+particular spell, `always` mode is the existing answer, at the known cost that
+`always` is adopted by Blizzard's frame and so does not hide when spent.
+
+That closes the last thread from the 2026-08-10 charge-spell bug report.
+
 ### Two harness gaps found while reviewing this
 
 Both recorded in `Tests/README.md`; noted here because the first one is the same
@@ -1654,3 +1669,39 @@ enum documentation, not a measurement, and it is recorded here as such.**
 To check it: flip the setting on at a **mid-range** resource level. At 0% or 100%
 a start-angle mismatch is invisible, which is exactly how this would ship
 looking fine and be wrong.
+
+---
+
+## 24. Salvage from the 12.1 patch file, kept when it was deleted
+
+`docs/UPCOMING-PATCH.md` was written before 12.1 shipped and deleted on
+2026-08-13 per the process in `CLAUDE.md` §7. Almost everything in it had already
+been absorbed into §20, which was written from the same source review *after* the
+patch went live and is the better record. Four things had not been, and are
+kept here because each one stops a future reader making a specific mistake.
+
+**The wiki is wrong about `overrideSpellID` and `overrideTooltipSpellID`.** It
+marks them as 12.1 additions. They are in the generated documentation on `live`
+too, which is why our 12.0.7 code read them and worked. Do not "fix" that code on
+the strength of the wiki — this is the same system the wiki has been wrong about
+more than once, and it is why `SOURCES.md` says wiki for signatures, Blizzard's
+own Lua for semantics.
+
+**`SpecAgnostic*` entries do not break the per-spec cache key.** An earlier
+version of the patch file said they did. Overstated: the cache is keyed by spec
+and rebuilt on spec change, so a spec-agnostic entry sitting in it is merely
+rebuilt more often than it needs to be. Harmless. **Do not restructure
+`Data.GetCooldownInfoForSpell` for it.**
+
+**Do not touch `CooldownViewerSecure.lua`'s aura-instance map.** 12.1 added
+`addonTable.CreateSecureAuraInstanceMap()` — a proxy over the viewer's internal
+aura-instance-to-frame map, marked `DisallowSecretKeys` and
+`DisallowTaintedAccess`, used only inside `CooldownViewer.lua`. §13's adoption
+works by enumerating the item pool and matching on `item:GetCooldownID()`, and
+never goes near that table. It must stay that way; a `DisallowTaintedAccess`
+error naming ThugUI would mean we had started reaching into it.
+
+**The patch-day checklist was the reusable half of that file** and is now the
+skeleton of the fresh `UPCOMING-PATCH.md` for 12.2, emptied of 12.1's answers.
+The process is worth keeping even when there is nothing yet to record: patch day
+should be a checklist, not a scramble.
