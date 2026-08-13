@@ -221,6 +221,41 @@ could at least detect.
 
 ---
 
+## A spent charge spell goes invisible but its cell does not collapse
+
+**Status: accepted by the player, verified in game 2026-08-12.** Not a defect to
+be fixed later — a measured limit, accepted knowingly so patch-day work could
+continue.
+
+The icon disappears correctly when every charge is spent during combat. The cell
+keeps its space, so a column holding one does not close around it until combat
+ends. `DECISIONS.md` §21.
+
+**Why it cannot be fixed from addon code.** The hiding works because
+`SetAlpha` accepts a secret value and clamps it to 0–1, so
+`icon:SetAlpha(currentCharges)` never reads or compares the count. Collapse is
+different in kind: `ApplyLayout` packs on `if icon.wanted then`, a plain Lua
+truth test, and setting `icon.wanted` from the charge count is a branch on a
+secret — the operation that throws.
+
+**Routing around it was considered and rejected on evidence.** The player
+proposed parking a spent icon on a 1×1 frame so the grid closes over it. The
+frame trick is sound; the problem is upstream of it, because parking the icon
+requires first knowing it is spent. Note also that the client refuses
+`SetShown(secret)` and accepts `SetAlpha(secret)` seconds apart on the same
+widget: **a secret may change what you see, never what the layout does.** Any
+scheme turning a secret into a position, a size, or a shown state is on the wrong
+side of a line Blizzard drew deliberately.
+
+**What would change this:** Blizzard making `currentCharges` non-secret, as they
+already did for secondary resources. Nothing on our side.
+
+Out of combat nothing is secret, so hide-and-collapse works normally. The gap is
+combat-only and bounded to the window between spending the last charge and the
+first recharge landing.
+
+---
+
 ## "Follow cursor" off still tracks the cursor, at an offset
 
 **Status: noted 2026-08-09, not investigated.** Reported by the player.

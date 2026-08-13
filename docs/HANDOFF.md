@@ -39,7 +39,15 @@ documentation, and everything queued below depends on it. The headlines:
   and form. Readiness-by-absence is dead too: both duration getters return an
   object even at full charges, idle.
 
-### Task 15 has landed — reviewed, tested, NOT seen in game
+### Task 15 has landed — and is VERIFIED IN GAME, 2026-08-12
+
+**The player tested it: the spell hides when spent, and the cell does not
+collapse.** Both halves are exactly what §21 predicted, and the player accepted
+the non-collapsing cell explicitly rather than having it fixed. It is written up
+in `KNOWN-ISSUES.md` as a measured limit, not as a defect awaiting work — **do
+not re-open it** and do not offer a workaround; one was already proposed by the
+player, examined, and rejected on evidence.
+
 
 `DECISIONS.md` §21. **195 passing, 0 failures.** Built by a Sonnet agent against
 `tasks/15-charge-spells-hide-when-spent.md`; report in `tasks/reports/`.
