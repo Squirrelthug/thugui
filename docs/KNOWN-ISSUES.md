@@ -256,7 +256,21 @@ first recharge landing.
 
 ---
 
-## "Follow cursor" off still tracks the cursor, at an offset
+## ~~"Follow cursor" off still tracks the cursor~~ — NOT REPRODUCING 2026-08-12
+
+**Status: could not be reproduced, closed pending a fresh sighting.** The player
+re-tested on 2026-08-12 and the grid stayed where it was dragged.
+
+Their sharper description before that test is worth keeping in case it returns:
+**out of combat it stayed where dragged, and only moved during combat.** The
+gate reads correctly for that shape — `Core.lua`'s `wantCursor` is
+`profile.followCursor and (previewMode or inCombat)`, and the per-frame path at
+the bottom of the driver repeats the same condition — so with the setting off
+neither should ever run. If it comes back, that pair of conditions is where to
+look first, and the combat-only detail is the clue that separates them from the
+drag path.
+
+The original report follows.
 
 **Status: noted 2026-08-09, not investigated.** Reported by the player.
 
