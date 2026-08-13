@@ -72,7 +72,9 @@ local function IsSpellAvailable(spellName)
     return (ok and info and info.spellID) and true or false
 end
 
---- Is the spell usable right now? Returns ready, charges.
+--- Is the spell usable right now? Returns ready, charges, alpha -- see the
+--- comment on `alpha` immediately above the function for what that third
+--- return is and why it can never be nil.
 ---
 --- Readiness is derived from `isActive` and `isOnGCD`, NEVER from startTime or
 --- duration, for two independent reasons:
@@ -103,6 +105,20 @@ local function Readable(v)
     return v ~= nil
 end
 
+--- The third return, `alpha`, is always safe to hand straight to
+--- `icon:SetAlpha` -- it is `1` on every path except one: the fail-open branch
+--- below, where currentCharges could not be read. `SetAlpha` accepts a secret
+--- and clamps it to 0-1 (DECISIONS.md §20, measured ACCEPTED at every phase of
+--- a full combat, unlike SetShown/SetCooldown which still refuse one), so a
+--- secret 0 goes invisible and a secret 1 or 2 stays opaque -- with no
+--- comparison anywhere, because comparing is the operation that throws.
+---
+--- This return must never be nil. If a caller had to test it before using it,
+--- that test would itself be a comparison against a possible secret -- the
+--- exact thing this design exists to avoid -- or it would need a fourth
+--- boolean return just to say "is this safe", which is worse than one function
+--- that always answers safely. All secret handling for it stays in here, next
+--- to the same handling for `ready`.
 local function IsSpellReady(spellName)
     -- Charge builds are ready whenever a charge is banked, even though the
     -- recharge timer is always running.
@@ -117,22 +133,34 @@ local function IsSpellReady(spellName)
         if not Readable(maxCharges) or maxCharges > 1 then
             local current = chargeInfo.currentCharges
             if Readable(current) then
-                return current > 0, current
+                -- SetShown has already done the hiding work on this path (the
+                -- caller acts on `ready`), so an icon that is shown must be
+                -- fully opaque.
+                return current > 0, current, 1
             end
+
             -- Charges are secret this tick (they often are in combat). Fail
-            -- open: a reminder that shows slightly too eagerly beats one that
-            -- disappears mid-fight.
-            return true
+            -- open on readiness: a reminder that shows slightly too eagerly
+            -- beats one that disappears mid-fight. But hand the secret count
+            -- itself back as the alpha -- issecretvalue asked first, same
+            -- ordering Readable() uses -- so a spent charge still disappears
+            -- even though we were never allowed to ask whether it was spent.
+            if issecretvalue and issecretvalue(current) then
+                return true, nil, current
+            end
+            -- current was nil outright (not secret, genuinely absent) rather
+            -- than unreadable. Nothing to clamp on; stay opaque.
+            return true, nil, 1
         end
     end
 
     local ok2, cdInfo = pcall(C_Spell.GetSpellCooldown, spellName)
     if ok2 and cdInfo then
-        if cdInfo.isOnGCD then return true end
-        if cdInfo.isActive then return false end
+        if cdInfo.isOnGCD then return true, nil, 1 end
+        if cdInfo.isActive then return false, nil, 1 end
     end
 
-    return true
+    return true, nil, 1
 end
 
 --- Drive an icon's sweep for "always" mode.
@@ -858,6 +886,16 @@ function CV:UpdateState()
         -- Resolved once: "proc" mode gates on it and the glow visual uses it.
         local procced = ShouldGlow(icon)
 
+        -- Reset every pass, before any branch below, because icons are pooled.
+        -- An icon left at alpha 0 by a spent charge spell in cooldown/proc mode
+        -- would otherwise carry that invisibility to whatever spell reuses the
+        -- frame next -- the exact bug shape the pooled-icon comment at
+        -- Core.lua:~1000 already carries for stale sweep/stack state. Only the
+        -- cooldown/proc branches in the spell path below override this; every
+        -- other path (adopted, item-backed, aura, always, recharging, and a
+        -- spell with no charge mechanic at all) keeps it at 1. Task 15.
+        icon:SetAlpha(1)
+
         -- A cell whose buff is drawn by Blizzard's own item frame. Ours holds
         -- the slot -- the Blizzard item is anchored to it, so with collapse on,
         -- a cell that stops being "wanted" while the buff is still up slides the
@@ -969,7 +1007,7 @@ function CV:UpdateState()
             end
             if not stacked then icon.count:Hide() end
         else
-            local ready, charges = IsSpellReady(spellName)
+            local ready, charges, alpha = IsSpellReady(spellName)
 
             if icon.mode == "always" then
                 show = true
@@ -980,18 +1018,35 @@ function CV:UpdateState()
                 -- hidden until it is actually pressable.
                 show = (ready and procced) and true or false
                 icon.cooldown:Clear()
+                -- A procced charge spell with nothing banked fails `ready` open
+                -- in combat exactly as cooldown mode does below (currentCharges
+                -- is secret), so it would otherwise sit on screen glowing with
+                -- no charge to spend. Same alpha, same source. Task 15.
+                icon:SetAlpha(alpha)
             elseif icon.mode == "recharging" then
                 -- Exact inverse of "cooldown" mode below, from the SAME `ready`
                 -- answer, so the two can never disagree about the same spell.
                 -- Unlike cooldown mode it gets a sweep -- the sweep is the
                 -- whole point of the mode.
+                --
+                -- Deliberately NOT given the alpha treatment. The inverse of a
+                -- secret 0/1/2 needs `1 - currentCharges`, which is arithmetic
+                -- on a secret and is refused -- so a charge spell placed in
+                -- recharging mode keeps today's fail-open behaviour in combat.
+                -- Not an oversight; see DECISIONS.md §20 and task 15.
                 show = not ready
                 ApplySweep(icon, spellName)
             else
                 -- "cooldown" mode: the icon IS the readiness signal, so there is
-                -- nothing to sweep -- it simply disappears once spent.
+                -- nothing to sweep -- it simply disappears once spent. This is
+                -- the reported bug (Grappling Hook, Swiftmend): currentCharges
+                -- is secret in combat, `ready` fails open, and `alpha` (1
+                -- normally, the secret charge count itself when the count is
+                -- unreadable) does the hiding SetShown cannot -- with no
+                -- comparison anywhere. DECISIONS.md §20, task 15.
                 show = ready and true or false
                 icon.cooldown:Clear()
+                icon:SetAlpha(alpha)
             end
 
             if charges then

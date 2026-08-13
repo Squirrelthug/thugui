@@ -1434,3 +1434,98 @@ that let Swiftmend gain a charge with no code change is what hides a trinket. An
 item is identified by the slot it sits in, and its cooldown comes from
 `GetInventoryItemCooldown` — which Blizzard's own `CooldownViewer.lua:1020` uses
 and which carries no secrecy flag. Task 14.
+
+## 21. Charge spells hide themselves again, by never asking whether they are spent
+
+**Task 15, 2026-08-12. Correct in code and in the harness; unverified in game.**
+
+§19 handed every multi-charge spell to Blizzard's viewer, because `IsSpellReady`
+fails open when `currentCharges` is secret and an icon that lies is worse than an
+icon Blizzard draws. §20's combat measurement removed the reason. Charge spells
+in `cooldown` and `proc` mode are ours to draw again.
+
+The whole design is one line, and its value is what it does *not* do:
+
+```lua
+icon:SetAlpha(chargeInfo.currentCharges)   -- secret 0 -> invisible, 1 or 2 -> opaque
+```
+
+`SetAlpha` accepts a secret and clamps it to 0–1. Nothing is read, nothing is
+compared, and **comparison is the operation that throws**. The spell hides when
+spent without our code ever being told it was spent.
+
+### Why the third return exists, and why it can never be nil
+
+`IsSpellReady` returns `ready, charges, alpha`. The third value is `1` on every
+path except the one fail-open branch, where it is the secret count itself.
+
+It would have been natural to return `nil` for "no alpha needed" and let the
+caller test. That test is the bug: `alpha ~= nil` against a value that may be
+secret is a comparison, and it throws. The alternative — a fourth boolean return
+saying "is the third one safe to use" — is worse than one function that always
+answers safely. **All secret handling stays inside `IsSpellReady`, whose comment
+block exists for exactly that purpose.** A caller should never have to know.
+
+### What is deliberately not covered
+
+- **`recharging` mode.** Its inverse needs `1 - currentCharges`, which is
+  arithmetic on a secret and is refused. A charge spell placed there keeps the
+  old fail-open behaviour in combat. Not an oversight.
+- **`always` mode.** Still adopted, so we draw nothing to fade.
+- **The cell still holds its space.** Alpha zero is not hidden. `ApplyLayout`
+  collapses on `if icon.wanted then`, a plain Lua truth test, and setting
+  `wanted` from a secret is a branch on a secret.
+
+**The player was offered a workaround and declined it on 2026-08-12** — parking
+a spent icon on a 1×1 frame so the grid closes around it. It fails for the same
+reason everything else does: to park the icon you must first know it is spent.
+The frame trick was never the hard part.
+
+Worth carrying past this addon: **the client refuses `SetShown(secret)` and
+accepts `SetAlpha(secret)`, seconds apart, on the same widget.** That is not an
+inconsistency to route around. It is a deliberate line — a secret may change what
+you see, never what the layout does — and any scheme that turns a secret into a
+position, a size, or a frame's shown state is on the wrong side of it.
+
+Out of combat nothing is secret, so hide-and-collapse works normally. The gap is
+combat-only and bounded to the window between spending the last charge and the
+first recharge landing.
+
+### `cooldown` mode has no sweep, and that is the mode, not a bug
+
+Chased on 2026-08-12 and worth recording so nobody re-diagnoses it. The player
+reported a two-charge Guardian spell that "draws its icon but no radial cooldown
+sweep". Reading their SavedVariables settled it: **every Guardian placement is in
+`cooldown` mode**, and that mode is defined as *"the icon IS the readiness
+signal, so there is nothing to sweep — it simply disappears once spent"*
+(`Core.lua`, the `else` branch of `UpdateState`'s spell path).
+
+Two things fell out:
+
+- **The spell was Mangle (33917), not Maul.** Maul is not placed on that grid at
+  all. Names were resolved out of `ThugUI_BCVDump` on disk rather than from
+  memory — §5's "never invent a spell ID" applies just as much to reading one
+  back as to writing one.
+- **A charge spell in `cooldown` mode that failed to adopt looked identical to a
+  bug.** Under §19 it was handed to Blizzard, and if no matching item frame
+  existed the cell fell back to our render: no sweep, and fail-open so it never
+  disappeared. Two correct behaviours composing into something that reads as
+  broken.
+
+### Two harness gaps found while reviewing this
+
+Both recorded in `Tests/README.md`; noted here because the first one is the same
+class of hole as §19's `SetCooldown` stub, which meant no test could have caught
+a real bug.
+
+- **The stub's secret does not throw on a nil comparison.** `SECRET` is a plain
+  table, so `SECRET > 0` and arithmetic both raise real Lua errors — but
+  `SECRET == nil` returns `false` quietly, where the client throws. Code that
+  nil-tests a secret before asking `issecretvalue` passes the harness and fails
+  in the game. `Readable()` has the ordering right; anything new must use it.
+- **A test can depend on the previous test's setup.** `"an adopted cooldown cell
+  is kept out of combat"` inherited its icon from the case above it. When that
+  case was deleted as obsolete, the survivor kept passing while asserting
+  something about a cell that was no longer adopted — a green test whose name had
+  become false. It now builds its own state, in `always` mode, which is the
+  remaining non-aura adoption case.

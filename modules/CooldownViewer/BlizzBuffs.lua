@@ -181,7 +181,7 @@ end
 --- Should Blizzard draw this cell instead of us?
 ---
 --- The rule is "everything our own code provably cannot render during combat",
---- and there are exactly three such cases:
+--- and there are exactly two such cases:
 ---
 ---   * **aura mode** -- an addon cannot identify an aura in combat by any
 ---     route. DECISIONS.md §12. This is what the module was originally built
@@ -189,33 +189,37 @@ end
 ---   * **always mode** -- the radial sweep IS the readiness signal there, and
 ---     SetCooldown refuses the secret startTime combat hands us, so the icon
 ---     draws and never sweeps. It reads as permanently ready.
----   * **a multi-charge spell** -- currentCharges is secret in combat, so
----     IsSpellReady fails open and the icon shows whether or not a charge is
----     banked. Confirmed in game on Grappling Hook: correct out of combat,
----     wrong during it.
 ---
---- Two exclusions, both deliberate:
+--- **A multi-charge spell used to be a third case here (DECISIONS.md §19,
+--- task 14): currentCharges is secret in combat, so IsSpellReady used to fail
+--- open and the icon showed whether or not a charge was banked, so the cell was
+--- handed to Blizzard rather than draw a lie. DECISIONS.md §20 measured a route
+--- that does not need to read the count at all -- SetAlpha accepts a secret and
+--- clamps it to 0-1, so IsSpellReady (Core.lua) now hands back the secret
+--- currentCharges as an alpha and a spent charge spell hides itself with no
+--- comparison anywhere. Charge spells are ours to draw again, task 15.**
 ---
----   * an ordinary single-charge cooldown is NOT adopted. isActive is readable
----     in combat, so our own rendering is already right, and adopting would
----     trade away the proc glow and the hide-when-spent behaviour for nothing.
----   * **proc mode is NOT adopted even for a charge spell.** Its whole point is
----     "show only while the proc is up", and Blizzard's item knows nothing
----     about that -- it would sit there permanently and the mode would lose the
----     one behaviour it exists for. A charge spell the player wants Blizzard to
----     draw belongs in cooldown or always mode.
+--- The exclusions below are no longer about charges at all -- they apply to a
+--- charge spell and an ordinary spell exactly alike, because neither is ever
+--- reached by the removed charge check any more:
+---
+---   * an ordinary cooldown-mode spell (charge or not) is NOT adopted. isActive
+---     is readable in combat, so our own rendering is already right, and
+---     adopting would trade away the proc glow and the hide-when-spent
+---     behaviour for nothing.
+---   * **proc mode is NOT adopted.** Its whole point is "show only while the
+---     proc is up", and Blizzard's item knows nothing about that -- it would
+---     sit there permanently and the mode would lose the one behaviour it
+---     exists for.
 ---   * **recharging mode is NOT adopted either, task 14.** For a spell, isActive
----     is readable in combat, so our own rendering is already correct -- same
----     reasoning as an ordinary single-charge cooldown, just inverted. For an
----     item nothing here is secret at all. Without this exclusion a charge
----     spell placed in recharging mode would fall through to IsChargeSpell and
----     be adopted anyway, exactly as it would in cooldown mode.
+---     is readable in combat, same reasoning as an ordinary cooldown-mode spell,
+---     just inverted. For an item nothing here is secret at all.
 function BB:ShouldAdopt(icon)
     if not icon.spellID then return false end
     if icon.mode == "proc" then return false end
     if icon.mode == "recharging" then return false end
     if icon.mode == "aura" or icon.mode == "always" then return true end
-    return self:IsChargeSpell(icon)
+    return false
 end
 
 -- ----------------------------------------------------------------------------

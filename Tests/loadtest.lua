@@ -1656,6 +1656,202 @@ if ThugUI.CooldownViewer then
             _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
         end },
 
+        -- task 15: IsSpellReady's third return (Core.lua) is an alpha that is
+        -- always safe to hand to icon:SetAlpha -- 1 in every case except the
+        -- fail-open branch, where it is the secret currentCharges itself.
+        -- SetAlpha clamps a secret 0/1/2 to invisible/opaque with no
+        -- comparison, which is how a spent charge spell hides itself in
+        -- combat (DECISIONS.md §20). Every case here resets the shared
+        -- _G.__* stub state at the START, not only at the end -- task 14
+        -- found that a case which throws unwinds past its own cleanup and
+        -- leaves the next case passing for the wrong reason.
+        { "task 15: charges readable and zero -- hidden, alpha stays 1", function()
+            _G.__spellCharges[777] = nil
+            _G.__cooldownState[777] = nil
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 777, "cooldown")
+            CV:Rebuild()
+            CV.container.__shown = true
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = true }
+            _G.__spellCharges[777] = { maxCharges = 2, currentCharges = 0 }
+            CV:UpdateState()
+            assert(not icon.wanted, "an icon with zero readable charges stayed wanted")
+            -- SetShown has already done the hiding here, so alpha must stay
+            -- opaque -- IsSpellReady returns 1 on the readable path.
+            assert(icon.__alpha == 1,
+                "a readable zero charge count should not touch alpha, got "
+                .. tostring(icon.__alpha))
+
+            _G.__spellCharges[777] = nil
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
+        end },
+
+        { "task 15: charges readable and non-zero -- shown, alpha stays 1", function()
+            _G.__spellCharges[777] = nil
+            _G.__cooldownState[777] = nil
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 777, "cooldown")
+            CV:Rebuild()
+            CV.container.__shown = true
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = true }
+            _G.__spellCharges[777] = { maxCharges = 2, currentCharges = 2 }
+            CV:UpdateState()
+            assert(icon.wanted, "an icon with charges banked was hidden")
+            assert(icon.__alpha == 1,
+                "a readable non-zero charge count should not touch alpha, got "
+                .. tostring(icon.__alpha))
+
+            _G.__spellCharges[777] = nil
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
+        end },
+
+        -- The load-bearing case: this is the whole point of the design. The
+        -- icon stays "wanted" (fail-open, space reserved -- alpha zero is not
+        -- hidden, DECISIONS.md §20's accepted cost) but alpha is handed the
+        -- SECRET value itself, unread and uncompared.
+        { "task 15: charges secret -- icon shown, space reserved, alpha IS the secret", function()
+            _G.__spellCharges[777] = nil
+            _G.__cooldownState[777] = nil
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 777, "cooldown")
+            CV:Rebuild()
+            CV.container.__shown = true
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = true }
+            _G.__spellCharges[777] = { maxCharges = 2, currentCharges = _G.__SECRET }
+            local ok, err = pcall(function() CV:UpdateState() end)
+            assert(ok, "UpdateState threw on a secret currentCharges: " .. tostring(err))
+
+            assert(icon.wanted,
+                "a charge spell hid its cell when charges went secret -- "
+                .. "space must stay reserved (DECISIONS.md §20's accepted cost)")
+            assert(icon.__alpha == _G.__SECRET,
+                "alpha was not the secret currentCharges value itself, got "
+                .. tostring(icon.__alpha))
+
+            _G.__spellCharges[777] = nil
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
+        end },
+
+        -- The pooling hazard the task calls out as the likely regression: an
+        -- icon left at the secret alpha by one spell must not carry it to
+        -- whatever spell reuses the pooled frame next.
+        { "task 15: pooling -- a spent-charge icon reused for a plain spell is alpha 1 again", function()
+            _G.__spellCharges[777] = nil
+            _G.__spellCharges[888] = nil
+            _G.__cooldownState[777] = nil
+            _G.__cooldownState[888] = nil
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 777, "cooldown")
+            CV:Rebuild()
+            CV.container.__shown = true
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            -- Drive it to the secret-charge alpha first.
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = true }
+            _G.__spellCharges[777] = { maxCharges = 2, currentCharges = _G.__SECRET }
+            CV:UpdateState()
+            assert(icon.__alpha == _G.__SECRET,
+                "setup failed: icon was not left at the secret alpha")
+
+            -- Re-drive the SAME cell as an ordinary, non-charge spell. Icons
+            -- are pooled by acquisition order (Core.lua AcquireIcon), and with
+            -- exactly one placement this must land back on the same frame --
+            -- confirmed below rather than assumed.
+            _G.__spellCharges[777] = nil
+            Data.SetPlacement(profile, 1, 1, 888, "cooldown")
+            CV:Rebuild()
+            local icon2 = CV.icons[Data.CellKey(1, 1)]
+            assert(icon2 == icon, "test setup broken: cell 1,1 did not reuse the pooled icon")
+
+            _G.__cooldownState[888] = { isOnGCD = false, isActive = false }
+            CV:UpdateState()
+            assert(icon.__alpha == 1,
+                "a pooled icon carried a previous occupant's secret alpha, got "
+                .. tostring(icon.__alpha))
+
+            _G.__spellCharges[777] = nil
+            _G.__spellCharges[888] = nil
+            _G.__cooldownState[777] = nil
+            _G.__cooldownState[888] = nil
+        end },
+
+        { "task 15: recharging mode does not apply the alpha, even for a charge spell", function()
+            _G.__spellCharges[777] = nil
+            _G.__cooldownState[777] = nil
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 777, "recharging")
+            CV:Rebuild()
+            CV.container.__shown = true
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = true }
+            _G.__spellCharges[777] = { maxCharges = 2, currentCharges = _G.__SECRET }
+            local ok, err = pcall(function() CV:UpdateState() end)
+            assert(ok, "UpdateState threw in recharging mode with secret charges: "
+                .. tostring(err))
+            -- Not an oversight: 1 - currentCharges is arithmetic on a secret
+            -- and is refused, so recharging mode keeps the old fail-open
+            -- behaviour and alpha is left untouched.
+            assert(icon.__alpha == 1,
+                "recharging mode changed alpha for a charge spell, got "
+                .. tostring(icon.__alpha))
+
+            _G.__spellCharges[777] = nil
+            _G.__cooldownState[777] = nil
+        end },
+
+        { "task 15: a spell with no charge mechanic never has its alpha touched", function()
+            _G.__spellCharges[888] = nil
+            _G.__cooldownState[888] = nil
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 888, "cooldown")
+            CV:Rebuild()
+            CV.container.__shown = true
+            local icon = CV.icons[Data.CellKey(1, 1)]
+
+            -- No charge entry at all: GetSpellCharges returns nil for a plain
+            -- cooldown, exactly as the real API does for a spell with no
+            -- charge mechanic.
+            _G.__cooldownState[888] = { isOnGCD = false, isActive = false }
+            CV:UpdateState()
+            assert(icon.wanted, "a ready plain spell was hidden")
+            assert(icon.__alpha == 1,
+                "a non-charge spell's alpha was touched, got " .. tostring(icon.__alpha))
+
+            _G.__cooldownState[888] = { isOnGCD = false, isActive = true }
+            CV:UpdateState()
+            assert(not icon.wanted, "a spent plain spell stayed visible")
+            assert(icon.__alpha == 1,
+                "a non-charge spell's alpha was touched when spent, got "
+                .. tostring(icon.__alpha))
+
+            _G.__cooldownState[888] = nil
+        end },
+
         { "direction validity is per axis", function()
             assert(Data.IsDirectionValid("rows", "left"), "left should be valid for rows")
             assert(not Data.IsDirectionValid("rows", "up"), "up should be invalid for rows")
@@ -2799,41 +2995,47 @@ if ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs then
             assert(ranSecondPass, "subsequent BB:Refresh did not run after error")
         end },
 
-        -- Adoption beyond buffs. Our own code cannot render two things in
-        -- combat -- a sweep (secret startTime, SetCooldown refuses it) and a
-        -- charge count (secret currentCharges, so readiness fails open) -- so
-        -- Blizzard's cooldown viewers draw those cells too. Confirmed in game:
-        -- Grappling Hook is correct out of combat and lies during it.
-        { "a charge spell in cooldown mode is adopted from the utility bar", function()
+        -- Adoption beyond buffs. `always` mode is the remaining non-aura case:
+        -- the radial sweep IS the readiness signal there, and SetCooldown
+        -- refuses the secret startTime combat hands us, so the icon would draw
+        -- and never sweep. Blizzard's untainted viewer draws that cell instead.
+        --
+        -- A multi-charge spell in `cooldown` mode used to be adopted here too,
+        -- and the case asserting that was DELETED in task 15 rather than
+        -- rewritten -- the behaviour it asserted was deliberately removed, so
+        -- there was nothing left for it to be true about. DECISIONS.md §20
+        -- measured that SetAlpha accepts a secret, so charge spells hide
+        -- themselves now and are ours to draw. The replacement assertion is
+        -- "task 15: a multi-charge spell in cooldown mode is NOT adopted",
+        -- below in the task 15 section.
+        --
+        -- The cell must survive out of combat too. A cooldown item sweeps and
+        -- dims rather than hiding, so the buff-shaped fallback ("is the aura
+        -- up") answers no forever and would collapse the cell at rest --
+        -- exactly when the player is looking at their layout. This case used to
+        -- inherit its setup from the deleted one above; it builds its own now.
+        { "an adopted always-mode cell is kept out of combat", function()
             local profile = Data.GetActiveProfile()
             wipe(profile.placements)
             profile.collapse = "none"
             profile.enabled, profile.onlyInCombat = true, false
             -- 7000 is cooldownID 7 in the stub data, which utilityItem carries.
-            Data.SetPlacement(profile, 1, 1, 7000, "cooldown")
+            Data.SetPlacement(profile, 1, 1, 7000, "always")
             Data.InvalidateCooldownInfoCache()
             BB:ResetChargeCache()
-            _G.__spellCharges[7000] = { maxCharges = 2, currentCharges = 2 }
             CV:Rebuild()
             CV.container.__shown = true
 
             BB:Refresh()
             local icon = CV.icons[Data.CellKey(1, 1)]
             assert(BB:AdoptedItem(icon) == utilityItem,
-                "a charge spell was not adopted from the utility viewer")
-        end },
+                "an always-mode cell was not adopted from the utility viewer")
 
-        -- The cell must survive out of combat too. A cooldown item sweeps and
-        -- dims rather than hiding, so the buff-shaped fallback ("is the aura
-        -- up") answers no forever and would collapse the cell at rest --
-        -- exactly when the player is looking at their layout.
-        { "an adopted cooldown cell is kept out of combat", function()
-            local icon = CV.icons[Data.CellKey(1, 1)]
             _G.__inCombat = false
             wipe(_G.__auras)
             ItemShown(false)
             CV:UpdateState()
-            assert(icon.wanted, "an adopted cooldown cell collapsed out of combat")
+            assert(icon.wanted, "an adopted always-mode cell collapsed out of combat")
             ItemShown(true)
         end },
 
@@ -2916,6 +3118,38 @@ if ThugUI.CooldownViewer and ThugUI.CooldownViewer.BlizzBuffs then
             _G.__spellCharges[7000] = { maxCharges = 2, currentCharges = 2 }
             assert(BB:IsChargeSpell(icon) == true,
                 "a secret answer was cached and outlived the fight")
+            _G.__spellCharges[7000] = nil
+        end },
+
+        -- task 15: the behaviour change. BB:ShouldAdopt's charge-spell
+        -- fallthrough is gone -- Blizzard no longer draws this cell, because
+        -- IsSpellReady's alpha return (Core.lua) now hides a spent charge
+        -- itself with no comparison. This is the mirror image of "a charge
+        -- spell in cooldown mode is adopted from the utility bar" above,
+        -- which asserts the OLD behaviour this task deliberately removes and
+        -- is left untouched per tasks/00-AGENT-BRIEF.md's "add cases, never
+        -- rewrite one in place" -- see the task 15 report for why both are in
+        -- the tree and what that means for the failure count.
+        { "task 15: a multi-charge spell in cooldown mode is NOT adopted", function()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetPlacement(profile, 1, 1, 7000, "cooldown")
+            Data.InvalidateCooldownInfoCache()
+            BB:ResetChargeCache()
+            _G.__spellCharges[7000] = { maxCharges = 2, currentCharges = 2 }
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            BB:Refresh()
+            local icon = CV.icons[Data.CellKey(1, 1)]
+            assert(BB:ShouldAdopt(icon) == false,
+                "BB:ShouldAdopt still adopts a charge spell in cooldown mode")
+            assert(BB:AdoptedItem(icon) == nil,
+                "a charge spell in cooldown mode was adopted -- task 15's whole point "
+                .. "is that Blizzard no longer draws this cell")
+
             _G.__spellCharges[7000] = nil
         end },
 
