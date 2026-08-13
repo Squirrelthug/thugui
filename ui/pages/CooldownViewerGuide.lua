@@ -150,8 +150,9 @@ local STEPS = {
             .. "Cooldowns|r. ThugUI draws these itself now, but it can only place what "
             .. "the Cooldown Manager lists: a spell in neither list never reaches the "
             .. "picker at all.\n\n"
-            .. "|cffffd100Items work the same way|r -- a trinket has its own tabs in "
-            .. "this window, and it must be tracked there before it can go on the grid.",
+            .. "|cffffd100Items work the same way|r -- a trinket lives under "
+            .. "|cffffd100Items|r in the same window, and has to be tracked there "
+            .. "before it can go on the grid.",
     },
     {
         text = "|cffffd100Done.|r The two |cffffd100Tracked Buffs|r or |cffffd100Tracked Bars|r areas render the buff in the cell in two "
