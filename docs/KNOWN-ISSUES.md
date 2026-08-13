@@ -118,6 +118,51 @@ value is unreadable the ring holds its last resolved level and keeps its colour
    the 12.1 relaxation for *secondary* resources turns out to have shipped
    already: combo points read fine in combat on 12.0.7.
 
+**Task 16, 2026-08-12: a second implementation is built, and unseen in game.**
+`modules/ResourceRing.lua` now carries a radial `StatusBar` path alongside the
+Cooldown one, opt-in via `resourceRingRadialBar` (default **off**) on the Cursor
+Rings page. It hands the secret `UnitPower` straight to `SetValue` and lets the
+engine compute the fill — no arithmetic, no comparison. `DECISIONS.md` §23.
+
+**What is not known is whether it looks right.** `StatusBar` has no
+`SetRotation`, so the ring's alignment is attempted by rotating the managed
+texture, and whether that moves the fill's start angle or only the artwork
+underneath cannot be determined outside the game. **Check it at a mid-range
+resource level** — at 0% or 100% a start-angle mismatch is invisible.
+
+---
+
+## The resource ring may never have tracked at all — UNCONFIRMED
+
+**Status: reported 2026-08-12, hypothesis only, not yet separated from the
+above.** The player turned the ring on and reported that its colour follows
+shapeshift form correctly while the level does not move.
+
+That is expected *in combat* (the entry above). It would be a separate and much
+simpler bug *out of combat*, where `UnitPower` is perfectly readable — and the
+player's `resourceRingVisibility` is `always`, so they see it out of combat too.
+
+**The candidate, unverified:** the Cooldown path calls `f:Pause()` after every
+`SetCooldown`, and **`Resume()` is never called anywhere in the file**. If a
+paused Cooldown does not re-evaluate a fresh `SetCooldown`, the ring freezes at
+the first value it ever drew and every later re-seed lands on a frozen widget.
+Colour would keep working, because `SetSwipeColor` is unaffected by pause. That
+matches the report exactly.
+
+Blizzard's generated documentation gives no semantics for `Pause`/`Resume`, so
+this could not be settled from source.
+
+**How to settle it:** turn `resourceRingRadialBar` on. The radial path calls
+`Pause` nowhere. If the radial ring tracks and the Cooldown ring does not, the
+cause is the pause, not secrecy — and the two questions come apart cleanly.
+
+**Do not fix this by removing `Pause`** without checking what it was for: the
+comment at the top of the file says the ring is a frozen sweep on purpose, and
+`ARC_DURATION` is 1000 seconds precisely so an unpaused ring drains slowly rather
+than not at all.
+
+---
+
 **Do not** attempt to work around it by guessing the value, sampling it out of
 combat and extrapolating, or reading it from a Blizzard frame's displayed text.
 

@@ -361,6 +361,13 @@ ER.defaults = {
     -- which are usually combat-only — that is not what "always show my
     -- resource" should mean.
     resourceRingVisibility = "always",
+    -- Radial StatusBar implementation (modules/ResourceRing.lua, task 16).
+    -- SetValue/SetMinMaxValues accept a secret in 12.1 (AllowedWhenTainted,
+    -- measured — DECISIONS.md §20), so this path can show the real resource
+    -- level in combat where the Cooldown ring above cannot. Off by default:
+    -- the Cooldown ring is what the player sees today, and nothing about it
+    -- changes until this is explicitly turned on.
+    resourceRingRadialBar = false,
 
     -- Test mode
     testMode = false,

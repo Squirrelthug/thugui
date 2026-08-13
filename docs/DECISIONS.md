@@ -1596,3 +1596,61 @@ stub, and the replay enum — have now each hidden a real bug behind green outpu
 **When a fix targets a Blizzard API we have not called before, the harness is not
 evidence that it works. Only the game is.** Say so in the handoff, and get the
 player to look before the fix is described as done.
+
+## 23. The resource ring gets a second implementation, and the engine does the arithmetic
+
+**Task 16, 2026-08-12. Correct in code and in the harness; nothing seen in game,
+and one question deliberately left open for the player's eyes.**
+
+§20 measured that `StatusBar:SetValue` and `SetMinMaxValues` accept a secret from
+our tainted stack — `AllowedWhenTainted` in the generated docs, and accepted at
+every phase of a full combat — and that 12.1's `StatusBarRenderMode.Radial`
+makes a StatusBar a second kind of ring. This built it.
+
+```lua
+f:SetMinMaxValues(0, maximum)   -- plain
+f:SetValue(current)             -- secret, accepted
+```
+
+**The radial path is markedly simpler than the Cooldown path beside it**, and
+that is the tell that it is right: no fraction, no `lastFraction` short-circuit,
+no `unreadable` branch, no frozen-ring fallback. All of that machinery exists on
+the Cooldown path to cope with not being allowed to compute `current / maximum`.
+The engine now does that arithmetic on our behalf, so none of it is needed. When
+a rewrite deletes a pile of defensive code rather than adding to it, that is
+usually the sign the new mechanism is the right shape.
+
+**Both implementations ship and the old one stays the default.** `CLAUDE.md`
+§3 — the ring is in daily use, and this is a design change rather than a bug fix.
+`resourceRingRadialBar` is a flat key defaulting to `false`, so nothing about the
+player's display changes until they choose it.
+
+**The capability gate is as load-bearing as the happy path.** A radial StatusBar
+needs `Enum.StatusBarRenderMode` to exist *and* the frame to have
+`SetRenderMode`; either missing must fall back to the Cooldown ring **whatever
+the setting says**, and the result is cached so neither the check nor its
+`LogOnce` repeats every update. "The setting is on and nothing draws" is
+indistinguishable from a broken addon, which is the same failure mode §22's
+silent `IsValid()` produced.
+
+**The two frames must not share a global name.** Both can exist in one session
+once the setting is flipped, and two frames under one name is what broke Edit
+Mode in §15.
+
+### The open question: does a radial fill start where a Cooldown swipe starts?
+
+`StatusBar` has no `SetRotation` — that is a `Cooldown` method. The only
+analogue is rotating the managed texture via `GetStatusBarTexture():SetRotation()`,
+which is what the code does, with the same `ClockToRadians(castRotation)` value.
+
+**Whether that rotates the fill's start angle or only the artwork beneath a fill
+that still starts elsewhere is unknown**, and cannot be settled from the source
+or the harness. The enum's own wording — the fill is *"the managed texture's
+radial progress fill percent"*, computed rather than anchored — reads as though
+the fill is independent of the texture's transform, which would mean the artwork
+rotates and the start angle does not. **That is an inference from one sentence of
+enum documentation, not a measurement, and it is recorded here as such.**
+
+To check it: flip the setting on at a **mid-range** resource level. At 0% or 100%
+a start-angle mismatch is invisible, which is exactly how this would ship
+looking fine and be wrong.

@@ -51,6 +51,49 @@ frameMT.__index = function(tbl, key)
             a.__cooldown = nil
             return
         end
+        -- StatusBar (radial resource ring, task 16). SetValue, SetMinMaxValues
+        -- and SetStatusBarColor all carry
+        -- SecretArguments = "AllowedWhenTainted" in
+        -- SimpleStatusBarAPIDocumentation.lua on the live branch, so -- unlike
+        -- SetCooldown above -- the real client accepts a secret here and this
+        -- stub must too, or it is more restrictive than the game rather than
+        -- less. What each call was handed is recorded, never coerced, so a
+        -- secret stored here still throws on arithmetic/comparison exactly as
+        -- _G.__SECRET already does (Tests/README.md, "Hazards in the harness
+        -- itself") -- that is what proves the module never reads it back.
+        if key == "SetRenderMode" and type(a) == "table" then
+            a.__renderMode = a1
+            return
+        end
+        if key == "SetStatusBarTexture" and type(a) == "table" then
+            a.__statusBarTextureAsset = a1
+            return true
+        end
+        if key == "SetMinMaxValues" and type(a) == "table" then
+            a.__minMax = { a1, a2 }
+            return
+        end
+        if key == "SetValue" and type(a) == "table" then
+            a.__value = a1
+            return
+        end
+        if key == "SetStatusBarColor" and type(a) == "table" then
+            a.__statusBarColor = { a1, a2, a3, a4 }
+            return
+        end
+        -- GetStatusBarTexture must return the SAME object every call -- a
+        -- fresh stub frame each time (the generic fallback below does that)
+        -- would make a texture's recorded rotation unobservable to a test
+        -- that asks for the texture a second time, the way the real managed
+        -- texture is a persistent object.
+        if key == "GetStatusBarTexture" and type(a) == "table" then
+            a.__statusBarTexture = a.__statusBarTexture or setmetatable({}, frameMT)
+            return a.__statusBarTexture
+        end
+        if key == "SetRotation" and type(a) == "table" then
+            a.__rotation = a1
+            return
+        end
         -- FontStrings are ordinary stub frames, but they're recorded in a flat
         -- list rather than only reachable through whatever built them --
         -- Panel:Section and friends don't stash their return value anywhere,
@@ -125,6 +168,13 @@ frameMT.__index = function(tbl, key)
             if key == "GetText" then return a.__text or "" end
             if key == "GetObjectType" then return "Frame" end
             if key == "GetCenter" then return 0, 0 end
+            -- Models SimpleStatusBarAPIDocumentation.lua's
+            -- SecretReturnsForAspect = { BarValue }: if SetValue was handed a
+            -- secret, GetValue hands the same secret back rather than a plain
+            -- number. Nothing in ResourceRing.lua may call this (task 16), and
+            -- this is what would punish it if something did -- comparing or
+            -- doing arithmetic on the return throws exactly like the client.
+            if key == "GetValue" then return a.__value end
         end
         if key == "IsMouseOver" then return false end
         if key == "GetChecked" then return a.__checked == true end
@@ -281,6 +331,10 @@ Enum = {
         Mana = 0, Rage = 1, Energy = 3, ComboPoints = 4, SoulShards = 7,
         LunarPower = 8, HolyPower = 9, Chi = 12, ArcaneCharges = 16, Essence = 19,
     },
+    -- 12.1's radial-fill render mode for a plain StatusBar (task 16). Values
+    -- match SimpleStatusBarConstantsDocumentation.lua on the live branch:
+    -- Linear = 0, Radial = 1.
+    StatusBarRenderMode = { Linear = 0, Radial = 1 },
 }
 
 _G.__unknownNames = {}
@@ -2458,6 +2512,138 @@ if ThugUI.ResourceRing then
 
             ThugUI_CursorFrame:Show()
             ThugUI_Config.resourceRingVisibility = "always"
+        end },
+
+        -- Task 16: the radial StatusBar implementation. Everything below
+        -- shares GetPowerType/GetColor/ShouldShow/the event driver with the
+        -- Cooldown steps above; only the frame and its Update path differ.
+
+        { "setting off keeps the Cooldown implementation", function()
+            ThugUI_Config.resourceRingRadialBar = false
+            ThugUI_Config.showResourceRing = true
+            ThugUI_Config.resourceRingVisibility = "always"
+            RR.lastFraction = nil
+            _G.__power, _G.__powerMax = 50, 100
+
+            RR:Update()
+
+            assert(RR.frameKind == "cooldown",
+                "setting off did not use the Cooldown ring, got " .. tostring(RR.frameKind))
+            assert(RR.frame.__cooldown,
+                "Cooldown ring did not seed a sweep with the setting off")
+            assert(RR.frame.__value == nil,
+                "Cooldown ring frame recorded a StatusBar SetValue call")
+        end },
+
+        -- The load-bearing case: this is the whole point of the task.
+        { "radial setting on: a secret power reaches SetValue without throwing", function()
+            ThugUI_Config.resourceRingRadialBar = true
+            ThugUI_Config.showResourceRing = true
+            ThugUI_Config.resourceRingVisibility = "always"
+            _G.__power = _G.__SECRET
+            _G.__powerMax = 100
+
+            local ok, err = pcall(function() RR:Update() end)
+
+            assert(ok, "radial Update threw on a secret power value: " .. tostring(err))
+            assert(RR.frameKind == "radial", "setting on did not switch to the radial ring")
+            assert(RR.frame.__value == _G.__SECRET, "secret power did not reach SetValue")
+            assert(RR.frame:IsShown(), "radial ring did not show with a secret power value")
+
+            _G.__power = 50
+        end },
+
+        { "radial setting on but StatusBarRenderMode absent falls back to Cooldown", function()
+            ThugUI_Config.resourceRingRadialBar = true
+            ThugUI_Config.showResourceRing = true
+            ThugUI_Config.resourceRingVisibility = "always"
+            -- Force a fresh capability check -- the previous case already
+            -- cached a working radial frame this session, and the capability
+            -- gate only re-checks on first creation.
+            RR.frame, RR.frameKind = nil, nil
+            RR.radialFrame, RR.radialUnsupported = nil, nil
+            local realMode = Enum.StatusBarRenderMode
+            Enum.StatusBarRenderMode = nil
+            _G.__power, _G.__powerMax = 50, 100
+
+            local ok, err = pcall(function() RR:Update() end)
+            Enum.StatusBarRenderMode = realMode
+
+            assert(ok, "Update threw with StatusBarRenderMode absent: " .. tostring(err))
+            assert(RR.frameKind == "cooldown",
+                "did not fall back to the Cooldown ring, got " .. tostring(RR.frameKind))
+            assert(RR.frame:IsShown(), "fallback ring did not draw")
+
+            -- Undo the capability cache so later cases see a working radial
+            -- path again, matching a real client that does have the enum.
+            RR.radialUnsupported = nil
+        end },
+
+        { "flipping the setting swaps frame type without reusing the old one", function()
+            ThugUI_Config.resourceRingRadialBar = false
+            RR.frame, RR.frameKind = nil, nil
+            RR.cooldownFrame = nil
+            RR.radialFrame, RR.radialUnsupported = nil, nil
+            ThugUI_Config.showResourceRing = true
+            ThugUI_Config.resourceRingVisibility = "always"
+            _G.__power, _G.__powerMax = 50, 100
+
+            RR:Update()
+            local cooldownFrame = RR.frame
+            assert(RR.frameKind == "cooldown", "did not start on the Cooldown ring")
+
+            ThugUI_Config.resourceRingRadialBar = true
+            RR:Update()
+
+            assert(RR.frameKind == "radial",
+                "flipping the setting did not switch to the radial ring")
+            assert(RR.frame ~= cooldownFrame, "radial path reused the Cooldown frame")
+            assert(not cooldownFrame:IsShown(),
+                "old Cooldown ring was left showing after the switch")
+
+            ThugUI_Config.resourceRingRadialBar = false
+        end },
+
+        { "radial: a secret maximum skips the <= 0 comparison", function()
+            ThugUI_Config.resourceRingRadialBar = true
+            ThugUI_Config.showResourceRing = true
+            ThugUI_Config.resourceRingVisibility = "always"
+            _G.__power = 50
+            _G.__powerMax = _G.__SECRET
+
+            local ok, err = pcall(function() RR:Update() end)
+
+            assert(ok, "radial Update threw comparing a secret maximum: " .. tostring(err))
+            assert(RR.frameKind == "radial", "did not take the radial path")
+            assert(RR.frame.__minMax and RR.frame.__minMax[2] == _G.__SECRET,
+                "secret maximum did not reach SetMinMaxValues")
+            assert(RR.frame:IsShown(),
+                "radial ring hid on a secret maximum instead of drawing")
+
+            _G.__powerMax = 100
+        end },
+
+        { "radial: colour still follows the power token", function()
+            ThugUI_Config.resourceRingRadialBar = true
+            ThugUI_Config.showResourceRing = true
+            ThugUI_Config.resourceRingVisibility = "always"
+            ThugUI_Config.resourceRingColorMode = "power"
+            _G.__power, _G.__powerMax = 50, 100
+            _G.__powerToken, _G.__form = "RAGE", 0
+            RR.lastPowerToken = nil
+
+            RR:Update()
+
+            local expected = PowerBarColor.RAGE
+            local color = RR.frame.__statusBarColor
+            assert(color, "radial ring never called SetStatusBarColor")
+            assert(math.abs(color[1] - expected.r) < 0.0001
+                and math.abs(color[2] - expected.g) < 0.0001
+                and math.abs(color[3] - expected.b) < 0.0001,
+                "radial ring colour did not follow the RAGE power token")
+
+            _G.__powerToken, _G.__form = "MANA", 0
+            ThugUI_Config.resourceRingRadialBar = false
         end },
     }
 

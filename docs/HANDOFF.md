@@ -9,7 +9,36 @@ The section below this one is the full account of what that branch did and why;
 read it if you are picking up anything to do with charges, items, or secret
 values. It is still accurate — it has just stopped being the current job.
 
-### The job: rebuild the resource ring on a radial StatusBar
+### Built 2026-08-12, awaiting the player's eyes
+
+Task 16 is **done and reviewed** — `DECISIONS.md` §23, report in `tasks/reports/`.
+**201 passing, 0 failures**, six added and none removed against a clean tree, all
+six confirmed to fail against the unmodified module. Uncommitted work: none.
+
+**Two things need the player in game, and they are separable:**
+
+1. **Does the radial ring look like the old one?** Flip `resourceRingRadialBar`
+   on (Cursor Rings page) **at a mid-range resource level** — at 0% or 100% a
+   start-angle mismatch is invisible. `StatusBar` has no `SetRotation`, so
+   alignment is attempted by rotating the managed texture and nobody knows
+   whether that moves the fill's start angle or only the artwork.
+2. **Does the old ring track at all?** The player reported on 2026-08-12 that the
+   Cooldown ring's colour follows shapeshift form while the level never moves.
+   Their visibility is `always`, so this is happening out of combat too, where
+   nothing is secret. `KNOWN-ISSUES.md`, "The resource ring may never have
+   tracked at all". The suspect is `Pause()` being called after every
+   `SetCooldown` with `Resume()` never called anywhere. **Unverified.**
+
+**These two settle each other.** The radial path calls `Pause` nowhere, so if the
+radial ring tracks and the Cooldown ring does not, the cause is the pause rather
+than secrecy. Ask the player to compare them before writing any fix.
+
+**Unanswered as of this writing:** whether the freeze happens out of combat, and
+whether the player had reloaded while the agent was mid-edit (the working tree
+held 182 lines of in-progress work for a while, so an early report may have been
+of half-written code). Do not assume either.
+
+### The job as originally framed: rebuild the resource ring on a radial StatusBar
 
 Branch: **`radial-resource-ring`**. Chosen by the player 2026-08-12.
 

@@ -161,6 +161,21 @@ function Page:Build(host, panel)
         end,
     }
 
+    panel:Checkbox{
+        label = "Radial bar (tracks exact level in combat)",
+        tooltip = "Draws the ring on a StatusBar in 12.1's radial render mode instead "
+            .. "of a Cooldown sweep, so it can show the real resource level in combat "
+            .. "instead of freezing. Falls back to the sweep automatically on a client "
+            .. "without this render mode.",
+        get = function() return Cfg().resourceRingRadialBar end,
+        set = function(v)
+            Cfg().resourceRingRadialBar = v
+            -- The two implementations are different frame types; Update()
+            -- picks whichever the setting now points at and hides the other.
+            if ThugUI.ResourceRing then ThugUI.ResourceRing:Update() end
+        end,
+    }
+
     panel:Dropdown{
         label = "Colour:", width = 170,
         options = {
