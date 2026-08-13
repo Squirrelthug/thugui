@@ -3208,14 +3208,19 @@ if ThugUI.CooldownViewer then
     -- models -- the stub must fail the way the game fails, not just accept
     -- anything (DECISIONS.md 19 on the SetCooldown stub that didn't).
     _G.__equipped = {}
-    ItemLocation = {
-        CreateFromEquipmentSlot = function(equipSlot)
-            return {
-                __equipSlot = equipSlot,
-                IsValid = function(self) return _G.__equipped[self.__equipSlot] == true end,
-            }
-        end,
-    }
+    -- Declared with a COLON, exactly as Blizzard declares it, so a caller that
+    -- forgets to pass ItemLocation gets the slot in `self` and nil in
+    -- `equipSlot` -- and then IsValid() answers false, silently, the way the
+    -- game does. The first version of this stub took the slot as its only
+    -- argument, which matched the CALLER rather than the game, so the whole
+    -- item path shipped broken with eight green tests over it.
+    ItemLocation = {}
+    function ItemLocation:CreateFromEquipmentSlot(equipSlot)
+        return {
+            __equipSlot = equipSlot,
+            IsValid = function(loc) return _G.__equipped[loc.__equipSlot] == true end,
+        }
+    end
 
     -- cooldownID 9 stands for a trinket's on-use spell: an equipSlot entry
     -- with no base aura, unique to this section (8 is used transiently by the

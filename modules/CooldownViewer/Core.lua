@@ -235,7 +235,14 @@ local function IsItemAvailable(equipSlot)
     if not equipSlot or not ItemLocation or not ItemLocation.CreateFromEquipmentSlot then
         return false
     end
-    local ok, loc = pcall(ItemLocation.CreateFromEquipmentSlot, equipSlot)
+    -- ItemLocation is passed explicitly because CreateFromEquipmentSlot is
+    -- declared with a COLON (Blizzard_ObjectAPI/Mainline/ItemLocation.lua:15),
+    -- so the slot is its SECOND parameter. Omitting it does not throw -- the
+    -- body reaches the global ItemLocation rather than self -- it silently
+    -- builds a location with a nil slot, whose IsValid() is false. That made
+    -- every item cell answer "nothing equipped" and never draw, which is the
+    -- task 14 bug surviving the task 14 fix. Verified in game 2026-08-12.
+    local ok, loc = pcall(ItemLocation.CreateFromEquipmentSlot, ItemLocation, equipSlot)
     if not ok or not loc then return false end
     local ok2, valid = pcall(loc.IsValid, loc)
     return ok2 and valid and true or false

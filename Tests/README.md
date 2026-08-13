@@ -80,3 +80,18 @@ combat"` inherited its icon, and when the case above it was deleted as obsolete
 the survivor kept passing while asserting something about a cell that was no
 longer adopted. **Green does not mean the name is still true.** If you delete or
 change a case, run the suite and read what its neighbours are actually doing.
+
+**A stub written from the code under test proves nothing about the game.** The
+`ItemLocation` stub took the equipment slot as its only argument, matching the
+caller — which had forgotten that Blizzard declares
+`ItemLocation:CreateFromEquipmentSlot` with a **colon**. Eight cases went green
+over an item path that could not work in the client (`DECISIONS.md` §22). Write
+stubs from Blizzard's source, and where a call convention matters, declare the
+stub so that getting it wrong *fails*.
+
+**`replay_probe.lua` must not carry its own copy of a game enum.** Its category
+list was a hardcoded copy of 12.0's four categories, so after 12.1 it reported
+"the spell is not indexed at all" for a trinket that indexes fine — a specific,
+plausible, false diagnosis from the one tool whose job is telling you whether
+your logic or the client is at fault. It now derives categories from the dump.
+Anything the real input already describes should be read from it, never restated.

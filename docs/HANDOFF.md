@@ -39,6 +39,29 @@ documentation, and everything queued below depends on it. The headlines:
   and form. Readiness-by-absence is dead too: both duration getters return an
   object even at full charges, idle.
 
+### Task 14's trinket fix was broken and is now fixed — RE-TEST NEEDED
+
+**The player tested it 2026-08-12 and reported the original symptom unchanged:
+only `always` mode draws the trinket.** Diagnosed and fixed the same day —
+`DECISIONS.md` §22. `ItemLocation:CreateFromEquipmentSlot` is declared with a
+colon, our call omitted the `ItemLocation` argument, and the result was a silent
+`false` from `IsItemAvailable` for every item cell rather than an error.
+
+**This needs the player to look again**, and it is the top in-game item:
+put **Radiant Blessing** (cell 7:1 on resto, spell 1254624, trinket slot 13) into
+**`cooldown` mode** and confirm it draws. `always` mode was never affected and is
+not a test of this.
+
+The harness could not have caught it and now can — the `ItemLocation` stub was
+written to match our caller instead of Blizzard's declaration, so eight cases
+were green over a path that could not work. Four of them now fail against the old
+call. `Tests/replay_probe.lua` was separately stale and gave a **confidently
+wrong** diagnosis; it now derives its category list from the dump.
+
+**Carry this forward:** three harness defects have each hidden a real bug behind
+green output. When a fix calls a Blizzard API we have not called before, the
+harness is not evidence — only the game is.
+
 ### Task 15 has landed — and is VERIFIED IN GAME, 2026-08-12
 
 **The player tested it: the spell hides when spent, and the cell does not

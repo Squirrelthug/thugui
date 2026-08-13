@@ -1529,3 +1529,70 @@ a real bug.
   something about a cell that was no longer adopted — a green test whose name had
   become false. It now builds its own state, in `always` mode, which is the
   remaining non-aura adoption case.
+
+## 22. The trinket fix shipped broken under eight green tests
+
+**Found 2026-08-12, when the player tested task 14 in game and reported that
+only `always` mode still worked — the exact symptom task 14 was written to
+fix.**
+
+One character's worth of cause:
+
+```lua
+pcall(ItemLocation.CreateFromEquipmentSlot, equipSlot)            -- shipped
+pcall(ItemLocation.CreateFromEquipmentSlot, ItemLocation, equipSlot)  -- correct
+```
+
+`ItemLocation:CreateFromEquipmentSlot(equipmentSlotIndex)` is declared with a
+**colon** (`Blizzard_ObjectAPI/Mainline/ItemLocation.lua:15`), so the slot is its
+second parameter. The shipped call passed `13` as `self` and nothing as the slot.
+
+**It did not throw, and that is the whole problem.** The function body reaches
+the *global* `ItemLocation` rather than `self`, so it happily built a location
+with a nil slot, whose `IsValid()` is legitimately `false`. `IsItemAvailable`
+therefore answered "nothing is equipped" for every item cell, forever,
+`show = false`, and the icon never drew. `always` mode was unaffected because
+adoption happens above that branch and skips it — which is precisely the
+before-and-after the player described, unchanged by the fix.
+
+### Why every test passed over it
+
+The `ItemLocation` stub was written as a **plain function taking the slot as its
+only argument** — matching the *caller* instead of the game. Eight cases then
+exercised a code path that could not work in the client, and all eight were
+green. Fixing the stub to a colon-declared method makes four of them fail
+against the shipped call.
+
+This is §19's `SetCooldown` lesson recurring with the roles reversed, and the
+stub's own comment cites §19 while making the mistake. **A stub written from the
+code under test proves only that the code is self-consistent.** Write it from
+Blizzard's source, and if a call convention is involved, make the stub punish
+getting it wrong.
+
+### The replay tool then answered confidently and wrongly
+
+`Tests/replay_probe.lua` reported *"NOTHING — the spell is not indexed at all"*
+for a trinket that indexes fine. Its `Enum.CooldownViewerCategory` was a
+hardcoded copy of the four **12.0** categories, so `GetCooldownViewerCategorySet`
+returned nothing for 12.1's `EquipSlotEssential` and the entry was never visited.
+Its `info` table also dropped `equipSlot` entirely.
+
+That tool exists to separate "our logic is wrong" from "the client is
+different", so a stale copy of a game enum inside it is worse than useless — it
+produced a plausible, specific, false diagnosis that would have sent the next
+session rewriting the cache. It now derives the category list **from the dump**,
+which cannot go stale, and carries the 12.1 item fields through.
+
+**The general rule: a test double must not hold its own copy of anything the
+real input already describes.**
+
+### What this says about the harness as evidence
+
+`Tests/loadtest.lua` proves the code is internally consistent. It cannot prove a
+call reaches the game correctly, and on this occasion it actively concealed that
+it did not. Three defects — the `SetCooldown` stub (§19), the `ItemLocation`
+stub, and the replay enum — have now each hidden a real bug behind green output.
+
+**When a fix targets a Blizzard API we have not called before, the harness is not
+evidence that it works. Only the game is.** Say so in the handoff, and get the
+player to look before the fix is described as done.
