@@ -43,16 +43,31 @@ ThugUI — not an error in ours.
 
 ---
 
-## Resource ring cannot show an exact level in combat
+## ~~Resource ring cannot show an exact level in combat~~ — SOLVED 2026-08-13
 
-**Status: still open, re-checked 2026-08-11 on 12.1.** The ring is switched
-**on** (`showResourceRing = true`, visibility `"combat"`), so this is live, not
-hypothetical.
+**Verified in game by the player on 2026-08-13.** They enabled
+`resourceRingRadialBar` **mid-combat** and the ring tracked their resource live,
+through the whole fight, **and followed shapeshift form swaps** — rage in bear,
+energy in cat, changing in combat. Their words: *"It seems to function exactly
+as intended."*
 
-**Open, but no longer believed impossible.** 12.1 made this fixable and nobody
-has built the fix — see item 2 below. Do not quote the "permanently impossible"
-framing this entry used to carry; it was reasoning from a widget that no longer
-has a monopoly on drawing an arc.
+That answers three separate open questions in one observation:
+
+1. **The exact level can be shown in combat.** A radial `StatusBar` fed the
+   secret `UnitPower` straight into `SetValue` and the engine did the arithmetic
+   we are not allowed to do. `DECISIONS.md` §23.
+2. **The start angle is right.** This was the one thing that could not be
+   determined outside the game — `StatusBar` has no `SetRotation` and the
+   alignment was attempted by rotating the managed texture. Checked at
+   mid-range levels across a fight rather than at 0% or 100%, which is the
+   condition that made the check meaningful.
+3. **Enabling it mid-combat works.** The creation path is not combat-gated.
+
+The history below is kept because it is the clearest example this project has of
+a correct measurement producing a wrong conclusion, and of how that got caught.
+
+**Do not quote the "permanently impossible" framing this entry used to carry.**
+It reasoned from a widget that no longer has a monopoly on drawing an arc.
 
 **Checked and answered.** The ToT mover deferral was not sufficient. The log
 shows, five seconds into a fresh session and before any combat:
@@ -124,42 +139,49 @@ Cooldown one, opt-in via `resourceRingRadialBar` (default **off**) on the Cursor
 Rings page. It hands the secret `UnitPower` straight to `SetValue` and lets the
 engine compute the fill — no arithmetic, no comparison. `DECISIONS.md` §23.
 
-**What is not known is whether it looks right.** `StatusBar` has no
-`SetRotation`, so the ring's alignment is attempted by rotating the managed
-texture, and whether that moves the fill's start angle or only the artwork
-underneath cannot be determined outside the game. **Check it at a mid-range
-resource level** — at 0% or 100% a start-angle mismatch is invisible.
+**Verified in game 2026-08-13**, as described at the top of this entry. The
+start-angle worry did not materialise.
 
 ---
 
-## The resource ring may never have tracked at all — UNCONFIRMED
+## The old Cooldown-widget resource ring never tracked — SECRECY RULED OUT
 
-**Status: reported 2026-08-12, hypothesis only, not yet separated from the
-above.** The player turned the ring on and reported that its colour follows
-shapeshift form correctly while the level does not move.
+**Status: the diagnostic experiment ran on 2026-08-13 and came back clean.**
 
-That is expected *in combat* (the entry above). It would be a separate and much
-simpler bug *out of combat*, where `UnitPower` is perfectly readable — and the
-player's `resourceRingVisibility` is `always`, so they see it out of combat too.
+The player reported on 2026-08-12 that the Cooldown ring's colour follows
+shapeshift form correctly while the level never moves. Their
+`resourceRingVisibility` is `always`, so they see it out of combat too, where
+nothing is secret.
 
-**The candidate, unverified:** the Cooldown path calls `f:Pause()` after every
-`SetCooldown`, and **`Resume()` is never called anywhere in the file**. If a
-paused Cooldown does not re-evaluate a fresh `SetCooldown`, the ring freezes at
-the first value it ever drew and every later re-seed lands on a frozen widget.
-Colour would keep working, because `SetSwipeColor` is unaffected by pause. That
-matches the report exactly.
+The experiment designed to separate the two possible causes was: turn
+`resourceRingRadialBar` on, because **the radial path calls `Pause` nowhere.**
+If the radial ring tracks and the Cooldown ring does not, the cause is the pause
+rather than secrecy.
 
-Blizzard's generated documentation gives no semantics for `Pause`/`Resume`, so
-this could not be settled from source.
+**The radial ring tracks.** So secrecy is eliminated as the explanation, and the
+remaining candidate is the one already identified: the Cooldown path calls
+`f:Pause()` after every `SetCooldown`, and **`Resume()` is never called anywhere
+in the file**. A paused Cooldown appears not to re-evaluate a fresh
+`SetCooldown`, so the ring freezes at the first value it ever drew and every
+later re-seed lands on a frozen widget. Colour keeps working because
+`SetSwipeColor` is unaffected by pause. That matches the report exactly.
 
-**How to settle it:** turn `resourceRingRadialBar` on. The radial path calls
-`Pause` nowhere. If the radial ring tracks and the Cooldown ring does not, the
-cause is the pause, not secrecy — and the two questions come apart cleanly.
+**What is confirmed and what is not.** Confirmed: the freeze is not caused by
+secret values. Not confirmed: that removing or balancing the `Pause` fixes it —
+nobody has built that and nobody has seen it. Blizzard's generated documentation
+gives no semantics for `Pause`/`Resume`, so it cannot be settled from source
+either.
 
 **Do not fix this by removing `Pause`** without checking what it was for: the
 comment at the top of the file says the ring is a frozen sweep on purpose, and
 `ARC_DURATION` is 1000 seconds precisely so an unpaused ring drains slowly rather
 than not at all.
+
+**And consider not fixing it at all.** The Cooldown path now exists only as the
+fallback for a radial path that is verified working. Repairing a fallback nobody
+uses, on a widget whose pause semantics are undocumented, is a poor trade against
+leaving it exactly as it has been for months. That is a decision for the player,
+not a defect to be closed out.
 
 ---
 

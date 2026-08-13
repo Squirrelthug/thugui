@@ -1250,8 +1250,10 @@ ordinary logic that predates the whole secret-value problem.
 **They cannot be placed today, and the reason is structural.** Every placement in
 this addon is keyed by spell ID. These entries are identified by `equipSlot` (the
 trinket in that slot, whatever it happens to be) or by `spellCategoryID` (4 =
-combat potion, 30 = health potion, 1711 = healthstone — the constants are in
-`CooldownViewerItemData.lua`), and their `spellID` is nil. `Data.PickerSpellIDFor`
+combat potion, 30 = health potion, 1711 = healthstone, **2566 = Demonic
+Healthstone** — Blizzard's table is in `CooldownViewerItemData.lua`; the count of
+three in an earlier version of this paragraph was wrong, see §25),
+and their `spellID` is nil. `Data.PickerSpellIDFor`
 returns nil for them and they are dropped from the picker silently, which is the
 same failure shape as the Roll the Bones entry that once went missing.
 
@@ -1670,6 +1672,36 @@ To check it: flip the setting on at a **mid-range** resource level. At 0% or 100
 a start-angle mismatch is invisible, which is exactly how this would ship
 looking fine and be wrong.
 
+### VERIFIED IN GAME 2026-08-13 — it works, and the inference was right
+
+The player enabled `resourceRingRadialBar` **mid-combat** and reported the ring
+tracked their resource live through the fight, **and followed shapeshift form
+swaps** — rage in bear, energy in cat, changing during combat. *"It seems to
+function exactly as intended."*
+
+Three things are now measured rather than reasoned:
+
+- **A secret `UnitPower` can drive a visible, exact, live resource ring in
+  combat.** The whole point of §20's re-opening, and it holds.
+- **The start angle is correct.** This was flagged above as an inference from one
+  sentence of enum documentation and explicitly not a measurement. The inference
+  was right: rotating the managed texture did not desynchronise the fill. It was
+  checked the way this section asked for it to be checked — across a fight at
+  mid-range levels, not at 0% or 100%.
+- **The creation path is not combat-gated**, since the setting was flipped
+  mid-fight and took effect immediately.
+
+**The radial path is now the good one and the Cooldown path is the fallback.**
+That inverts the relationship the setting was built with, where radial was the
+opt-in experiment. See `KNOWN-ISSUES.md` for why repairing the Cooldown path's
+frozen sweep may not be worth doing at all now.
+
+**Kept as the lesson:** the thing that made this checkable was writing down, in
+advance and in this file, that the start angle was an inference and naming the
+one condition under which a mismatch would be visible. Had that not been
+recorded, the feature would have been tested at a convenient moment, probably at
+full resource, and shipped looking fine.
+
 ---
 
 ## 24. Salvage from the 12.1 patch file, kept when it was deleted
@@ -1705,3 +1737,94 @@ error naming ThugUI would mean we had started reaching into it.
 skeleton of the fresh `UPCOMING-PATCH.md` for 12.2, emptied of 12.1's answers.
 The process is worth keeping even when there is nothing yet to record: patch day
 should be a checklist, not a scramble.
+
+---
+
+## 25. Potions and the healthstone: what the game will and will not tell us
+
+Researched 2026-08-13 against `Gethe/wow-ui-source` @ `live` (12.1), because the
+player asked for these to be **discovered programmatically rather than
+hardcoded**. This section is the evidence. The design built on it is below it and
+is marked as such.
+
+### Hardcoding the three known IDs would already have been wrong
+
+Blizzard's `CooldownViewerItemData.lua` carries a **local, unexported**
+`spellCategoryMetadataLookup` with **four** entries, not three:
+
+| ID | What | Named constant? |
+|---|---|---|
+| 4 | Combat potion | `Constants.SpellCooldownConsts.COMBAT_POTION_CATEGORY` |
+| 30 | Health potion | `.HEALTH_POTION_CATEGORY` |
+| 1711 | Healthstone | `.HEALTHSTONE_CATEGORY` |
+| **2566** | **Demonic Healthstone** | **none — it exists only in the local table** |
+
+So the "canonical" constants table under-covers Blizzard's own handling by one
+entry, and the missing one is a real item a real warlock hands out. **The
+hardcoded list was wrong before it was written.** That is the argument for
+discovery, and it is an observation rather than a preference.
+
+### There is no API that enumerates spell categories
+
+Confirmed absence, searched across the generated documentation: no
+`GetSpellCategories`, no `GetCategoryInfo`, no enum of category IDs.
+`Constants.SpellCooldownConsts` is a named-field table, not an iterable list —
+you must already know the field name to read the value.
+
+**The only verified discovery path is the sweep we already do.** Enumerate
+`cooldownID`s through `C_CooldownViewer.GetCooldownViewerCategorySet` for each
+`Enum.CooldownViewerCategory`, then read `.spellCategoryID` off each entry. That
+surfaces whatever categories the current class and spec actually have, which is
+better than a global list — it is the list that is true for this character.
+`Data.BuildCooldownInfoCache` and `Data.DumpCooldownViewer` already walk exactly
+this ground and already read the field.
+
+### Blizzard's name and icon are out of reach — by one hop
+
+`GetSpellCategoryIcon` returns a **hardcoded texture path** and
+`GetSpellCategoryTooltipTitle` a **localized global string**, both read out of
+the local table above. An addon cannot read that table.
+
+They are reachable indirectly: those are *methods on their pooled item frame*,
+and §13 already matches our placements to those frames on `cooldownID` and calls
+methods on them. `GetSpellTexture()` and `GetNameText()` are the same kind of
+call as the `item:GetCooldownID()` we already make. **Reading their frame is not
+the thing that caused §15's taint bug** — writing `__thug*` fields onto it was.
+
+### `GetLastCategoryCooldownSource` is a catch-up call, not a live feed
+
+```
+C_Spell.GetLastCategoryCooldownSource(spellCategory) -> spellID?, itemID?
+    MayReturnNothing = true
+    SecretWhenCooldownsRestricted = true
+```
+
+Two things matter about it.
+
+**It can return nothing**, and does, before the player has triggered that
+category this session. Blizzard's sole call site handles that with a bare
+`if spellID and itemID then` and no fallback — so on a fresh login a potion cell
+has no spell behind it at all, and that is the normal case, not an error.
+
+**It carries `SecretWhenCooldownsRestricted`.** So it is not safe to assume the
+combat answer is readable. Blizzard do not depend on it in combat either: their
+live update comes from the **`SPELL_UPDATE_COOLDOWN` event payload**, which
+carries `spellCategory` and `itemID` directly. Whether *that payload* is readable
+in combat is **unmeasured** and is a probe line, not a guess.
+
+The sweep itself is safe: `C_Item.GetItemCooldown` carries no `SecretWhen*` flag
+at all (§20), so once an item ID is known the cooldown is plain numbers.
+
+### Which viewer category they arrive under is unverified
+
+Server-side and data-driven; nothing in the Lua source states it. Do not assume
+`SpecAgnosticEssential`. Read `.category` off the live entry, or read the probe
+dump — `/thugcv probe` already records `spellCategoryID`.
+
+### The design — PROPOSED 2026-08-13, NOT YET APPROVED OR BUILT
+
+Recorded so the reasoning is not re-derived. **Do not build this until the player
+has agreed to it.** The expensive half is not the drawing; it is that a saved
+placement is `{ spellID, mode }` and `Data.GetPlacements` drops any placement
+without a `spellID` before anything downstream sees it, with roughly fifteen
+call sites treating `spellID` as a placement's only possible identity.
