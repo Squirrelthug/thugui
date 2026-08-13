@@ -1143,9 +1143,14 @@ path is more likely to trip it than buffs were. Watch BugGrabber for
 
 **Read from Blizzard's source on 2026-08-11**, `Gethe/wow-ui-source` branch
 `live` @ 12.1.0 build **69273** — the exact build installed on this machine
-(`.build.info`). **None of it has been run on the client yet.** Everything below
-is a documented flag or enum, not an observed behaviour, and the probe is what
-turns it into evidence.
+(`.build.info`). Everything in this section was a documented flag or enum when it
+was written, not an observed behaviour.
+
+**It has since been measured.** The player ran the probe through a full combat on
+2026-08-11 at 21:05 and the results are at the end of this section, under
+"Measured". Where the measurement and the documentation disagree, the
+measurement wins and the paragraph above it has been left standing so the
+disagreement stays visible.
 
 `## Interface:` is now **120100**, confirmed against other addons on disk rather
 than assumed from the version number.
@@ -1308,3 +1313,286 @@ nothing had to be. That is the §5 "resolve by name at runtime, never hardcode a
 spell ID" rule paying out on a patch nobody had tested against.
 
 **176 passing, 0 failures.**
+
+### Measured — one combat, 2026-08-11 21:05, Restoration
+
+`ThugUI_DebugLog.secrets`, five phases: idle, 1s / 5s / 12s into combat, and
+combat end. Charge spells chosen at runtime by `info.charges == true`, which
+picked Swiftmend, Mangle and Nature's Cure.
+
+**The duration-object route works, and the refusal it replaces is in the same
+sample.** Seconds apart, on the same widget, mid-combat:
+
+```
+Cooldown:SetCooldownDuration(secret)   REFUSED: Secret values are only allowed
+                                                during untainted execution
+SetCooldownFromDurationObject          accepted
+SetTimerDuration                       accepted
+StatusBar:SetValue(secret)             accepted
+Frame:SetAlpha(secret)                 accepted
+Curve:Evaluate(secret)                 REFUSED
+```
+
+Accepted at **every** phase, not only out of combat. §19's central constraint —
+"the sweep is the readiness signal and `SetCooldown` refuses the secret
+`startTime`" — is lifted. It was never the sweep that was forbidden, only the
+route to it.
+
+**`Curve:Evaluate` refusing a secret closes the obvious derivation.** Mapping a
+secret number to a secret 0/1 through a curve was the natural way to compute
+"should this be greyed" without comparing. It is not available.
+
+#### What the charge measurement actually said
+
+| | idle | combat | on ending |
+|---|---|---|---|
+| `charges.current` Swiftmend | 2 | **SECRET** at all four combat points | 1 |
+| `charges.max` Swiftmend | 2 | **2 — readable** | 2 |
+| `cd.isActive` | false | true | false |
+| `isUsable` | **false** | true / false / true | true |
+
+Three conclusions, two of which correct things written above:
+
+- **`currentCharges` is secret in combat.** §19 stands.
+- **`maxCharges` is NOT secret in combat**, contrary to §19's "maxCharges is
+  secret mid-fight". `BB:IsChargeSpell` caches out-of-combat-only for a reason
+  that turns out not to hold. The cache is not wrong, it is unnecessary, and
+  `info.charges` from the Cooldown Manager is a simpler source again — a plain
+  bool, talent-aware (Swiftmend reads true), on a function with no secrecy flag.
+- **`IsSpellUsable` cannot answer "is a charge banked".** Swiftmend at a full 2/2
+  charges reads `isUsable = false` while idle, and Mangle reads false in every
+  phase — the resto druid is not in bear form. It is tracking target validity and
+  form, exactly as its tint-only use in Blizzard's own `RefreshIconColor`
+  implied. §20 guessed this; it is now measured.
+
+**And the readiness-by-absence idea is dead.** Both duration getters returned a
+`LuaDurationObject` at every phase — including idle, at full charges, with
+`isActive = false`. `MayReturnNothing` does not mean "nothing when ready", so the
+presence of a duration object is not a readiness signal.
+
+#### The route that is left: alpha, not visibility
+
+`SetShown` still refuses a secret. `SetAlpha` **accepts** one, and alpha clamps
+to 0–1 while `currentCharges` is a secret number 0, 1 or 2. So
+
+```lua
+icon:SetAlpha(chargeInfo.currentCharges)   -- 0 -> invisible, 1+ -> opaque
+```
+
+hides a spent charge spell during combat **without any comparison**, which is the
+operation that errors. Nothing is read; the clamp does the work.
+
+The cost is real and must be stated wherever this is used: **alpha zero is not
+hidden.** The frame still occupies its cell, so a column holding a spent charge
+spell will not collapse around it during combat the way §13's adopted buff cells
+do. It disappears visually and keeps its space.
+
+#### Two answers that came free with the same fight
+
+**The aura APIs now throw, as §12 predicted and §20 could not confirm:**
+
+```
+GetAuraDataByIndex      ERROR: Auras cannot be accessed when secret
+                               while tainted by 'ThugUI'
+GetUnitAuraInstanceIDs  ERROR: (same)
+```
+
+`RequiresUnitAuraAccess`'s documented `FailureMode = "Error"` is what the client
+does. The by-spell lookups still return `nothing` rather than erroring, matching
+`RequiresNonSecretAura`. **`Core.lua:284` is `pcall`-guarded, so the grid is
+safe** — but the fallback list walk is now permanently dead in combat and should
+stop being described as a fallback.
+
+**Blizzard's frame visibility is readable in combat.** The measurement the
+handoff had been carrying as "taken but unread" since 2026-08-09:
+
+```
+CVBUFF: spell Abundance: item IsShown readable = false (combat=true)
+```
+
+*readable = false* means readable, value false — the buff was down. So
+`IsShown()` on their item is a live, non-secret, buff-active signal that survives
+combat. That is the foundation §13 was built on, now confirmed rather than
+assumed, and it generalises past the cooldown viewer: **reading a frame's shown
+state is not reading an aura**, and Blizzard's untainted frames will answer
+questions the API will not.
+
+#### Why the trinket only drew in `always` mode
+
+Not a mystery once the order is read. `Core.lua:773` — "adoption outranks our own
+`IsSpellAvailable` check" — sits above the availability gate at `:785`, and the
+mode branches are below at `:840`.
+
+`always` mode makes `BB:ShouldAdopt` true on the mode alone, so the cell is
+adopted and the gate never runs. `cooldown` mode adopts nothing, reaches
+`IsSpellAvailable(spellName)`, and that resolves **by name** — which is
+spellbook-scoped, and a trinket's on-use spell is not in the spellbook. It
+answers "not talented" and the icon never draws.
+
+**The §5 by-name rule is right for spells and wrong for items.** The same rule
+that let Swiftmend gain a charge with no code change is what hides a trinket. An
+item is identified by the slot it sits in, and its cooldown comes from
+`GetInventoryItemCooldown` — which Blizzard's own `CooldownViewer.lua:1020` uses
+and which carries no secrecy flag. Task 14.
+
+## 21. Charge spells hide themselves again, by never asking whether they are spent
+
+**Task 15, 2026-08-12. Correct in code and in the harness; unverified in game.**
+
+§19 handed every multi-charge spell to Blizzard's viewer, because `IsSpellReady`
+fails open when `currentCharges` is secret and an icon that lies is worse than an
+icon Blizzard draws. §20's combat measurement removed the reason. Charge spells
+in `cooldown` and `proc` mode are ours to draw again.
+
+The whole design is one line, and its value is what it does *not* do:
+
+```lua
+icon:SetAlpha(chargeInfo.currentCharges)   -- secret 0 -> invisible, 1 or 2 -> opaque
+```
+
+`SetAlpha` accepts a secret and clamps it to 0–1. Nothing is read, nothing is
+compared, and **comparison is the operation that throws**. The spell hides when
+spent without our code ever being told it was spent.
+
+### Why the third return exists, and why it can never be nil
+
+`IsSpellReady` returns `ready, charges, alpha`. The third value is `1` on every
+path except the one fail-open branch, where it is the secret count itself.
+
+It would have been natural to return `nil` for "no alpha needed" and let the
+caller test. That test is the bug: `alpha ~= nil` against a value that may be
+secret is a comparison, and it throws. The alternative — a fourth boolean return
+saying "is the third one safe to use" — is worse than one function that always
+answers safely. **All secret handling stays inside `IsSpellReady`, whose comment
+block exists for exactly that purpose.** A caller should never have to know.
+
+### What is deliberately not covered
+
+- **`recharging` mode.** Its inverse needs `1 - currentCharges`, which is
+  arithmetic on a secret and is refused. A charge spell placed there keeps the
+  old fail-open behaviour in combat. Not an oversight.
+- **`always` mode.** Still adopted, so we draw nothing to fade.
+- **The cell still holds its space.** Alpha zero is not hidden. `ApplyLayout`
+  collapses on `if icon.wanted then`, a plain Lua truth test, and setting
+  `wanted` from a secret is a branch on a secret.
+
+**The player was offered a workaround and declined it on 2026-08-12** — parking
+a spent icon on a 1×1 frame so the grid closes around it. It fails for the same
+reason everything else does: to park the icon you must first know it is spent.
+The frame trick was never the hard part.
+
+Worth carrying past this addon: **the client refuses `SetShown(secret)` and
+accepts `SetAlpha(secret)`, seconds apart, on the same widget.** That is not an
+inconsistency to route around. It is a deliberate line — a secret may change what
+you see, never what the layout does — and any scheme that turns a secret into a
+position, a size, or a frame's shown state is on the wrong side of it.
+
+Out of combat nothing is secret, so hide-and-collapse works normally. The gap is
+combat-only and bounded to the window between spending the last charge and the
+first recharge landing.
+
+### `cooldown` mode has no sweep, and that is the mode, not a bug
+
+Chased on 2026-08-12 and worth recording so nobody re-diagnoses it. The player
+reported a two-charge Guardian spell that "draws its icon but no radial cooldown
+sweep". Reading their SavedVariables settled it: **every Guardian placement is in
+`cooldown` mode**, and that mode is defined as *"the icon IS the readiness
+signal, so there is nothing to sweep — it simply disappears once spent"*
+(`Core.lua`, the `else` branch of `UpdateState`'s spell path).
+
+Two things fell out:
+
+- **The spell was Mangle (33917), not Maul.** Maul is not placed on that grid at
+  all. Names were resolved out of `ThugUI_BCVDump` on disk rather than from
+  memory — §5's "never invent a spell ID" applies just as much to reading one
+  back as to writing one.
+- **A charge spell in `cooldown` mode that failed to adopt looked identical to a
+  bug.** Under §19 it was handed to Blizzard, and if no matching item frame
+  existed the cell fell back to our render: no sweep, and fail-open so it never
+  disappeared. Two correct behaviours composing into something that reads as
+  broken.
+
+### Two harness gaps found while reviewing this
+
+Both recorded in `Tests/README.md`; noted here because the first one is the same
+class of hole as §19's `SetCooldown` stub, which meant no test could have caught
+a real bug.
+
+- **The stub's secret does not throw on a nil comparison.** `SECRET` is a plain
+  table, so `SECRET > 0` and arithmetic both raise real Lua errors — but
+  `SECRET == nil` returns `false` quietly, where the client throws. Code that
+  nil-tests a secret before asking `issecretvalue` passes the harness and fails
+  in the game. `Readable()` has the ordering right; anything new must use it.
+- **A test can depend on the previous test's setup.** `"an adopted cooldown cell
+  is kept out of combat"` inherited its icon from the case above it. When that
+  case was deleted as obsolete, the survivor kept passing while asserting
+  something about a cell that was no longer adopted — a green test whose name had
+  become false. It now builds its own state, in `always` mode, which is the
+  remaining non-aura adoption case.
+
+## 22. The trinket fix shipped broken under eight green tests
+
+**Found 2026-08-12, when the player tested task 14 in game and reported that
+only `always` mode still worked — the exact symptom task 14 was written to
+fix.**
+
+One character's worth of cause:
+
+```lua
+pcall(ItemLocation.CreateFromEquipmentSlot, equipSlot)            -- shipped
+pcall(ItemLocation.CreateFromEquipmentSlot, ItemLocation, equipSlot)  -- correct
+```
+
+`ItemLocation:CreateFromEquipmentSlot(equipmentSlotIndex)` is declared with a
+**colon** (`Blizzard_ObjectAPI/Mainline/ItemLocation.lua:15`), so the slot is its
+second parameter. The shipped call passed `13` as `self` and nothing as the slot.
+
+**It did not throw, and that is the whole problem.** The function body reaches
+the *global* `ItemLocation` rather than `self`, so it happily built a location
+with a nil slot, whose `IsValid()` is legitimately `false`. `IsItemAvailable`
+therefore answered "nothing is equipped" for every item cell, forever,
+`show = false`, and the icon never drew. `always` mode was unaffected because
+adoption happens above that branch and skips it — which is precisely the
+before-and-after the player described, unchanged by the fix.
+
+### Why every test passed over it
+
+The `ItemLocation` stub was written as a **plain function taking the slot as its
+only argument** — matching the *caller* instead of the game. Eight cases then
+exercised a code path that could not work in the client, and all eight were
+green. Fixing the stub to a colon-declared method makes four of them fail
+against the shipped call.
+
+This is §19's `SetCooldown` lesson recurring with the roles reversed, and the
+stub's own comment cites §19 while making the mistake. **A stub written from the
+code under test proves only that the code is self-consistent.** Write it from
+Blizzard's source, and if a call convention is involved, make the stub punish
+getting it wrong.
+
+### The replay tool then answered confidently and wrongly
+
+`Tests/replay_probe.lua` reported *"NOTHING — the spell is not indexed at all"*
+for a trinket that indexes fine. Its `Enum.CooldownViewerCategory` was a
+hardcoded copy of the four **12.0** categories, so `GetCooldownViewerCategorySet`
+returned nothing for 12.1's `EquipSlotEssential` and the entry was never visited.
+Its `info` table also dropped `equipSlot` entirely.
+
+That tool exists to separate "our logic is wrong" from "the client is
+different", so a stale copy of a game enum inside it is worse than useless — it
+produced a plausible, specific, false diagnosis that would have sent the next
+session rewriting the cache. It now derives the category list **from the dump**,
+which cannot go stale, and carries the 12.1 item fields through.
+
+**The general rule: a test double must not hold its own copy of anything the
+real input already describes.**
+
+### What this says about the harness as evidence
+
+`Tests/loadtest.lua` proves the code is internally consistent. It cannot prove a
+call reaches the game correctly, and on this occasion it actively concealed that
+it did not. Three defects — the `SetCooldown` stub (§19), the `ItemLocation`
+stub, and the replay enum — have now each hidden a real bug behind green output.
+
+**When a fix targets a Blizzard API we have not called before, the harness is not
+evidence that it works. Only the game is.** Say so in the handoff, and get the
+player to look before the fix is described as done.

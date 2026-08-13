@@ -172,6 +172,38 @@ The rules that made it work, kept because each one caught something:
   existing regression case in place, changing what it asserted, and its report
   described three cases added and none removed.
 
+### The cost rule, stated plainly
+
+The player pays per token, and asked for this in writing. **The expensive model
+is for diagnosis, design and review. It should not be typing Lua, and it should
+not be reading files an agent could read for it.**
+
+What that means in practice:
+
+- **Default to one isolated agent per task file, on Sonnet.** Spin it up as soon
+  as the design is decided. Do not write the change and then delegate the tidying.
+- **Delegate the reading too, not just the writing.** Sweeping a large file to
+  find where something lives, enumerating call sites, checking whether a pattern
+  is used elsewhere — that is fan-out work and it costs the same whoever does it,
+  except the agent's copy never enters the expensive context. A subagent that
+  returns "it is at `Data.lua:599`" has already paid for itself.
+- **Batch independent tool calls into one message.** Two sequential calls that
+  did not need to be sequential cost a whole extra round of context.
+- **Read the part of the file you need.** `Read` with an offset beats reading two
+  thousand lines to look at forty, and `grep`-first-then-read beats opening files
+  to find out whether they are relevant.
+- **Do not re-read a file you just wrote** to check the write landed. The tool
+  errors if it does not.
+
+Judgement still applies, in one direction only: a change of a few lines whose
+difficulty is entirely in *knowing what to write* can cost more to specify than
+to make. Skipping delegation there is allowed — **say so and why**, so the
+exception stays visible and does not quietly become the habit. Everything else
+goes to an agent.
+
+The review side does not get cheaper. Diffs, reports and test claims are still
+read in full and re-run here. That is the half that earns its keep.
+
 ## 5. Git
 
 Commit messages explain the reasoning, not just the change — they are part of

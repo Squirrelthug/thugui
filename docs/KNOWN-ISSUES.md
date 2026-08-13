@@ -45,9 +45,14 @@ ThugUI — not an error in ours.
 
 ## Resource ring cannot show an exact level in combat
 
-**Status: still open, checked 2026-08-09.** The ring is now switched **on**
-(`showResourceRing = true`, visibility `"combat"`), so this is live, not
+**Status: still open, re-checked 2026-08-11 on 12.1.** The ring is switched
+**on** (`showResourceRing = true`, visibility `"combat"`), so this is live, not
 hypothetical.
+
+**Open, but no longer believed impossible.** 12.1 made this fixable and nobody
+has built the fix — see item 2 below. Do not quote the "permanently impossible"
+framing this entry used to carry; it was reasoning from a widget that no longer
+has a monopoly on drawing an arc.
 
 **Checked and answered.** The ToT mover deferral was not sufficient. The log
 shows, five seconds into a fresh session and before any combat:
@@ -90,14 +95,25 @@ value is unreadable the ring holds its last resolved level and keeps its colour
    carries `SecretWhenUnitPowerRestricted` in Blizzard's generated docs, and
    primary resources stay secret to addons regardless. Full reasoning and
    evidence in `DECISIONS.md` §12. Do not re-open this.
-2. ~~**Driving the arc natively.**~~ **CLOSED 2026-08-09 — measured.**
-   `Cooldown:SetCooldownDuration(secret)` is **refused** from tainted code,
-   despite the wiki listing the `Cooldown` setters as `AllowedWhenTainted`, and
-   `CurveObject:Evaluate(secret)` is refused too. A radial swipe cannot be fed
-   a secret by any route. `StatusBar:SetValue(secret)` and `SetAlpha(secret)`
-   *are* accepted — so a straight **bar** could show exact energy in combat
-   where a ring cannot. That is a design change, not a bug fix, and has not
-   been offered to the player.
+2. ~~**Driving the arc natively.**~~ **RE-OPENED 2026-08-11 by the 12.1 patch.**
+
+   The 2026-08-09 measurement still holds exactly as written, and is repeated
+   verbatim on 12.1: `Cooldown:SetCooldownDuration(secret)` is **refused** from
+   tainted code and `CurveObject:Evaluate(secret)` is refused too. What was
+   wrong was the sentence drawn from it — *"a straight bar could show exact
+   energy in combat where a ring cannot"*. That treated "radial" as a property
+   of the `Cooldown` widget, which was the only radial thing in the API at the
+   time.
+
+   **12.1 adds `StatusBarRenderMode.Radial`** — *"render the status bar by
+   driving the managed texture's radial progress fill percent instead of
+   resizing the texture anchors"* — and `StatusBar:SetValue(secret)` is still
+   measured **accepted** in combat (`ThugUI_DebugLog.secrets`, 2026-08-11
+   21:05). A radial StatusBar is a ring, and it takes the value we may not read.
+
+   The premise survived the patch; the conclusion did not. `DECISIONS.md` §20.
+   This is a design change rather than a bug fix, and the player has been shown
+   it as an option and has not chosen it yet.
 3. Blizzard reclassifying primary power as non-secret. Unlikely, and note that
    the 12.1 relaxation for *secondary* resources turns out to have shipped
    already: combo points read fine in combat on 12.0.7.
@@ -205,7 +221,56 @@ could at least detect.
 
 ---
 
-## "Follow cursor" off still tracks the cursor, at an offset
+## A spent charge spell goes invisible but its cell does not collapse
+
+**Status: accepted by the player, verified in game 2026-08-12.** Not a defect to
+be fixed later — a measured limit, accepted knowingly so patch-day work could
+continue.
+
+The icon disappears correctly when every charge is spent during combat. The cell
+keeps its space, so a column holding one does not close around it until combat
+ends. `DECISIONS.md` §21.
+
+**Why it cannot be fixed from addon code.** The hiding works because
+`SetAlpha` accepts a secret value and clamps it to 0–1, so
+`icon:SetAlpha(currentCharges)` never reads or compares the count. Collapse is
+different in kind: `ApplyLayout` packs on `if icon.wanted then`, a plain Lua
+truth test, and setting `icon.wanted` from the charge count is a branch on a
+secret — the operation that throws.
+
+**Routing around it was considered and rejected on evidence.** The player
+proposed parking a spent icon on a 1×1 frame so the grid closes over it. The
+frame trick is sound; the problem is upstream of it, because parking the icon
+requires first knowing it is spent. Note also that the client refuses
+`SetShown(secret)` and accepts `SetAlpha(secret)` seconds apart on the same
+widget: **a secret may change what you see, never what the layout does.** Any
+scheme turning a secret into a position, a size, or a shown state is on the wrong
+side of a line Blizzard drew deliberately.
+
+**What would change this:** Blizzard making `currentCharges` non-secret, as they
+already did for secondary resources. Nothing on our side.
+
+Out of combat nothing is secret, so hide-and-collapse works normally. The gap is
+combat-only and bounded to the window between spending the last charge and the
+first recharge landing.
+
+---
+
+## ~~"Follow cursor" off still tracks the cursor~~ — NOT REPRODUCING 2026-08-12
+
+**Status: could not be reproduced, closed pending a fresh sighting.** The player
+re-tested on 2026-08-12 and the grid stayed where it was dragged.
+
+Their sharper description before that test is worth keeping in case it returns:
+**out of combat it stayed where dragged, and only moved during combat.** The
+gate reads correctly for that shape — `Core.lua`'s `wantCursor` is
+`profile.followCursor and (previewMode or inCombat)`, and the per-frame path at
+the bottom of the driver repeats the same condition — so with the setting off
+neither should ever run. If it comes back, that pair of conditions is where to
+look first, and the combat-only detail is the clue that separates them from the
+drag path.
+
+The original report follows.
 
 **Status: noted 2026-08-09, not investigated.** Reported by the player.
 

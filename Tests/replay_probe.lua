@@ -39,6 +39,12 @@ for i, e in ipairs(dump.entries) do
         selfAura = e.selfAura,
         linkedSpellIDs = linked,
         category = e.category,
+        -- 12.1 item fields. Carried through so a replay can answer questions
+        -- about item-backed cells at all -- without them the cache resolves an
+        -- entry whose equipSlot is always nil, which is indistinguishable from
+        -- the bug this tool would be run to investigate.
+        equipSlot = e.equipSlot,
+        spellCategoryID = e.spellCategoryID,
     }
     entriesByID[i] = info
     entriesByCategory[e.category] = entriesByCategory[e.category] or {}
@@ -54,9 +60,32 @@ function GetSpecializationInfo() return 260, "Outlaw" end
 function GetNumSpecializations() return 1 end
 function wipe(t) for k in pairs(t) do t[k] = nil end return t end
 
-Enum = { CooldownViewerCategory = {
-    Essential = 0, Utility = 1, TrackedBuff = 2, TrackedBar = 3,
-} }
+-- Derived from the dump rather than hardcoded, deliberately.
+--
+-- This was a fixed list of the four 12.0 categories, and it went stale the
+-- moment 12.1 added EquipSlotEssential/EquipSlotTracked and the SpecAgnostic
+-- pair. GetCooldownViewerCategorySet then returned nothing for any category
+-- the list did not name, so entries in the new categories were never visited
+-- and this tool reported "the spell is not indexed at all" for a trinket that
+-- indexes fine in the game. **A replay that answers confidently and wrongly is
+-- worse than one that cannot answer**, and this tool exists precisely to
+-- separate "our logic is wrong" from "the client is different" -- so it must
+-- not carry its own copy of a game enum that the dump already describes.
+--
+-- The numeric values are arbitrary and only have to round-trip through
+-- CATEGORY_ID_TO_NAME below; the dump names the categories, so the names are
+-- the real key.
+Enum = { CooldownViewerCategory = {} }
+do
+    local next_value = 0
+    for _, e in ipairs(dump.entries) do
+        local name = e.category
+        if name and Enum.CooldownViewerCategory[name] == nil then
+            Enum.CooldownViewerCategory[name] = next_value
+            next_value = next_value + 1
+        end
+    end
+end
 
 C_Spell = {
     GetSpellInfo = function(q)

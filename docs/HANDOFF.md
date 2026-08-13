@@ -1,6 +1,177 @@
+# Handoff — state as of 2026-08-12
+
+## START HERE — branch `charge-spells-can-hide`, patch-day cleanup
+
+**You are not on `main`.** Three commits sit above it and a fourth change is in
+flight. `main` is untouched and still good.
+
+### The one-line story
+
+12.1 landed. The player reported two charge-spell bugs, the cause turned out to
+be a rule the addon had adopted from a measurement that the patch invalidated,
+and this branch is the re-measurement plus the fixes that fall out of it.
+
+### What is on the branch
+
+| Commit | What |
+|---|---|
+| `a8a7451` | `SecretProbe` extended to sample charge spells at five points around combat |
+| `f725603` | **The player ran it through a real fight.** Results in `DECISIONS.md` §20, "Measured — one combat, 2026-08-11 21:05" |
+| `5c05183` | Task 14 — item-backed cells (the trinket bug) and the new `recharging` mode. 189 passing |
+
+### The measurement is the important thing on this branch
+
+Read `DECISIONS.md` §20's "Measured" subsection before touching anything here.
+It corrected two things §19 and §20 had asserted from Blizzard's generated
+documentation, and everything queued below depends on it. The headlines:
+
+- `SetShown(secret)` is **refused**; `SetAlpha(secret)` is **accepted**, at every
+  phase including mid-combat. Alpha clamps to 0–1 and `currentCharges` is a
+  secret 0/1/2, so `icon:SetAlpha(currentCharges)` hides a spent charge spell
+  **with no comparison** — and comparison is the operation that throws.
+- `SetCooldownFromDurationObject` and `SetTimerDuration` are **accepted**
+  mid-combat, in the same sample where `SetCooldownDuration(secret)` is refused.
+  §19's "we cannot sweep in combat" is lifted. It was never the sweep that was
+  forbidden, only the route to it.
+- `maxCharges` is **not** secret in combat. `BB:IsChargeSpell`'s
+  out-of-combat-only cache guards against something that does not happen.
+- `IsSpellUsable` cannot answer "is a charge banked" — it tracks target validity
+  and form. Readiness-by-absence is dead too: both duration getters return an
+  object even at full charges, idle.
+
+### Task 14's trinket fix was broken and is now fixed — RE-TEST NEEDED
+
+**The player tested it 2026-08-12 and reported the original symptom unchanged:
+only `always` mode draws the trinket.** Diagnosed and fixed the same day —
+`DECISIONS.md` §22. `ItemLocation:CreateFromEquipmentSlot` is declared with a
+colon, our call omitted the `ItemLocation` argument, and the result was a silent
+`false` from `IsItemAvailable` for every item cell rather than an error.
+
+**This needs the player to look again**, and it is the top in-game item:
+put **Radiant Blessing** (cell 7:1 on resto, spell 1254624, trinket slot 13) into
+**`cooldown` mode** and confirm it draws. `always` mode was never affected and is
+not a test of this.
+
+The harness could not have caught it and now can — the `ItemLocation` stub was
+written to match our caller instead of Blizzard's declaration, so eight cases
+were green over a path that could not work. Four of them now fail against the old
+call. `Tests/replay_probe.lua` was separately stale and gave a **confidently
+wrong** diagnosis; it now derives its category list from the dump.
+
+**Carry this forward:** three harness defects have each hidden a real bug behind
+green output. When a fix calls a Blizzard API we have not called before, the
+harness is not evidence — only the game is.
+
+### Task 15 has landed — and is VERIFIED IN GAME, 2026-08-12
+
+**The player tested it: the spell hides when spent, and the cell does not
+collapse.** Both halves are exactly what §21 predicted, and the player accepted
+the non-collapsing cell explicitly rather than having it fixed. It is written up
+in `KNOWN-ISSUES.md` as a measured limit, not as a defect awaiting work — **do
+not re-open it** and do not offer a workaround; one was already proposed by the
+player, examined, and rejected on evidence.
+
+
+`DECISIONS.md` §21. **195 passing, 0 failures.** Built by a Sonnet agent against
+`tasks/15-charge-spells-hide-when-spent.md`; report in `tasks/reports/`.
+
+What it does:
+
+1. `BB:ShouldAdopt` stops returning `IsChargeSpell(icon)` on the fallthrough.
+   Charge spells in `cooldown`/`proc` mode come back to us. `aura` and `always`
+   still adopt.
+2. `IsSpellReady` gains a **third return: a value always safe to hand to
+   `SetAlpha`** — `1` in every case, the secret `currentCharges` on the one
+   fail-open path. Never nil, deliberately, so the caller never has to test it.
+3. `cooldown` and `proc` modes apply that alpha. Alpha is reset to `1` once per
+   icon at the top of the `UpdateState` loop — icons are pooled and a stale
+   alpha 0 would follow the frame to the next spell.
+
+**What the player should test in game:** a two-charge spell in `cooldown` mode —
+**Mangle on the Guardian druid** is the case this started from, Swiftmend on
+resto is the other. Spend both charges in combat and the icon should vanish; it
+should come back as a charge recharges. Out of combat it should behave exactly as
+it always has, including the column closing.
+
+Two review notes worth carrying, both mine rather than the agent's:
+
+- **Two existing tests asserted the removed behaviour**, not the one the task
+  file predicted. `"a charge spell in cooldown mode is adopted from the utility
+  bar"` was **deleted** — the behaviour it asserted is gone on purpose, so there
+  was nothing left for it to be true about. Its neighbour inherited its setup and
+  kept passing while asserting something about a cell that was no longer adopted;
+  it is now self-contained and tests `always` mode. Both are called out in
+  `Tests/README.md` under "Hazards in the harness itself". The agent correctly
+  refused to touch either and reported the conflict.
+- **`BB:IsChargeSpell` and its cache are now dead code**, deliberately left in
+  place. §20 measured that its out-of-combat-only caching guards against
+  something that does not happen, so if it is ever revived it should be
+  simplified to `info.charges` from the Cooldown Manager. Removing it is an open,
+  unclaimed call.
+
+**The accepted cost, confirmed by the player 2026-08-12: alpha zero is not
+hidden.** The cell keeps its space and its column will not collapse around it
+during combat. Making it collapse would need `icon.wanted` set from a secret,
+which is a branch on a secret. The player considered a 1px parking frame and
+accepted the gap instead so patch-day work could move. **Do not re-open this** —
+and note the client refuses `SetShown(secret)` while accepting `SetAlpha(secret)`
+seconds apart, which reads as a deliberate line: visual change yes, layout change
+no. Out of combat nothing is secret and collapse works normally, so the gap is
+combat-only and bounded to the window between spending the last charge and the
+first recharge landing.
+
+### Queued next, in order
+
+1. **The in-combat sweep** — `ApplySweep` moves to
+   `SetCooldownFromDurationObject`, measured accepted mid-combat. It would make
+   `always` mode sweep during combat and so remove the only reason `always` mode
+   is adopted at all. Measured possible, **not designed, and not yet wanted by
+   the player** — see the question left open below. Not started.
+2. **Task 16, probe extension** — deliberately *not* run in parallel with task 15
+   because both would touch `Tests/loadtest.lua`. Would measure whether a truth
+   test on a secret throws, and whether `SetSize`/`SetScale`/`SetPoint` accept
+   one. Only worth doing if the collapse gap is ever re-opened; the player has
+   accepted it, so this is low priority now.
+3. **Potions and the healthstone** — `spellCategoryID` Cooldown Manager entries
+   have no spell ID at all and need a second placement kind. Task 14 explicitly
+   refused to start it.
+
+### The original bug report — both halves resolved, one into a question
+
+From 2026-08-10, both on charge spells:
+
+- **Grappling Hook (Outlaw) disappears when both charges are spent** — cause
+  found, **fixed by task 15**. Charge spells were adopted by Blizzard's frame
+  because `IsSpellReady` fails open on secret charges.
+- **"Maul (Guardian) draws but never sweeps"** — **not a bug, and not Maul.**
+  Confirmed against the player's SavedVariables on 2026-08-12: Maul is not placed
+  on the Guardian grid at all, and the spell meant was **Mangle (33917)**. Every
+  Guardian placement is in `cooldown` mode, which is *defined* as having no
+  sweep — the icon is the readiness signal. `DECISIONS.md` §21. **The player
+  confirmed 2026-08-12 that it was Mangle all along**; the Maul thread is closed.
+
+### The one question left open for the player
+
+Asked on 2026-08-12 and **not answered** — do not assume an answer, and do not
+build on a guess. Now that a spent charge spell hides itself, what should a
+two-charge spell in `cooldown` mode look like?
+
+1. **Hide when spent, no sweep** — exactly what task 15 built, nothing more.
+2. **Hide when spent, and sweep toward the next charge** — needs queued item 1,
+   the `SetCooldownFromDurationObject` route. This is the closest reading of what
+   "no radial cooldown sweep" was originally complaining about.
+3. **Leave `cooldown` mode alone** and use `always` mode where a sweep is wanted,
+   accepting that `always` is adopted and so does not hide when spent.
+
+The player's stated priority on 2026-08-12 was momentum — *"get the rest of the
+patch day kinks worked out"* — so ask this once, in passing, rather than blocking
+on it.
+
+---
+
 # Handoff — state as of 2026-08-10
 
-## START HERE — Maul is the next job
+## Superseded: "Maul is the next job"
 
 ### 1. Repo state: clean, everything merged and pushed
 

@@ -72,7 +72,9 @@ local function IsSpellAvailable(spellName)
     return (ok and info and info.spellID) and true or false
 end
 
---- Is the spell usable right now? Returns ready, charges.
+--- Is the spell usable right now? Returns ready, charges, alpha -- see the
+--- comment on `alpha` immediately above the function for what that third
+--- return is and why it can never be nil.
 ---
 --- Readiness is derived from `isActive` and `isOnGCD`, NEVER from startTime or
 --- duration, for two independent reasons:
@@ -103,6 +105,20 @@ local function Readable(v)
     return v ~= nil
 end
 
+--- The third return, `alpha`, is always safe to hand straight to
+--- `icon:SetAlpha` -- it is `1` on every path except one: the fail-open branch
+--- below, where currentCharges could not be read. `SetAlpha` accepts a secret
+--- and clamps it to 0-1 (DECISIONS.md §20, measured ACCEPTED at every phase of
+--- a full combat, unlike SetShown/SetCooldown which still refuse one), so a
+--- secret 0 goes invisible and a secret 1 or 2 stays opaque -- with no
+--- comparison anywhere, because comparing is the operation that throws.
+---
+--- This return must never be nil. If a caller had to test it before using it,
+--- that test would itself be a comparison against a possible secret -- the
+--- exact thing this design exists to avoid -- or it would need a fourth
+--- boolean return just to say "is this safe", which is worse than one function
+--- that always answers safely. All secret handling for it stays in here, next
+--- to the same handling for `ready`.
 local function IsSpellReady(spellName)
     -- Charge builds are ready whenever a charge is banked, even though the
     -- recharge timer is always running.
@@ -117,22 +133,34 @@ local function IsSpellReady(spellName)
         if not Readable(maxCharges) or maxCharges > 1 then
             local current = chargeInfo.currentCharges
             if Readable(current) then
-                return current > 0, current
+                -- SetShown has already done the hiding work on this path (the
+                -- caller acts on `ready`), so an icon that is shown must be
+                -- fully opaque.
+                return current > 0, current, 1
             end
+
             -- Charges are secret this tick (they often are in combat). Fail
-            -- open: a reminder that shows slightly too eagerly beats one that
-            -- disappears mid-fight.
-            return true
+            -- open on readiness: a reminder that shows slightly too eagerly
+            -- beats one that disappears mid-fight. But hand the secret count
+            -- itself back as the alpha -- issecretvalue asked first, same
+            -- ordering Readable() uses -- so a spent charge still disappears
+            -- even though we were never allowed to ask whether it was spent.
+            if issecretvalue and issecretvalue(current) then
+                return true, nil, current
+            end
+            -- current was nil outright (not secret, genuinely absent) rather
+            -- than unreadable. Nothing to clamp on; stay opaque.
+            return true, nil, 1
         end
     end
 
     local ok2, cdInfo = pcall(C_Spell.GetSpellCooldown, spellName)
     if ok2 and cdInfo then
-        if cdInfo.isOnGCD then return true end
-        if cdInfo.isActive then return false end
+        if cdInfo.isOnGCD then return true, nil, 1 end
+        if cdInfo.isActive then return false, nil, 1 end
     end
 
-    return true
+    return true, nil, 1
 end
 
 --- Drive an icon's sweep for "always" mode.
@@ -179,6 +207,108 @@ local function ApplySweep(icon, spellName)
 
     if not pcall(icon.cooldown.SetCooldown, icon.cooldown,
                  cdInfo.startTime, cdInfo.duration, cdInfo.modRate) then
+        icon.cooldown:Clear()
+    end
+end
+
+-- ----------------------------------------------------------------------------
+-- Item-backed cells
+--
+-- An icon is item-backed when its Cooldown Manager entry carries `equipSlot`
+-- (set on the icon in Rebuild) -- 12.1 puts trinkets in the manager this way,
+-- identified by the slot they sit in rather than by a spell the player knows.
+--
+-- Item cooldowns carry no SecretWhen* flag at all (DECISIONS.md 20; Blizzard's
+-- own CooldownViewer.lua:1020 reads one with plain GetInventoryItemCooldown),
+-- so none of this needs the secret-value machinery the spell path above needs
+-- -- including in combat. What it CANNOT use is IsSpellAvailable: that resolves
+-- by NAME, which is spellbook-scoped, and a trinket's on-use spell is not in
+-- the spellbook -- it answers "not talented" and the icon never draws. That is
+-- the bug this whole section exists to route around.
+-- ----------------------------------------------------------------------------
+
+--- Is something actually equipped in this slot? Blizzard's own test
+--- (CooldownViewerItemData.lua:286, live branch):
+--- ItemLocation:CreateFromEquipmentSlot(equipSlot) then :IsValid(). Guarded so
+--- a client missing the ItemLocation global entirely cannot throw.
+local function IsItemAvailable(equipSlot)
+    if not equipSlot or not ItemLocation or not ItemLocation.CreateFromEquipmentSlot then
+        return false
+    end
+    -- ItemLocation is passed explicitly because CreateFromEquipmentSlot is
+    -- declared with a COLON (Blizzard_ObjectAPI/Mainline/ItemLocation.lua:15),
+    -- so the slot is its SECOND parameter. Omitting it does not throw -- the
+    -- body reaches the global ItemLocation rather than self -- it silently
+    -- builds a location with a nil slot, whose IsValid() is false. That made
+    -- every item cell answer "nothing equipped" and never draw, which is the
+    -- task 14 bug surviving the task 14 fix. Verified in game 2026-08-12.
+    local ok, loc = pcall(ItemLocation.CreateFromEquipmentSlot, ItemLocation, equipSlot)
+    if not ok or not loc then return false end
+    local ok2, valid = pcall(loc.IsValid, loc)
+    return ok2 and valid and true or false
+end
+
+--- Is the item in this slot off cooldown right now?
+---
+--- A separate function from IsSpellReady rather than a branch inside it: the
+--- two share no logic, and IsSpellReady's comment block is load-bearing
+--- documentation about secret values that simply does not apply here.
+---
+--- GetInventoryItemCooldown is what Blizzard's own item mixin reads
+--- (CooldownViewer.lua:1020) and carries no secrecy flag, so duration == 0 is
+--- a plain, ordinary "nothing is running" test -- the same idiom every
+--- action-button cooldown in the default UI uses, and one that needs no
+--- comparison against GetTime().
+---
+--- Every value is still routed through Readable() anyway: that global is not
+--- in the generated API documentation, so nothing was measured about its
+--- secrecy posture here, and an unreadable answer fails VISIBLE (treats the
+--- item as ready) rather than hiding a reminder mid-fight -- the same rule
+--- IsSpellReady already follows, for the same reason.
+local function IsItemReady(equipSlot)
+    if not equipSlot or not GetInventoryItemCooldown then return true end
+
+    local ok, startTime, duration = pcall(GetInventoryItemCooldown, "player", equipSlot)
+    if not ok then
+        if ThugUI.Diagnostics then
+            ThugUI.Diagnostics:LogOnce(("item-cd-threw-%s"):format(tostring(equipSlot)),
+                "CV", "GetInventoryItemCooldown threw for slot %s -- treating as ready",
+                tostring(equipSlot))
+        end
+        return true
+    end
+
+    if not Readable(startTime) or not Readable(duration) then
+        if ThugUI.Diagnostics then
+            ThugUI.Diagnostics:LogOnce(("item-cd-unreadable-%s"):format(tostring(equipSlot)),
+                "CV", "item cooldown for slot %s unreadable -- failing visible",
+                tostring(equipSlot))
+        end
+        return true
+    end
+
+    return duration == 0
+end
+
+--- Drive an item cell's sweep, for "always" and "recharging" modes.
+---
+--- Unlike ApplySweep these are ordinary numbers even in combat, so plain
+--- SetCooldown works with no secret screen -- but the pcall discipline stays:
+--- DECISIONS.md 19, an uncaught throw anywhere in the per-icon loop leaves
+--- every icon UpdateState has not yet reached frozen at its previous state.
+local function ApplyItemSweep(icon, equipSlot)
+    if not equipSlot or not GetInventoryItemCooldown then
+        icon.cooldown:Clear()
+        return
+    end
+
+    local ok, startTime, duration = pcall(GetInventoryItemCooldown, "player", equipSlot)
+    if not ok or not Readable(startTime) or not Readable(duration) or duration == 0 then
+        icon.cooldown:Clear()
+        return
+    end
+
+    if not pcall(icon.cooldown.SetCooldown, icon.cooldown, startTime, duration) then
         icon.cooldown:Clear()
     end
 end
@@ -569,6 +699,11 @@ function CV:Rebuild()
         -- cooldown IDs.
         local cooldownInfo = Data.GetCooldownInfoForSpell(placement.spellID)
         icon.linkedSpellIDs = cooldownInfo and cooldownInfo.linkedSpellIDs or nil
+        -- Set only when the Cooldown Manager entry actually carries one --
+        -- explicitly nil otherwise, because icons are pooled and a cell that
+        -- used to be item-backed must not leave a stale slot on the spell that
+        -- reuses its frame next.
+        icon.equipSlot = cooldownInfo and cooldownInfo.equipSlot or nil
         -- Resolved by ID (which works for any spell in the game) and cached, so
         -- the per-frame path can query by name. Rebuild re-runs on
         -- SPELLS_CHANGED / PLAYER_TALENT_UPDATE, so this stays current.
@@ -758,6 +893,16 @@ function CV:UpdateState()
         -- Resolved once: "proc" mode gates on it and the glow visual uses it.
         local procced = ShouldGlow(icon)
 
+        -- Reset every pass, before any branch below, because icons are pooled.
+        -- An icon left at alpha 0 by a spent charge spell in cooldown/proc mode
+        -- would otherwise carry that invisibility to whatever spell reuses the
+        -- frame next -- the exact bug shape the pooled-icon comment at
+        -- Core.lua:~1000 already carries for stale sweep/stack state. Only the
+        -- cooldown/proc branches in the spell path below override this; every
+        -- other path (adopted, item-backed, aura, always, recharging, and a
+        -- spell with no charge mechanic at all) keeps it at 1. Task 15.
+        icon:SetAlpha(1)
+
         -- A cell whose buff is drawn by Blizzard's own item frame. Ours holds
         -- the slot -- the Blizzard item is anchored to it, so with collapse on,
         -- a cell that stops being "wanted" while the buff is still up slides the
@@ -782,6 +927,40 @@ function CV:UpdateState()
             icon.tex:SetAlpha(0)
             icon.cooldown:Clear()
             icon.count:Hide()
+        elseif icon.equipSlot then
+            -- Item-backed cell. MUST NOT go through IsSpellAvailable below --
+            -- that resolves by NAME, which is spellbook-scoped, and an item's
+            -- on-use spell is not in the spellbook: it answered "not talented"
+            -- and the icon never drew (the Radiant Blessing bug task 14 exists
+            -- for). An item is identified by the slot it sits in instead, and
+            -- its cooldown is a plain number even in combat, so this needs none
+            -- of the secret-value handling the spell path below needs.
+            if not IsItemAvailable(icon.equipSlot) then
+                show = false
+                icon.cooldown:Clear()
+                icon.count:Hide()
+            else
+                local ready = IsItemReady(icon.equipSlot)
+
+                if icon.mode == "always" then
+                    show = true
+                    ApplyItemSweep(icon, icon.equipSlot)
+                elseif icon.mode == "recharging" then
+                    -- Exact inverse of "ready", from the SAME answer "cooldown"
+                    -- mode uses below, so the two modes can never disagree.
+                    show = not ready
+                    ApplyItemSweep(icon, icon.equipSlot)
+                elseif icon.mode == "proc" then
+                    show = (ready and procced) and true or false
+                    icon.cooldown:Clear()
+                else
+                    -- "cooldown" mode: nothing to sweep, it just disappears.
+                    show = ready and true or false
+                    icon.cooldown:Clear()
+                end
+                -- Items do not report a charge count through this path.
+                icon.count:Hide()
+            end
         elseif not IsSpellAvailable(spellName) then
             show = false
         elseif icon.mode == "aura" then
@@ -835,7 +1014,7 @@ function CV:UpdateState()
             end
             if not stacked then icon.count:Hide() end
         else
-            local ready, charges = IsSpellReady(spellName)
+            local ready, charges, alpha = IsSpellReady(spellName)
 
             if icon.mode == "always" then
                 show = true
@@ -846,11 +1025,35 @@ function CV:UpdateState()
                 -- hidden until it is actually pressable.
                 show = (ready and procced) and true or false
                 icon.cooldown:Clear()
+                -- A procced charge spell with nothing banked fails `ready` open
+                -- in combat exactly as cooldown mode does below (currentCharges
+                -- is secret), so it would otherwise sit on screen glowing with
+                -- no charge to spend. Same alpha, same source. Task 15.
+                icon:SetAlpha(alpha)
+            elseif icon.mode == "recharging" then
+                -- Exact inverse of "cooldown" mode below, from the SAME `ready`
+                -- answer, so the two can never disagree about the same spell.
+                -- Unlike cooldown mode it gets a sweep -- the sweep is the
+                -- whole point of the mode.
+                --
+                -- Deliberately NOT given the alpha treatment. The inverse of a
+                -- secret 0/1/2 needs `1 - currentCharges`, which is arithmetic
+                -- on a secret and is refused -- so a charge spell placed in
+                -- recharging mode keeps today's fail-open behaviour in combat.
+                -- Not an oversight; see DECISIONS.md §20 and task 15.
+                show = not ready
+                ApplySweep(icon, spellName)
             else
                 -- "cooldown" mode: the icon IS the readiness signal, so there is
-                -- nothing to sweep -- it simply disappears once spent.
+                -- nothing to sweep -- it simply disappears once spent. This is
+                -- the reported bug (Grappling Hook, Swiftmend): currentCharges
+                -- is secret in combat, `ready` fails open, and `alpha` (1
+                -- normally, the secret charge count itself when the count is
+                -- unreadable) does the hiding SetShown cannot -- with no
+                -- comparison anywhere. DECISIONS.md §20, task 15.
                 show = ready and true or false
                 icon.cooldown:Clear()
+                icon:SetAlpha(alpha)
             end
 
             if charges then
