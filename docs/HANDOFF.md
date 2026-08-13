@@ -1,6 +1,63 @@
-# Handoff — state as of 2026-08-12
+# Handoff — state as of 2026-08-12 (evening)
 
-## START HERE — branch `charge-spells-can-hide`, patch-day cleanup
+## START HERE — main is clean, the radial resource ring is the next job
+
+`charge-spells-can-hide` is **merged into `main` and pushed** (`c28b1a2`).
+**195 passing, 0 failures.** Nothing is in flight, nothing is half-done.
+
+The section below this one is the full account of what that branch did and why;
+read it if you are picking up anything to do with charges, items, or secret
+values. It is still accurate — it has just stopped being the current job.
+
+### The job: rebuild the resource ring on a radial StatusBar
+
+Branch: **`radial-resource-ring`**. Chosen by the player 2026-08-12.
+
+`KNOWN-ISSUES.md`, "Resource ring cannot show an exact level in combat", has the
+whole story. The short version:
+
+- The ring cannot show an exact level in combat today because a radial swipe
+  comes from a `Cooldown` widget, and `Cooldown:SetCooldownDuration(secret)` is
+  **refused** from tainted code. Measured twice, on 12.0.7 and again on 12.1.
+- That measurement was right and **the conclusion drawn from it was wrong.**
+  "A straight bar could show exact energy where a ring cannot" treated *radial*
+  as a property of the `Cooldown` widget — which it was, at the time.
+- **12.1 adds `StatusBarRenderMode.Radial`**, and `StatusBar:SetValue(secret)` is
+  measured **accepted in combat** (`ThugUI_DebugLog.secrets`, 2026-08-11 21:05).
+  A radial StatusBar is a ring, and it takes the value we are not allowed to read.
+
+**This is a design change, not a bug fix.** Confirm the design with the player
+before building — `CLAUDE.md` §3. The existing ring works and is in daily use;
+breaking something that has worked for months is much worse than shipping this
+slowly.
+
+**Do not delete the current ring while building the new one.** Same rule as the
+ECV/BCV/GCV fallback: it is the escape hatch if the radial mode misbehaves.
+
+### Still open, unclaimed, in no particular order
+
+- **`UPCOMING-PATCH.md` should be deleted.** 12.1 is live; the file still says
+  *"Current live version: 12.0.7"* and is now actively misleading. `CLAUDE.md`'s
+  own process says it goes on patch day, with anything still true moved into
+  `DECISIONS.md`.
+- **Does a charge spell in `cooldown` mode want a sweep toward its next charge?**
+  Asked twice, never answered. It needs the `SetCooldownFromDurationObject`
+  route, which is measured accepted mid-combat but unbuilt. Ask; do not assume.
+- **The workaround panel's rewritten text has not been seen on screen.** Three
+  passages were corrected 2026-08-12 and only render in game.
+- **Potions and the healthstone.** `spellCategoryID` Cooldown Manager entries
+  carry no spell ID at all and need a second placement kind. Blizzard's own
+  source has a matching TODO (`CooldownViewer.lua:1018`).
+- **oUF `portrait.lua`** truth-tests possibly-secret booleans at `:59`, `:63`,
+  `:67`. The `guid` half is guarded; `isAvailable` is not. Whether it can throw
+  depends on whether `UnitIsConnected`/`UnitIsVisible` are secret — unmeasured.
+- **`QA.md` has never been run.**
+
+---
+
+# Handoff — state as of 2026-08-12 (the charge branch)
+
+## Merged into main — the account of `charge-spells-can-hide`
 
 **You are not on `main`.** Three commits sit above it and a fourth change is in
 flight. `main` is untouched and still good.
