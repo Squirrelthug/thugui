@@ -738,6 +738,15 @@ function CV:Rebuild()
     local f = self:EnsureContainer()
     local profile = CV:CurrentProfile()
 
+    -- A rebuild is a resolve opportunity. Before the art cache existed, this
+    -- was implicit: Rebuild called Data.CategoryEntry per placement and that
+    -- call resolved. Changing any dropdown forces a Rebuild, which is how the
+    -- player got their potion icons to appear at all, and dropping that
+    -- trigger when the resolve moved to combat transitions took away a working
+    -- workaround before its replacement was proven (reported 2026-08-13).
+    -- A no-op once the cache answers, and Rebuild is not a hot path.
+    Data.ResolveCategoryArt()
+
     for _, icon in ipairs(self.iconPool) do
         icon.inUse = false
         icon:Hide()
@@ -756,10 +765,13 @@ function CV:Rebuild()
         -- Category placements (potions, healthstones) have no spell ID to
         -- pass to C_Spell.GetSpellTexture -- that call is guarded per-branch
         -- rather than handed a nil, since a nil spellID is not a case the
-        -- real API is documented to accept. Data.CategoryEntry runs the same
-        -- resolution order the drawn cell needs (DECISIONS.md §25): Blizzard's
-        -- pooled item frame first, then GetLastCategoryCooldownSource, then a
-        -- generic label -- so the picker and the grid never disagree.
+        -- real API is documented to accept. Data.CategoryEntry is a cheap,
+        -- non-discovering read of the persisted art cache (DECISIONS.md §25,
+        -- task 19) -- the expensive resolve that fills it runs from combat
+        -- transitions, not here, so a category the cache has not resolved
+        -- yet draws the generic icon until then. UpdateState's category
+        -- branch repaints this same cell once a later resolve lands, so
+        -- Rebuild does not need to be forced again for that.
         local texture
         if placement.categoryID then
             local entry = Data.CategoryEntry(placement.categoryID)
@@ -1063,6 +1075,25 @@ function CV:UpdateState()
             -- source fails OPEN here, same as an unreadable item cooldown
             -- above: never hide the cell on a failed resolve (§13's failure
             -- shape -- an empty cell reads as a broken addon).
+
+            -- Repaint against the persisted category-art cache. Rebuild paints
+            -- the cell once, at spec-change time, and used to never touch
+            -- icon.tex again -- so a resolve landing later (Data.ResolveCategoryArt
+            -- on a combat transition) never reached an already-drawn cell
+            -- until the player forced a rebuild by touching a dropdown
+            -- (DECISIONS.md §25, task 19). Data.CategoryEntry is cheap here,
+            -- so calling it every tick is fine; the inequality guard makes
+            -- this a no-op on every tick after the one that actually changed.
+            -- icon.baseTexture is kept in step too -- Rebuild sets it and aura
+            -- mode swaps art against it, so leaving it stale would be a
+            -- second bug of the same shape.
+            local entry = Data.CategoryEntry(icon.categoryID)
+            local texture = entry and entry.icon
+            if texture and texture ~= icon.baseTexture then
+                icon.tex:SetTexture(texture)
+                icon.baseTexture = texture
+            end
+
             local itemID = ResolveCategoryItem(icon.categoryID)
 
             if not itemID then
@@ -1436,6 +1467,14 @@ driver:SetScript("OnEvent", function(_, event, arg1)
         -- flipped yet while this event is being handled, and guessing wrong
         -- here used to strand the viewer hidden for a whole fight.
         CV:UpdateVisibility(event == "PLAYER_REGEN_DISABLED")
+        -- Combat entry is when Blizzard's own viewer starts drawing and its
+        -- item-frame pool populates -- before that, category art had nothing
+        -- to resolve from (fault B, DECISIONS.md §25, task 19). Combat exit
+        -- is the cheap second chance. Not SPELL_UPDATE_COOLDOWN: that fires
+        -- constantly, and a fully-resolved cache already makes this a no-op.
+        -- Runs before UpdateState so a resolve that lands this tick reaches
+        -- the drawn cell in the same event, via the repaint above.
+        Data.ResolveCategoryArt()
         CV:UpdateState()
         return
     end

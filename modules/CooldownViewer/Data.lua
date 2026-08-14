@@ -839,52 +839,32 @@ end
 -- reach for, not anything read out of Blizzard's data.
 local GENERIC_CATEGORY_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 
+--- The persisted cache: ThugUI_Config.cvCategoryArt, categoryID -> {name, icon}.
+--- Account-wide by design (DECISIONS.md §25, task 19) -- a category's
+--- Blizzard-drawn icon does not vary by character, so a resolve on one alt
+--- answers for all of them. Seeded HERE and nowhere else, the same way Store()
+--- above lazily seeds the table-valued ThugUI_Config.cv: ER.defaults is copied
+--- by reference (`ThugUI_Config[key] = value`), so a table default there would
+--- alias the live config onto the defaults table. ER.defaults carries a comment
+--- saying so where the key would otherwise sit.
+local function CategoryArtCache()
+    ThugUI_Config.cvCategoryArt = ThugUI_Config.cvCategoryArt or {}
+    return ThugUI_Config.cvCategoryArt
+end
+
 --- Name and icon for a category-only placement (potions, healthstones -- no
---- spell ID exists to look either up from). Resolution order, first that
---- answers wins -- DECISIONS.md §25, task 18:
----
----   1. Blizzard's own pooled item frame for this category's cooldownID.
----      Localised and correct for all four categories; the same kind of call
----      BlizzBuffs already makes (item:GetCooldownID()) to match placements
----      to frames. Reading it is fine; writing to it is what caused §15's
----      taint bug, and nothing here writes anything.
----   2. C_Spell.GetLastCategoryCooldownSource -- a catch-up call that returns
----      NOTHING until the category has actually been triggered this session
----      (MayReturnNothing = true). That is the normal case on a fresh login,
----      not a failure. SecretWhenCooldownsRestricted, so both returns are
----      screened with issecretvalue before any nil test.
----   3. A generic label. Never returns nil -- the picker row and the drawn
----      cell both need SOMETHING, and an empty one reads as a broken addon,
----      the exact §13 failure shape this project keeps hitting.
+--- spell ID exists to look either up from). CHEAP AND NON-DISCOVERING: reads
+--- the persisted cache and returns the generic entry on a miss. It must
+--- NEVER walk viewers or call GetLastCategoryCooldownSource -- that cost is
+--- exactly why it is split out from Data.ResolveCategoryArt below
+--- (DECISIONS.md §25, task 19). Safe to call from UpdateState every tick and
+--- from the picker on every open.
 function Data.CategoryEntry(categoryID)
     if not categoryID then return nil end
 
-    local info = Data.GetCategoryInfo(categoryID)
-    local cooldownID = info and info.cooldownID
-
-    if cooldownID and CV.BlizzBuffs and CV.BlizzBuffs.ItemForCooldownID then
-        local item = CV.BlizzBuffs:ItemForCooldownID(cooldownID)
-        if item then
-            local texOK, texture = pcall(item.GetSpellTexture, item)
-            local nameOK, name = pcall(item.GetNameText, item)
-            if texOK and texture and nameOK and name and name ~= "" then
-                return { categoryID = categoryID, name = name, icon = texture }
-            end
-        end
-    end
-
-    if C_Spell and C_Spell.GetLastCategoryCooldownSource then
-        local ok, spellID, itemID = pcall(C_Spell.GetLastCategoryCooldownSource, categoryID)
-        -- issecretvalue asked FIRST: comparing a secret against nil is itself
-        -- a comparison, and comparison is the operation that throws.
-        local secret = issecretvalue and (issecretvalue(spellID) or issecretvalue(itemID))
-        if ok and not secret and spellID and itemID then
-            local name = C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(itemID)
-            local icon = C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(itemID)
-            if name and icon then
-                return { categoryID = categoryID, name = name, icon = icon }
-            end
-        end
+    local cached = CategoryArtCache()[categoryID]
+    if cached then
+        return { categoryID = categoryID, name = cached.name, icon = cached.icon }
     end
 
     return {
@@ -892,6 +872,124 @@ function Data.CategoryEntry(categoryID)
         name = ("Consumable (category %d)"):format(categoryID),
         icon = GENERIC_CATEGORY_ICON,
     }
+end
+
+--- The expensive pass Data.CategoryEntry no longer makes. Resolves every
+--- category currently true for this character (Data.DiscoverCategoryIDs)
+--- that is not already in the persisted cache, first that answers wins --
+--- DECISIONS.md §25, task 19:
+---
+---   1. Blizzard's own pooled item frame for this category's cooldownID.
+---      item:GetSpellCategoryIcon() is preferred -- it says exactly what we
+---      want (Decision 1: the category's own art, never the triggering
+---      item's) and cannot drift if Blizzard ever reorder GetSpellTexture's
+---      internal fallback -- and item:GetSpellTexture() is the fallback for
+---      a build where that method is absent. Name still from
+---      item:GetNameText(). pcall throughout: these are Blizzard internals,
+---      and a renamed method must degrade, not throw. Reading the frame is
+---      fine; writing to it is what caused §15's taint bug, and nothing here
+---      writes anything.
+---   2. C_Spell.GetLastCategoryCooldownSource -- a catch-up call that returns
+---      NOTHING until the category has actually been triggered this session
+---      (MayReturnNothing = true), the normal case on a fresh login, not a
+---      failure. SecretWhenCooldownsRestricted, so both returns are screened
+---      with issecretvalue before any nil test. Demoted to a last resort: it
+---      shows the triggering item's own icon rather than the category's,
+---      which contradicts Decision 1, but a real potion icon beats a
+---      question mark, and it only runs when path 1 could not answer.
+---
+--- A resolved entry is STICKY -- an already-cached category is skipped
+--- entirely, so a pass where every path fails again can never downgrade a
+--- resolved entry back to the generic one. Once every category is cached the
+--- per-category work stops entirely and only the DiscoverCategoryIDs sweep
+--- remains -- the same sweep Rebuild already performs, twice per fight rather
+--- than per frame, which is why it is not worth a flag to skip.
+--- Called only from PLAYER_REGEN_DISABLED/ENABLED
+--- (Core.lua): combat entry is when Blizzard's own viewer starts drawing and
+--- its item-frame pool populates, which is what turned "question marks at
+--- login" out to be. Never called from UpdateState, and never polled.
+--- Which categories a resolve pass should try: everything discovery can see,
+--- PLUS every category the player has actually placed.
+---
+--- The placed half is not redundant, and leaving it out was a real regression
+--- on 2026-08-13: discovery is built from the Cooldown Manager sweep, and when
+--- that sweep comes back empty -- the same session logs
+--- "no Blizzard cooldown-viewer item frames found" -- a placed category is not
+--- in the list, so it is never even attempted. The old uncached CategoryEntry
+--- never had this hole, because it was called with the placed categoryID
+--- directly and tried GetLastCategoryCooldownSource on it regardless of what
+--- discovery thought existed. A cell the player can SEE must always be worth a
+--- resolve attempt.
+local function CategoriesNeedingArt()
+    local seen, ids = {}, {}
+
+    local function add(categoryID)
+        if categoryID and not seen[categoryID] then
+            seen[categoryID] = true
+            table.insert(ids, categoryID)
+        end
+    end
+
+    for _, categoryID in ipairs(Data.DiscoverCategoryIDs()) do add(categoryID) end
+
+    local profile = CV.CurrentProfile and CV:CurrentProfile()
+    if profile and profile.placements then
+        for _, placement in ipairs(Data.GetPlacements(profile)) do
+            add(placement.categoryID)
+        end
+    end
+
+    return ids
+end
+
+function Data.ResolveCategoryArt()
+    local cache = CategoryArtCache()
+
+    for _, categoryID in ipairs(CategoriesNeedingArt()) do
+        if not cache[categoryID] then
+            local resolved
+
+            local info = Data.GetCategoryInfo(categoryID)
+            local cooldownID = info and info.cooldownID
+            if cooldownID and CV.BlizzBuffs and CV.BlizzBuffs.ItemForCooldownID then
+                local item = CV.BlizzBuffs:ItemForCooldownID(cooldownID)
+                if item then
+                    local texture
+                    if item.GetSpellCategoryIcon then
+                        local ok, tex = pcall(item.GetSpellCategoryIcon, item)
+                        if ok and tex then texture = tex end
+                    end
+                    if not texture then
+                        local ok, tex = pcall(item.GetSpellTexture, item)
+                        if ok and tex then texture = tex end
+                    end
+                    local nameOK, name = pcall(item.GetNameText, item)
+                    if texture and nameOK and name and name ~= "" then
+                        resolved = { name = name, icon = texture }
+                    end
+                end
+            end
+
+            if not resolved and C_Spell and C_Spell.GetLastCategoryCooldownSource then
+                local ok, spellID, itemID = pcall(C_Spell.GetLastCategoryCooldownSource, categoryID)
+                -- issecretvalue asked FIRST: comparing a secret against nil is
+                -- itself a comparison, and comparison is the operation that
+                -- throws.
+                local secret = issecretvalue and (issecretvalue(spellID) or issecretvalue(itemID))
+                if ok and not secret and spellID and itemID then
+                    local name = C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(itemID)
+                    local icon = C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(itemID)
+                    if name and icon then
+                        resolved = { name = name, icon = icon }
+                    end
+                end
+            end
+
+            if resolved then
+                cache[categoryID] = resolved
+            end
+        end
+    end
 end
 
 --- Everything the Cooldown Manager reports for this spec, for /thugcv probe.
@@ -1086,6 +1184,13 @@ function Data.BuildSpellList(source, search)
             end
         end
     end
+    -- Opening the picker is a resolve opportunity, and it used to be one for
+    -- free: before the cache existed, CategoryEntry resolved on every call, so
+    -- the list was as fresh as the moment you looked at it. Making that call
+    -- cheap moved the cost here, deliberately -- once the cache answers this
+    -- is a no-op, and the player opening the picker is not a hot path.
+    if #categoryIDs > 0 then Data.ResolveCategoryArt() end
+
     for _, categoryID in ipairs(categoryIDs) do
         local key = Data.PlacementKey({ categoryID = categoryID })
         if not seen[key] then
