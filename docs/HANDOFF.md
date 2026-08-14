@@ -1,86 +1,99 @@
-# Handoff — state as of 2026-08-12 (evening)
+# Handoff — state as of 2026-08-13
 
-## START HERE — main is clean, the radial resource ring is the next job
+## START HERE
 
-`charge-spells-can-hide` is **merged into `main` and pushed** (`c28b1a2`).
-**195 passing, 0 failures.** Nothing is in flight, nothing is half-done.
+**Branch `radial-resource-ring`, 9 commits ahead of `main`, nothing pushed.**
+Working tree clean. **213 passing, 0 failures.** Nothing is half-done and no
+agent is mid-flight.
 
-The section below this one is the full account of what that branch did and why;
-read it if you are picking up anything to do with charges, items, or secret
-values. It is still accurate — it has just stopped being the current job.
+**The branch is deliberately not merged.** Everything on it is green and
+reviewed, but the potion/healthstone work has never been seen in the game. The
+merge is a one-liner whenever the player is happy — ask before doing it.
 
-### Built 2026-08-12, awaiting the player's eyes
+### What the player needs to look at in game, in priority order
 
-Task 16 is **done and reviewed** — `DECISIONS.md` §23, report in `tasks/reports/`.
-**201 passing, 0 failures**, six added and none removed against a clean tree, all
-six confirmed to fail against the unmodified module. Uncommitted work: none.
+1. **Potions and healthstones (task 18) — nothing here has been seen on
+   screen.** Open the Cooldown Viewer picker and look for a potion / healthstone
+   row; place one; check it draws and that its cooldown runs after you drink
+   something. The harness proves it does not throw and the logic is right. It
+   **cannot** prove a potion appears in a cell.
+   - Specifically unverified: which `Enum.CooldownViewerCategory` these arrive
+     under (server-driven, not stated in Blizzard's source), and whether the
+     name/icon resolution order works against a real Cooldown Manager.
+   - On a fresh login, before you have drunk anything, a potion cell having no
+     spell behind it is **normal**, not a bug — Blizzard's own code skips it too.
+2. **The rebuilt Cursor Rings page.** The test is not "does it look tidier". It
+   is **"can you find the resource ring's `Show:` dropdown without being told
+   where it is"** — that is the defect this rebuild exists for (§26).
+3. **Drain direction.** New dropdown under the resource ring. Flip it to
+   counter-clockwise and confirm the ring actually reverses. **This is the least
+   certain thing in the session**: Blizzard's own 12.1 UI uses *none* of the
+   `SetRadialProgressBar*` family, and it is unverified that the texture even
+   exposes those methods. If the dropdown does nothing, look for
+   `RING: SetRadialProgressBarReverse unavailable` in the log — that is the
+   guard firing, not a crash, and it is a real possible outcome.
+4. **The resource ring after the Cooldown path was deleted.** It should behave
+   exactly as it did when you tested it, since the radial path is untouched. If
+   the ring vanishes entirely, that is the capability gate — there is no
+   fallback any more, by design.
 
-**Two things need the player in game, and they are separable:**
+### Verified in game this session
 
-1. **Does the radial ring look like the old one?** Flip `resourceRingRadialBar`
-   on (Cursor Rings page) **at a mid-range resource level** — at 0% or 100% a
-   start-angle mismatch is invisible. `StatusBar` has no `SetRotation`, so
-   alignment is attempted by rotating the managed texture and nobody knows
-   whether that moves the fill's start angle or only the artwork.
-2. **Does the old ring track at all?** The player reported on 2026-08-12 that the
-   Cooldown ring's colour follows shapeshift form while the level never moves.
-   Their visibility is `always`, so this is happening out of combat too, where
-   nothing is secret. `KNOWN-ISSUES.md`, "The resource ring may never have
-   tracked at all". The suspect is `Pause()` being called after every
-   `SetCooldown` with `Resume()` never called anywhere. **Unverified.**
+**The radial resource ring works.** Enabled mid-combat, tracked live through a
+fight, followed shapeshift form swaps (rage in Bear, energy in Cat). That
+retired the "permanently impossible" framing this project carried since
+2026-08-09, confirmed the start angle, and proved the creation path is not
+combat-gated. `DECISIONS.md` §23.
 
-**These two settle each other.** The radial path calls `Pause` nowhere, so if the
-radial ring tracks and the Cooldown ring does not, the cause is the pause rather
-than secrecy. Ask the player to compare them before writing any fix.
+### What changed this session
 
-**Unanswered as of this writing:** whether the freeze happens out of combat, and
-whether the player had reloaded while the agent was mid-edit (the working tree
-held 182 lines of in-progress work for a while, so an early report may have been
-of half-written code). Do not assume either.
+| Change | Where | State |
+|---|---|---|
+| Radial ring confirmed working in combat | `DECISIONS.md` §23 | **Verified in game** |
+| Cooldown resource ring + `resourceRingRadialBar` **deleted** | §27 | Green, unseen |
+| Clockwise / counter-clockwise drain direction | §23, task 17 | Green, unseen |
+| Cursor Rings page rebuilt in two columns | §26, task 17 | Green, unseen |
+| `Window:BuildPage` sizes scroll from the tallest panel | task 17 | Green, unseen |
+| Potions/healthstones placeable, discovered not hardcoded | §25, task 18 | Green, unseen |
+| oUF `portrait.lua` secret-boolean guard | — | **No test possible**, see below |
+| `UPCOMING-PATCH.md` retired, 12.2 skeleton started | §24 | Docs |
+| `QA.md` deleted, its two real facts moved | §28 | Docs |
+| Charge spells in `cooldown` mode: settled, not open | §21 | Decision |
 
-### The job as originally framed: rebuild the resource ring on a radial StatusBar
+### Three things that are decided — do not re-open them
 
-Branch: **`radial-resource-ring`**. Chosen by the player 2026-08-12.
+- **A charge spell in `cooldown` mode stays exactly as it is.** Hide when spent,
+  no sweep. Asked twice, answered 2026-08-13. Do **not** build the
+  `SetCooldownFromDurationObject` sweep merely because it is measured possible.
+- **The Cooldown resource ring is gone and is not coming back.** It never
+  tracked at all. §27 has the general rule that came out of it: a fallback earns
+  its keep only if it is *known* to work.
+- **`QA.md` is deleted on purpose.** §28. Do not recreate it as a checklist;
+  what survived is in `KNOWN-ISSUES.md` where it will actually be read.
 
-`KNOWN-ISSUES.md`, "Resource ring cannot show an exact level in combat", has the
-whole story. The short version:
+### Known gaps, stated plainly
 
-- The ring cannot show an exact level in combat today because a radial swipe
-  comes from a `Cooldown` widget, and `Cooldown:SetCooldownDuration(secret)` is
-  **refused** from tainted code. Measured twice, on 12.0.7 and again on 12.1.
-- That measurement was right and **the conclusion drawn from it was wrong.**
-  "A straight bar could show exact energy where a ring cannot" treated *radial*
-  as a property of the `Cooldown` widget — which it was, at the time.
-- **12.1 adds `StatusBarRenderMode.Radial`**, and `StatusBar:SetValue(secret)` is
-  measured **accepted in combat** (`ThugUI_DebugLog.secrets`, 2026-08-11 21:05).
-  A radial StatusBar is a ring, and it takes the value we are not allowed to read.
+- **`libs/oUF/` has no test coverage at all.** The harness builds no oUF
+  environment and stubs no unit-state API. The `portrait.lua` fix is verified by
+  reading and `luac -p` only, and it is a **ThugUI local patch** — marked in the
+  file, because upstream guards the neighbouring line and a library update would
+  silently drop ours. `Tests/README.md` has the detail.
+- **We are the first consumer of the radial texture API anywhere.** Green in the
+  harness is weaker evidence than usual for anything `SetRadialProgressBar*`.
 
-**This is a design change, not a bug fix.** Confirm the design with the player
-before building — `CLAUDE.md` §3. The existing ring works and is in daily use;
-breaking something that has worked for months is much worse than shipping this
-slowly.
+### Still open, unclaimed
 
-**Do not delete the current ring while building the new one.** Same rule as the
-ECV/BCV/GCV fallback: it is the escape hatch if the radial mode misbehaves.
-
-### Still open, unclaimed, in no particular order
-
-- **`UPCOMING-PATCH.md` should be deleted.** 12.1 is live; the file still says
-  *"Current live version: 12.0.7"* and is now actively misleading. `CLAUDE.md`'s
-  own process says it goes on patch day, with anything still true moved into
-  `DECISIONS.md`.
-- **Does a charge spell in `cooldown` mode want a sweep toward its next charge?**
-  Asked twice, never answered. It needs the `SetCooldownFromDurationObject`
-  route, which is measured accepted mid-combat but unbuilt. Ask; do not assume.
-- **The workaround panel's rewritten text has not been seen on screen.** Three
-  passages were corrected 2026-08-12 and only render in game.
-- **Potions and the healthstone.** `spellCategoryID` Cooldown Manager entries
-  carry no spell ID at all and need a second placement kind. Blizzard's own
-  source has a matching TODO (`CooldownViewer.lua:1018`).
-- **oUF `portrait.lua`** truth-tests possibly-secret booleans at `:59`, `:63`,
-  `:67`. The `guid` half is guarded; `isAvailable` is not. Whether it can throw
-  depends on whether `UnitIsConnected`/`UnitIsVisible` are secret — unmeasured.
-- **`QA.md` has never been run.**
+- **Merge `radial-resource-ring` into `main` and push**, once the player has
+  looked at the four items above.
+- **Whether `GroupBuff` rows should be excluded from the picker.** §20 flags that
+  the category has no viewer frame, so any rows it returns can never draw. Check
+  the probe before deciding.
+- **`BB:IsChargeSpell` and its cache are dead code**, deliberately left. If
+  revived, simplify to `info.charges` (§20).
+- **Two characters of the same spec share one layout.** Real limitation, now in
+  `KNOWN-ISSUES.md`. Nobody has yet wanted them configured apart.
+- **Geometry is only ever tested at one UI scale.** Standing blind spot, now in
+  `KNOWN-ISSUES.md` with a first move for when a geometry bug appears.
 
 ---
 
