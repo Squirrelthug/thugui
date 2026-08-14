@@ -12,30 +12,31 @@
 -- but owns its own frame, events and config keys, so it can be switched off
 -- without touching any of that.
 --
--- HOLDING A STATIC ARC
+-- A RADIAL STATUSBAR, AND WHY THERE IS ONLY ONE IMPLEMENTATION NOW
 --
--- Cooldown frames animate by design; a resource level is a fixed fraction.
--- SetCooldown is seeded so the *remaining* portion equals the resource
--- fraction, then Pause() freezes it there. Re-seeding happens on power events
--- rather than per frame, which is why this costs nothing at idle.
+-- UnitPower returns a secret number while tainted, so this ring cannot compute
+-- its own fill fraction -- arithmetic on a secret throws. 12.1 added
+-- StatusBarRenderMode.Radial, and StatusBar:SetValue/SetMinMaxValues both
+-- carry SecretArguments = "AllowedWhenTainted", measured accepted at every
+-- phase of a full combat (DECISIONS.md §20). So the engine computes the fill
+-- from values we are never allowed to read, and the ring tracks the real level
+-- in combat with no arithmetic and no comparison anywhere in this file.
 --
--- A SECOND IMPLEMENTATION: THE RADIAL STATUSBAR
+-- **Verified in game 2026-08-13**: enabled mid-combat, tracked live through a
+-- fight, and followed shapeshift form swaps (rage in Bear, energy in Cat).
 --
--- The Cooldown ring above cannot show the exact level in combat: UnitPower
--- returns a secret number while tainted, and Cooldown:SetCooldownDuration
--- refuses one outright (KNOWN-ISSUES.md, "Resource ring cannot show an exact
--- level in combat"). 12.1 added StatusBarRenderMode.Radial, and
--- StatusBar:SetValue/SetMinMaxValues both carry
--- SecretArguments = "AllowedWhenTainted" -- measured accepted at every phase
--- of a full combat (DECISIONS.md §20). So a StatusBar in radial render mode
--- can track the real level in combat with no arithmetic and no comparison:
--- the engine computes the fill from values we are never allowed to read.
+-- This file used to carry a SECOND implementation on a Cooldown widget, which
+-- was the default, with the radial bar opt-in behind `resourceRingRadialBar`.
+-- **Both the Cooldown path and that setting were removed on 2026-08-13, at the
+-- player's explicit instruction.** It was not a working fallback: it seeded a
+-- sweep and called Pause() with Resume() never called anywhere, so it froze at
+-- the first value it ever drew and never tracked at all -- out of combat too,
+-- where nothing is secret. Keeping a broken escape hatch for a path verified
+-- working is a cost with no benefit. DECISIONS.md §27, KNOWN-ISSUES.md.
 --
--- Both implementations ship (CLAUDE.md, "never break the fallback"). The
--- Cooldown ring stays the default; `resourceRingRadialBar` opts into the
--- StatusBar one. Everything above the frame -- GetPowerType, GetColor,
--- ShouldShow, the event driver -- is shared between them. Only EnsureFrame,
--- SyncGeometry and Update branch by which is active.
+-- So there is no fallback here on purpose. On a client without the radial
+-- render mode the ring simply does not draw, and says so once in the log. The
+-- TOC targets 12.1, which has it.
 -- ============================================================================
 
 ThugUI = ThugUI or {}
@@ -44,23 +45,17 @@ ThugUI_Config = ThugUI_Config or {}
 local RR = {}
 ThugUI.ResourceRing = RR
 
--- Arbitrary: only the ratio between elapsed and total matters for the arc.
-local ARC_DURATION = 1000
-
--- RR.frame is whichever of the two below is currently in use; RR.frameKind
--- says which ("cooldown" | "radial"). The two frames below it are cached
--- lazily and independently, so flipping the setting back and forth never
--- rebuilds either one twice, and never reuses a frame of the wrong type.
 RR.frame = nil
-RR.frameKind = nil
-RR.cooldownFrame = nil
-RR.radialFrame = nil
 -- Cached once a client without StatusBarRenderMode.Radial is detected, so the
 -- capability check (and its LogOnce) only ever runs once per session rather
--- than on every Update while the setting is on.
+-- than on every Update.
 RR.radialUnsupported = nil
-RR.lastFraction = nil
 RR.lastPowerToken = nil
+-- nil until the direction has been applied once. The reverse flag is sticky on
+-- the texture, so it only needs writing when the setting actually changes --
+-- but it must be written at least once, because a texture created fresh this
+-- session has never been told which way to run.
+RR.lastDrainDirection = nil
 
 -- ----------------------------------------------------------------------------
 -- Which resource to show
@@ -129,10 +124,13 @@ end
 -- Frame
 -- ----------------------------------------------------------------------------
 
---- The Cooldown-widget ring: today's default, and the fallback for a client
---- that lacks StatusBarRenderMode.Radial. Unchanged by this task.
-function RR:EnsureCooldownFrame()
-    if self.cooldownFrame then return self.cooldownFrame end
+--- The ring: a StatusBar in Enum.StatusBarRenderMode.Radial (12.1+).
+--- SetValue/SetMinMaxValues accept a secret from tainted code (DECISIONS.md
+--- §20, measured), which is what lets this track the real resource level in
+--- combat. There is no second implementation to choose between any more.
+function RR:EnsureFrame()
+    if self.frame then return self.frame end
+    if self.radialUnsupported then return nil end
     if not ThugUI_CursorFrame then return nil end
 
     -- Parented to UIParent, ANCHORED to the cursor frame. Not parented to it:
@@ -141,90 +139,41 @@ function RR:EnsureCooldownFrame()
     -- impossible. Anchors still resolve against a hidden frame, and
     -- ER:OnUpdate repositions the cursor frame every frame regardless of
     -- visibility, so this tracks the cursor either way.
-    local f = CreateFrame("Cooldown", "ThugUI_RESOURCE_RING", UIParent)
-    f:SetPoint("CENTER", ThugUI_CursorFrame, "CENTER")
-    -- A strata below the cursor frame's HIGH, so the cast sweep always draws
-    -- over the top of this rather than fighting it on frame level.
-    f:SetFrameStrata("MEDIUM")
-    f:SetSwipeTexture("Interface\\AddOns\\ThugUI\\media\\Ring_Main")
-    f:SetHideCountdownNumbers(true)
-    f:SetDrawEdge(false)
-    f:SetReverse(false)
-    f:Hide()
-
-    self.cooldownFrame = f
-    return f
-end
-
---- The StatusBar ring, rendered in Enum.StatusBarRenderMode.Radial (12.1+).
---- SetValue/SetMinMaxValues accept a secret from tainted code (DECISIONS.md
---- §20, measured), so this path can track the real resource level in combat
---- where the Cooldown ring above cannot. Only built when the setting asks
---- for it, and only if this client actually has the capability.
-function RR:EnsureRadialFrame()
-    if self.radialFrame then return self.radialFrame end
-    if self.radialUnsupported then return nil end
-    if not ThugUI_CursorFrame then return nil end
-
-    -- A different global name from the Cooldown ring on purpose: two frames
-    -- under one global name is exactly what broke Edit Mode (DECISIONS.md
-    -- §15), and here both frames can genuinely exist in one session if the
-    -- setting is flipped.
+    --
+    -- The global name keeps the _RADIAL suffix it was born with rather than
+    -- inheriting the retired Cooldown ring's plain name. Renaming would buy
+    -- nothing and risks colliding with a name some other addon or a Blizzard
+    -- frame has since taken -- which is exactly how Edit Mode broke once
+    -- before (DECISIONS.md §15).
     local f = CreateFrame("StatusBar", "ThugUI_RESOURCE_RING_RADIAL", UIParent)
 
     -- Capability gate: an older client has neither the enum nor the method.
-    -- The radial path must not be taken whatever the setting says -- fall
-    -- back to the Cooldown ring and say so once, since "the setting is on
-    -- and nothing draws" is indistinguishable from a broken feature.
+    -- There is no fallback to drop to any more, so this means no ring at all
+    -- -- say so once, because "the setting is on and nothing draws" is
+    -- indistinguishable from a broken feature.
     if not (Enum and Enum.StatusBarRenderMode) or not f.SetRenderMode then
         self.radialUnsupported = true
         f:Hide()
         if ThugUI.Diagnostics then
             ThugUI.Diagnostics:LogOnce("resource-ring-radial-unsupported", "RING",
                 "StatusBarRenderMode.Radial unavailable on this client -- "
-                .. "resource ring falls back to the Cooldown implementation")
+                .. "the resource ring cannot draw. Requires 12.1 or later")
         end
         return nil
     end
 
+    -- A strata below the cursor frame's HIGH, so the cast sweep always draws
+    -- over the top of this rather than fighting it on frame level.
     f:SetPoint("CENTER", ThugUI_CursorFrame, "CENTER")
     f:SetFrameStrata("MEDIUM")
     f:SetRenderMode(Enum.StatusBarRenderMode.Radial)
     f:SetStatusBarTexture("Interface\\AddOns\\ThugUI\\media\\Ring_Main")
     f:Hide()
 
-    self.radialFrame = f
-    return f
-end
-
---- Picks whichever of the two frames the setting (and this client's
---- capability) resolve to, and swaps RR.frame/RR.frameKind to match. The two
---- are different widget types, so flipping the setting must never reuse one
---- for the other -- it switches which cached frame is active instead.
-function RR:EnsureFrame()
-    if not ThugUI_CursorFrame then return nil end
-
-    local wantRadial = ThugUI_Config.resourceRingRadialBar == true
-    local f = wantRadial and self:EnsureRadialFrame() or nil
-    if not f then
-        f = self:EnsureCooldownFrame()
-    end
-    if not f then return nil end
-
-    if f ~= self.frame then
-        -- The setting just flipped, or this is the first frame built this
-        -- session. Hide whichever ring was active -- SetParent(nil) would
-        -- orphan it rather than free it, so the unused frame is simply left
-        -- hidden for the rest of the session.
-        if self.frame then self.frame:Hide() end
-        self.frame = f
-        self.frameKind = (f == self.radialFrame) and "radial" or "cooldown"
-        -- Force a fresh seed and recolour on the newly active frame.
-        self.lastFraction = nil
-        self.lastPowerToken = nil
-        self:SyncGeometry()
-    end
-
+    self.frame = f
+    self.lastPowerToken = nil
+    self.lastDrainDirection = nil
+    self:SyncGeometry()
     return f
 end
 
@@ -247,20 +196,54 @@ function RR:SyncGeometry()
         and ER:ClockToRadians(ThugUI_Config.castRotation or 12)
         or 0
 
-    if self.frameKind == "radial" then
-        -- StatusBar has no SetRotation of its own -- that is a Cooldown
-        -- method. The closest analogue is rotating the managed texture.
-        -- Whether that rotates the radial fill's start angle, or only the
-        -- artwork under a fill that still starts where it always did, could
-        -- not be determined from source or the harness -- see the task 16
-        -- report for what was actually attempted and observed.
-        local tex = f.GetStatusBarTexture and f:GetStatusBarTexture()
-        if tex and tex.SetRotation then
-            tex:SetRotation(radians)
-        end
-    else
-        f:SetRotation(radians)
+    -- StatusBar has no SetRotation of its own -- that is a Cooldown method.
+    -- The closest analogue is rotating the managed texture, and the player
+    -- confirmed in game on 2026-08-13 that this does move the fill's start
+    -- angle and not merely the artwork under it.
+    --
+    -- 12.1 does have a first-class version of this in
+    -- SetRadialProgressBarStartOffset, and we are deliberately NOT using it --
+    -- the workaround is verified working and the player chose to leave it.
+    -- DECISIONS.md §23 carries the trigger for revisiting: if the start angle
+    -- ever misbehaves, especially after a patch, swap to that API rather than
+    -- debugging this rotation.
+    local tex = f.GetStatusBarTexture and f:GetStatusBarTexture()
+    if tex and tex.SetRotation then
+        tex:SetRotation(radians)
     end
+end
+
+--- Clockwise or counter-clockwise, per `resourceRingDrainDirection`.
+---
+--- SetRadialProgressBarReverse lives on the TEXTURE, not on the StatusBar.
+--- StatusBar:SetReverseFill is NOT the same thing and does not apply here --
+--- its only use in Blizzard's entire source is on a plain horizontal bar, and
+--- there is no evidence it touches radial mode at all.
+---
+--- Every call is guarded because we are the first consumer of this API family
+--- anywhere: an exhaustive search of Blizzard's own live 12.1 source found
+--- zero uses of any SetRadialProgressBar* method. It is also unverified that
+--- the texture from GetStatusBarTexture() exposes them -- the generated docs
+--- never state object composition. If it does not, the ring keeps working in
+--- its default direction rather than erroring or blanking.
+function RR:ApplyDrainDirection(f)
+    local want = ThugUI_Config.resourceRingDrainDirection or "clockwise"
+    if want == self.lastDrainDirection then return end
+
+    local tex = f.GetStatusBarTexture and f:GetStatusBarTexture()
+    if not (tex and tex.SetRadialProgressBarReverse) then
+        if ThugUI.Diagnostics then
+            ThugUI.Diagnostics:LogOnce("resource-ring-no-reverse", "RING",
+                "SetRadialProgressBarReverse unavailable -- resource ring "
+                .. "drain direction cannot be changed on this client")
+        end
+        -- Remembered anyway, so the miss is logged once rather than per update.
+        self.lastDrainDirection = want
+        return
+    end
+
+    tex:SetRadialProgressBarReverse(want == "counterclockwise")
+    self.lastDrainDirection = want
 end
 
 -- ----------------------------------------------------------------------------
@@ -293,7 +276,6 @@ function RR:Update()
 
     if not self:ShouldShow() then
         f:Hide()
-        self.lastFraction = nil
         return
     end
 
@@ -301,90 +283,7 @@ function RR:Update()
     local current = UnitPower("player", powerType)
     local maximum = UnitPowerMax("player", powerType)
 
-    if self.frameKind == "radial" then
-        self:UpdateRadial(f, current, maximum, powerToken)
-        return
-    end
-
-    self:UpdateCooldown(f, current, maximum, powerToken)
-end
-
---- The Cooldown-widget path. Unchanged in behaviour from before this task --
---- only pulled into its own function so Update can dispatch between it and
---- UpdateRadial below.
-function RR:UpdateCooldown(f, current, maximum, powerToken)
-    -- UnitPower returns a SECRET number while our execution is tainted -- the
-    -- max comes back plain, the current does not. Arithmetic on a secret
-    -- throws, and so does comparing one, so both have to be screened BEFORE
-    -- any use. This threw on every visibility update in combat, from inside
-    -- ER:UpdateVisibility, which is a path that has to stay clean.
-    local unreadable = issecretvalue and (issecretvalue(current) or issecretvalue(maximum))
-
-    if unreadable then
-        -- Once a session: this condition repeats every update, and the first
-        -- occurrence is the whole story. It also names the likely cause, since
-        -- secret power values follow taint rather than being unconditional.
-        if ThugUI.Diagnostics then
-            ThugUI.Diagnostics:LogOnce("power-secret", "RING",
-                "UnitPower unreadable (secret value) for %s — addon is tainted; "
-                .. "resource level cannot be computed", tostring(powerToken))
-        end
-
-        -- Keep drawing whatever was last resolved. A frozen ring beats an
-        -- error every frame, and the values are readable again out of combat.
-        -- Colour still tracks the power type, which is never secret.
-        if powerToken ~= self.lastPowerToken then
-            self.lastPowerToken = powerToken
-            local r, g, b = self:GetColor(powerToken)
-            f:SetSwipeColor(r, g, b, ThugUI_Config.resourceRingAlpha or 0.55)
-        end
-        -- Never read a value yet: draw the ring full rather than hiding it.
-        -- Hiding here meant that once taint made UnitPower permanently secret,
-        -- lastFraction stayed nil forever and the ring simply never appeared —
-        -- which looks identical to the feature being broken. A full ring is
-        -- visibly wrong, which is the honest failure.
-        if self.lastFraction == nil then
-            f:SetCooldown(GetTime(), ARC_DURATION)
-            if f.Pause then pcall(f.Pause, f) end
-            self.lastFraction = 1
-        end
-
-        f:Show()
-        return
-    end
-
-    current = current or 0
-    maximum = maximum or 0
-
-    if maximum <= 0 then
-        f:Hide()
-        self.lastFraction = nil
-        return
-    end
-
-    local fraction = current / maximum
-    if fraction < 0 then fraction = 0 elseif fraction > 1 then fraction = 1 end
-
-    if powerToken ~= self.lastPowerToken then
-        self.lastPowerToken = powerToken
-        local r, g, b = self:GetColor(powerToken)
-        f:SetSwipeColor(r, g, b, ThugUI_Config.resourceRingAlpha or 0.55)
-    end
-
-    -- Re-seeding on every power tick would restart the swipe needlessly; power
-    -- changes are discrete, so only a changed fraction is worth redrawing.
-    if self.lastFraction ~= fraction then
-        self.lastFraction = fraction
-
-        -- Seed so the REMAINING portion of the sweep equals the fraction, then
-        -- freeze. With SetReverse(false) the drawn arc is what is left to run,
-        -- so starting (1 - fraction) of the way through leaves exactly
-        -- `fraction` drawn.
-        f:SetCooldown(GetTime() - (1 - fraction) * ARC_DURATION, ARC_DURATION)
-        if f.Pause then pcall(f.Pause, f) end
-    end
-
-    f:Show()
+    self:UpdateRadial(f, current, maximum, powerToken)
 end
 
 --- The radial path. SetValue/SetMinMaxValues take a secret directly and the
@@ -417,6 +316,12 @@ function RR:UpdateRadial(f, current, maximum, powerToken)
         local r, g, b = self:GetColor(powerToken)
         f:SetStatusBarColor(r, g, b, ThugUI_Config.resourceRingAlpha or 0.55)
     end
+
+    -- Cheap after the first call -- ApplyDrainDirection returns immediately
+    -- unless the setting actually changed. Done here rather than only at frame
+    -- creation so flipping the dropdown takes effect on the next update,
+    -- matching every other control on that page.
+    self:ApplyDrainDirection(f)
 
     -- Never GetValue() back: SetValue carries
     -- SecretArgumentsAddAspect = { Enum.SecretAspect.BarValue }, so a bar fed

@@ -94,6 +94,18 @@ frameMT.__index = function(tbl, key)
             a.__rotation = a1
             return
         end
+        -- 12.1's texture-level radial API. Recorded rather than acted on, like
+        -- the StatusBar setters above. Note this stub ALWAYS provides the
+        -- method: the guard case that matters is a texture WITHOUT it, and a
+        -- test wanting that has to remove it deliberately (see
+        -- "no SetRadialProgressBarReverse: no throw, ring still draws").
+        -- Blizzard's own UI uses none of this family anywhere, so the harness
+        -- is the only place it has ever been exercised outside the player's
+        -- client -- treat green here as weaker evidence than usual.
+        if key == "SetRadialProgressBarReverse" and type(a) == "table" then
+            a.__radialReverse = a1
+            return
+        end
         -- FontStrings are ordinary stub frames, but they're recorded in a flat
         -- list rather than only reachable through whatever built them --
         -- Panel:Section and friends don't stash their return value anywhere,
@@ -146,11 +158,21 @@ frameMT.__index = function(tbl, key)
             -- be read back by GetText below -- unlike SetPoint et al, nothing
             -- modelled text before this task needed it.
             if key == "SetText" then a.__text = a1 return end
+            -- Paired with GetWidth/GetHeight below. SetSize sets both.
+            if key == "SetWidth" then a.__width = a1 return end
+            if key == "SetHeight" then a.__height = a1 return end
+            if key == "SetSize" then a.__width, a.__height = a1, a2 return end
         end
         if key:match("^Get") then
-            if key == "GetWidth" or key == "GetHeight" or key == "GetFrameLevel" then
-                return 100
-            end
+            -- GetWidth/GetHeight report back what SetWidth/SetHeight recorded,
+            -- falling back to a nominal 100 for a frame nobody has sized. They
+            -- used to return a flat 100 unconditionally, which made SetHeight
+            -- unobservable -- a whole class of layout assertion could not be
+            -- written, and the scroll-height bug in Window:BuildPage sat behind
+            -- it. Tests/README.md, "Hazards in the harness itself".
+            if key == "GetWidth" then return a.__width or 100 end
+            if key == "GetHeight" then return a.__height or 100 end
+            if key == "GetFrameLevel" then return 100 end
             -- Reports back what SetScale recorded. NOT a true parent-chain
             -- product -- a test that needs an effective scale sets it on the
             -- frame it asks about. That is enough for the adopted-buff fit,
@@ -562,6 +584,43 @@ if ThugUI and ThugUI.Window then
             else
                 say(("ok         page %s fits (%dpx of %dpx)")
                     :format(def.id, worstBottom, limit))
+            end
+        end
+    end
+
+    -- Task 17. A SCROLLING page can be built from several panels (Cursor Rings
+    -- is two columns), and Window:BuildPage used to size the scroll child from
+    -- only the first one it created. A taller second column's bottom rows were
+    -- then unreachable -- the scrollbar simply stopped short, with no error and
+    -- nothing visibly wrong until you went looking for a control that was not
+    -- there. Fails against the old `host:SetHeight(math.max(panel:GetHeight(),
+    -- ...))`, which ignores every panel but the first.
+    do
+        local scrolling = nil
+        for _, def in ipairs(ThugUI.Window.pages) do
+            if def.scroll ~= false and def.host and def.host.__thugPanels
+                and #def.host.__thugPanels > 1 then
+                scrolling = def
+                break
+            end
+        end
+
+        if not scrolling then
+            say("SCROLL FAIL no multi-panel scrolling page found to check")
+            failures = failures + 1
+        else
+            local tallest = 0
+            for _, p in ipairs(scrolling.host.__thugPanels) do
+                if p:GetHeight() > tallest then tallest = p:GetHeight() end
+            end
+            local got = scrolling.host:GetHeight()
+            if got + 0.5 < tallest then
+                say(("SCROLL FAIL %s: host is %dpx but its tallest panel is %dpx")
+                    :format(scrolling.id, got, tallest))
+                failures = failures + 1
+            else
+                say(("ok         page %s scrolls to its tallest panel (%dpx)")
+                    :format(scrolling.id, tallest))
             end
         end
     end
@@ -2445,12 +2504,20 @@ if ThugUI.ResourceRing then
             assert(RR.frame, "no resource ring frame")
         end },
 
-        { "arc matches the resource fraction", function()
-            for _, fraction in ipairs({ 0, 0.25, 0.5, 1 }) do
-                _G.__power = fraction * 100
-                RR.lastFraction = nil
+        -- Replaces "arc matches the resource fraction", which asserted the
+        -- Cooldown path's seed-and-Pause arithmetic. That path was deleted on
+        -- 2026-08-13 (DECISIONS.md §27) and there is no fraction computed
+        -- anywhere any more -- the engine derives the fill from the raw pair.
+        -- So the equivalent assertion is that both values arrive unmodified.
+        { "the resource level reaches the bar unmodified", function()
+            for _, level in ipairs({ 0, 25, 50, 100 }) do
+                _G.__power, _G.__powerMax = level, 100
                 RR:Update()
-                Approx(DrawnFraction(), fraction, "arc for fraction " .. fraction)
+                assert(RR.frame.__value == level,
+                    "level " .. level .. " did not reach SetValue, got "
+                        .. tostring(RR.frame.__value))
+                assert(RR.frame.__minMax and RR.frame.__minMax[2] == 100,
+                    "maximum did not reach SetMinMaxValues for level " .. level)
             end
         end },
 
@@ -2491,7 +2558,6 @@ if ThugUI.ResourceRing then
         { "a secret power value does not hide the ring forever", function()
             ThugUI_Config.showResourceRing = true
             ThugUI_Config.resourceRingVisibility = "always"
-            RR.lastFraction = nil
             _G.__power = _G.__SECRET
             RR:Update()
             assert(RR.frame:IsShown(), "an unreadable power value hid the ring")
@@ -2514,30 +2580,19 @@ if ThugUI.ResourceRing then
             ThugUI_Config.resourceRingVisibility = "always"
         end },
 
-        -- Task 16: the radial StatusBar implementation. Everything below
-        -- shares GetPowerType/GetColor/ShouldShow/the event driver with the
-        -- Cooldown steps above; only the frame and its Update path differ.
+        -- The radial StatusBar is now the ONLY implementation. Three cases
+        -- that used to live here asserted the removed Cooldown path and the
+        -- `resourceRingRadialBar` setting that chose between the two, and were
+        -- deleted rather than rewritten on 2026-08-13 -- there was nothing
+        -- left for them to be true about. Recorded in Tests/README.md so the
+        -- deletion is visible rather than looking like coverage that drifted:
+        --   "setting off keeps the Cooldown implementation"
+        --   "flipping the setting swaps frame type without reusing the old one"
+        --   "radial setting on but StatusBarRenderMode absent falls back to Cooldown"
+        -- The third is replaced below by the no-fallback version of itself.
 
-        { "setting off keeps the Cooldown implementation", function()
-            ThugUI_Config.resourceRingRadialBar = false
-            ThugUI_Config.showResourceRing = true
-            ThugUI_Config.resourceRingVisibility = "always"
-            RR.lastFraction = nil
-            _G.__power, _G.__powerMax = 50, 100
-
-            RR:Update()
-
-            assert(RR.frameKind == "cooldown",
-                "setting off did not use the Cooldown ring, got " .. tostring(RR.frameKind))
-            assert(RR.frame.__cooldown,
-                "Cooldown ring did not seed a sweep with the setting off")
-            assert(RR.frame.__value == nil,
-                "Cooldown ring frame recorded a StatusBar SetValue call")
-        end },
-
-        -- The load-bearing case: this is the whole point of the task.
-        { "radial setting on: a secret power reaches SetValue without throwing", function()
-            ThugUI_Config.resourceRingRadialBar = true
+        -- The load-bearing case: the whole reason this implementation exists.
+        { "a secret power reaches SetValue without throwing", function()
             ThugUI_Config.showResourceRing = true
             ThugUI_Config.resourceRingVisibility = "always"
             _G.__power = _G.__SECRET
@@ -2545,23 +2600,21 @@ if ThugUI.ResourceRing then
 
             local ok, err = pcall(function() RR:Update() end)
 
-            assert(ok, "radial Update threw on a secret power value: " .. tostring(err))
-            assert(RR.frameKind == "radial", "setting on did not switch to the radial ring")
+            assert(ok, "Update threw on a secret power value: " .. tostring(err))
             assert(RR.frame.__value == _G.__SECRET, "secret power did not reach SetValue")
-            assert(RR.frame:IsShown(), "radial ring did not show with a secret power value")
+            assert(RR.frame:IsShown(), "ring did not show with a secret power value")
 
             _G.__power = 50
         end },
 
-        { "radial setting on but StatusBarRenderMode absent falls back to Cooldown", function()
-            ThugUI_Config.resourceRingRadialBar = true
+        -- Replaces the old "falls back to Cooldown" case. There is no fallback
+        -- any more, so the contract changed: no ring, no error.
+        { "StatusBarRenderMode absent: no ring, and no throw", function()
             ThugUI_Config.showResourceRing = true
             ThugUI_Config.resourceRingVisibility = "always"
-            -- Force a fresh capability check -- the previous case already
-            -- cached a working radial frame this session, and the capability
-            -- gate only re-checks on first creation.
-            RR.frame, RR.frameKind = nil, nil
-            RR.radialFrame, RR.radialUnsupported = nil, nil
+            -- Force a fresh capability check -- a working frame is already
+            -- cached this session and the gate only runs on first creation.
+            RR.frame, RR.radialUnsupported = nil, nil
             local realMode = Enum.StatusBarRenderMode
             Enum.StatusBarRenderMode = nil
             _G.__power, _G.__powerMax = 50, 100
@@ -2570,42 +2623,14 @@ if ThugUI.ResourceRing then
             Enum.StatusBarRenderMode = realMode
 
             assert(ok, "Update threw with StatusBarRenderMode absent: " .. tostring(err))
-            assert(RR.frameKind == "cooldown",
-                "did not fall back to the Cooldown ring, got " .. tostring(RR.frameKind))
-            assert(RR.frame:IsShown(), "fallback ring did not draw")
+            assert(RR.frame == nil, "a ring frame was kept despite no radial support")
+            assert(RR.radialUnsupported, "the capability miss was not cached")
 
-            -- Undo the capability cache so later cases see a working radial
-            -- path again, matching a real client that does have the enum.
+            -- Undo the cache so later cases see a client that does have it.
             RR.radialUnsupported = nil
         end },
 
-        { "flipping the setting swaps frame type without reusing the old one", function()
-            ThugUI_Config.resourceRingRadialBar = false
-            RR.frame, RR.frameKind = nil, nil
-            RR.cooldownFrame = nil
-            RR.radialFrame, RR.radialUnsupported = nil, nil
-            ThugUI_Config.showResourceRing = true
-            ThugUI_Config.resourceRingVisibility = "always"
-            _G.__power, _G.__powerMax = 50, 100
-
-            RR:Update()
-            local cooldownFrame = RR.frame
-            assert(RR.frameKind == "cooldown", "did not start on the Cooldown ring")
-
-            ThugUI_Config.resourceRingRadialBar = true
-            RR:Update()
-
-            assert(RR.frameKind == "radial",
-                "flipping the setting did not switch to the radial ring")
-            assert(RR.frame ~= cooldownFrame, "radial path reused the Cooldown frame")
-            assert(not cooldownFrame:IsShown(),
-                "old Cooldown ring was left showing after the switch")
-
-            ThugUI_Config.resourceRingRadialBar = false
-        end },
-
-        { "radial: a secret maximum skips the <= 0 comparison", function()
-            ThugUI_Config.resourceRingRadialBar = true
+        { "a secret maximum skips the <= 0 comparison", function()
             ThugUI_Config.showResourceRing = true
             ThugUI_Config.resourceRingVisibility = "always"
             _G.__power = 50
@@ -2613,18 +2638,16 @@ if ThugUI.ResourceRing then
 
             local ok, err = pcall(function() RR:Update() end)
 
-            assert(ok, "radial Update threw comparing a secret maximum: " .. tostring(err))
-            assert(RR.frameKind == "radial", "did not take the radial path")
+            assert(ok, "Update threw comparing a secret maximum: " .. tostring(err))
             assert(RR.frame.__minMax and RR.frame.__minMax[2] == _G.__SECRET,
                 "secret maximum did not reach SetMinMaxValues")
             assert(RR.frame:IsShown(),
-                "radial ring hid on a secret maximum instead of drawing")
+                "ring hid on a secret maximum instead of drawing")
 
             _G.__powerMax = 100
         end },
 
-        { "radial: colour still follows the power token", function()
-            ThugUI_Config.resourceRingRadialBar = true
+        { "colour still follows the power token", function()
             ThugUI_Config.showResourceRing = true
             ThugUI_Config.resourceRingVisibility = "always"
             ThugUI_Config.resourceRingColorMode = "power"
@@ -2636,14 +2659,76 @@ if ThugUI.ResourceRing then
 
             local expected = PowerBarColor.RAGE
             local color = RR.frame.__statusBarColor
-            assert(color, "radial ring never called SetStatusBarColor")
+            assert(color, "ring never called SetStatusBarColor")
             assert(math.abs(color[1] - expected.r) < 0.0001
                 and math.abs(color[2] - expected.g) < 0.0001
                 and math.abs(color[3] - expected.b) < 0.0001,
-                "radial ring colour did not follow the RAGE power token")
+                "ring colour did not follow the RAGE power token")
 
             _G.__powerToken, _G.__form = "MANA", 0
-            ThugUI_Config.resourceRingRadialBar = false
+        end },
+
+        -- Task 17: clockwise / counter-clockwise drain direction.
+
+        { "drain direction defaults to clockwise", function()
+            ThugUI_Config.resourceRingDrainDirection = nil
+            ThugUI_Config.showResourceRing = true
+            ThugUI_Config.resourceRingVisibility = "always"
+            _G.__power, _G.__powerMax = 50, 100
+            RR.lastDrainDirection = nil
+
+            RR:Update()
+
+            local tex = RR.frame:GetStatusBarTexture()
+            assert(tex.__radialReverse == false,
+                "default direction did not set reverse=false, got "
+                    .. tostring(tex.__radialReverse))
+        end },
+
+        { "counter-clockwise sets the texture's reverse flag", function()
+            ThugUI_Config.resourceRingDrainDirection = "counterclockwise"
+            RR.lastDrainDirection = nil
+
+            RR:Update()
+
+            local tex = RR.frame:GetStatusBarTexture()
+            assert(tex.__radialReverse == true,
+                "counterclockwise did not set reverse=true, got "
+                    .. tostring(tex.__radialReverse))
+
+            ThugUI_Config.resourceRingDrainDirection = "clockwise"
+            RR.lastDrainDirection = nil
+            RR:Update()
+            assert(tex.__radialReverse == false, "switching back did not clear reverse")
+        end },
+
+        -- The most important case here. We are the FIRST consumer of this API
+        -- family anywhere -- an exhaustive search of Blizzard's own live 12.1
+        -- source found zero uses of any SetRadialProgressBar* method -- and it
+        -- is unverified that the texture from GetStatusBarTexture() exposes
+        -- them at all. So the absent-method path is the one likely to be taken
+        -- on a real client, not the exotic one.
+        { "no SetRadialProgressBarReverse: no throw, ring still draws", function()
+            ThugUI_Config.showResourceRing = true
+            ThugUI_Config.resourceRingVisibility = "always"
+            ThugUI_Config.resourceRingDrainDirection = "counterclockwise"
+            _G.__power, _G.__powerMax = 50, 100
+            RR.lastDrainDirection = nil
+
+            local tex = RR.frame:GetStatusBarTexture()
+            -- rawset a false so the frame metatable's method dispatch does not
+            -- manufacture one, which is what makes this a genuine absence.
+            rawset(tex, "SetRadialProgressBarReverse", false)
+
+            local ok, err = pcall(function() RR:Update() end)
+
+            rawset(tex, "SetRadialProgressBarReverse", nil)
+
+            assert(ok, "Update threw when the reverse method was absent: " .. tostring(err))
+            assert(RR.frame:IsShown(), "ring stopped drawing when it could not set direction")
+
+            ThugUI_Config.resourceRingDrainDirection = "clockwise"
+            RR.lastDrainDirection = nil
         end },
     }
 

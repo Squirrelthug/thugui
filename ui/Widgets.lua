@@ -176,7 +176,7 @@ Panel.__index = Panel
 --- @param opts table? { x = left margin, y = top margin, width = content width }
 function W.NewPanel(parent, opts)
     opts = opts or {}
-    return setmetatable({
+    local panel = setmetatable({
         parent  = parent,
         originX = opts.x or 16,
         originY = -(opts.y or 14),
@@ -187,6 +187,19 @@ function W.NewPanel(parent, opts)
         lastW   = 0,
         widgets = {},
     }, Panel)
+
+    -- Registered onto the host frame so a page built from several panels
+    -- (e.g. a two-column layout) can be sized by its TALLEST panel rather
+    -- than only the first one Window:BuildPage happens to create -- see
+    -- ui/Window.lua. This is bookkeeping on a frame WE created (`parent` is
+    -- always one of our own host/content frames, never a Blizzard frame), so
+    -- it is not the §15 taint bug -- that was writing __thug* fields onto
+    -- frames Blizzard owns. Left in as a comment because the next reader will
+    -- have the same worry on sight.
+    parent.__thugPanels = parent.__thugPanels or {}
+    table.insert(parent.__thugPanels, panel)
+
+    return panel
 end
 
 -- Place `frame` at the layout cursor and advance it.

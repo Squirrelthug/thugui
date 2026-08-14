@@ -247,7 +247,17 @@ function Window:BuildPage(def)
     def.build(host, panel)
 
     if def.scroll ~= false then
-        host:SetHeight(math.max(panel:GetHeight(), self.frame.content:GetHeight()))
+        -- A page can create more than one panel (a two-column layout, e.g.
+        -- ui/pages/CursorRings.lua). `panel` here is only the FIRST one --
+        -- W.NewPanel registers every panel it creates onto host.__thugPanels,
+        -- so the scroll area is sized from whichever one is actually tallest.
+        -- Without this, a taller second column's bottom rows are unreachable:
+        -- the scroll child never grows to fit them.
+        local tallest = panel:GetHeight()
+        for _, p in ipairs(host.__thugPanels or {}) do
+            if p:GetHeight() > tallest then tallest = p:GetHeight() end
+        end
+        host:SetHeight(math.max(tallest, self.frame.content:GetHeight()))
     end
 
     return container

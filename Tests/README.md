@@ -95,3 +95,33 @@ list was a hardcoded copy of 12.0's four categories, so after 12.1 it reported
 plausible, false diagnosis from the one tool whose job is telling you whether
 your logic or the client is at fault. It now derives categories from the dump.
 Anything the real input already describes should be read from it, never restated.
+
+**`GetHeight`/`GetWidth` used to ignore `SetHeight`/`SetWidth`.** They returned a
+flat `100` whatever the code had set, so a frame's size was **unobservable** and
+a whole class of layout assertion simply could not be written. The scroll-height
+bug in `Window:BuildPage` — a multi-panel scrolling page sized from only its
+first panel, leaving a taller column's bottom rows unreachable — sat behind that
+blind spot with no test able to see it. Fixed 2026-08-13: `SetWidth`/`SetHeight`/
+`SetSize` record, and the getters report what was recorded, falling back to `100`
+for a frame nobody sized. **When a getter cannot see what its setter did, the gap
+is not neutral — it is a region of the code no test can describe.**
+
+**Deliberately deleted on 2026-08-13, when the Cooldown resource ring was
+removed** (`DECISIONS.md` §27). Listed so the drop in coverage is visible rather
+than looking like tests that quietly wandered off:
+
+| Case | Why it went |
+|---|---|
+| `arc matches the resource fraction` | Asserted the Cooldown path's seed-and-Pause arithmetic. Nothing computes a fraction any more — the engine derives the fill from the raw value/max pair. Replaced by `the resource level reaches the bar unmodified`, which asserts both arrive unchanged |
+| `setting off keeps the Cooldown implementation` | Both the setting and the implementation are gone |
+| `flipping the setting swaps frame type without reusing the old one` | There is nothing left to flip between |
+| `radial setting on but StatusBarRenderMode absent falls back to Cooldown` | The contract changed rather than vanished — there is no fallback now. Replaced by `StatusBarRenderMode absent: no ring, and no throw` |
+
+**The radial texture API is exercised nowhere but here.** An exhaustive search of
+Blizzard's own live 12.1 source found **zero** uses of `StatusBarRenderMode.Radial`,
+`SetRenderMode`, or any `SetRadialProgressBar*` method, and it is **unverified**
+that the texture from `GetStatusBarTexture()` exposes that family at all. The
+stub always provides `SetRadialProgressBarReverse`, so the case that matters is
+the one that removes it (`no SetRadialProgressBarReverse: no throw, ring still
+draws`). **Green on this family is weaker evidence than usual — only the game
+settles it.**

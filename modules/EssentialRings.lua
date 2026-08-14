@@ -361,13 +361,17 @@ ER.defaults = {
     -- which are usually combat-only — that is not what "always show my
     -- resource" should mean.
     resourceRingVisibility = "always",
-    -- Radial StatusBar implementation (modules/ResourceRing.lua, task 16).
-    -- SetValue/SetMinMaxValues accept a secret in 12.1 (AllowedWhenTainted,
-    -- measured — DECISIONS.md §20), so this path can show the real resource
-    -- level in combat where the Cooldown ring above cannot. Off by default:
-    -- the Cooldown ring is what the player sees today, and nothing about it
-    -- changes until this is explicitly turned on.
-    resourceRingRadialBar = false,
+    -- clockwise | counterclockwise. Which way round the ring empties.
+    -- Applied through the texture's SetRadialProgressBarReverse, which only
+    -- the radial render mode has — see modules/ResourceRing.lua.
+    --
+    -- `resourceRingRadialBar` used to live here, choosing between a Cooldown
+    -- ring and the radial one. Both it and the Cooldown implementation were
+    -- removed on 2026-08-13 (DECISIONS.md §27) — the Cooldown path never
+    -- tracked at all, so there was nothing to fall back to. A stale `true` or
+    -- `false` left in a player's SavedVariables is simply ignored; it is not
+    -- migrated, because neither value means anything now.
+    resourceRingDrainDirection = "clockwise",
 
     -- Test mode
     testMode = false,

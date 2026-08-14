@@ -4,11 +4,32 @@
 -- Ports the "Cursor Rings" Blizzard subpanel. Config lives in ThugUI_Config
 -- and every setter calls back into ThugUI.EssentialRings, which owns the
 -- frames -- this page holds no ring state of its own.
+--
+-- TWO COLUMNS
+--
+-- This used to be ~40 controls stacked in one left-aligned column with the
+-- right half of the window empty -- and the player went months without
+-- noticing the resource ring had its own "Show:" visibility dropdown, sitting
+-- directly above a checkbox they did find. Task 17 rebuilds it as two
+-- columns, each its own W.NewPanel with an independent layout cursor (the
+-- pattern CooldownViewer.lua uses for its picker/grid/inspector split).
+--
+-- Resource ring and Combo pips are deliberately paired side by side: both
+-- are show-toggle + Show: dropdown + colour + sliders, so the two "Show:"
+-- dropdowns land in matching positions and the eye can pair them. SyncColumns
+-- below exists only to keep that particular pairing aligned when one side has
+-- more rows than the other -- it is not needed for correctness anywhere else.
 -- ============================================================================
 
 ThugUI = ThugUI or {}
 
 local Page = {}
+
+-- Resolved on first build rather than at file scope, matching ui/Window.lua.
+-- This page is the first to need Widgets at *build* time rather than only
+-- through the panel it is handed, and a file-scope grab would bake in a load
+-- order assumption for no gain.
+local W
 
 local function Cfg()
     ThugUI_Config = ThugUI_Config or {}
@@ -35,6 +56,19 @@ local FILL_MODES = {
     { value = "drain", text = "Drain" },
 }
 
+-- Shared by the resource ring's and the combo pips' "Show:" dropdowns, which
+-- carried this exact table twice. Same idea as COLOR_MODES/FILL_MODES above.
+local VISIBILITY_MODES = {
+    { value = "always", text = "Always" },
+    { value = "combat", text = "Only in combat" },
+    { value = "rings",  text = "With the cursor rings" },
+}
+
+local DRAIN_DIRECTIONS = {
+    { value = "clockwise",        text = "Clockwise" },
+    { value = "counterclockwise", text = "Counter-clockwise" },
+}
+
 --- Colour-mode dropdown plus its swatch. The swatch stays live regardless of
 --- mode; disabling it just to re-enable it is more fiddle than it is worth.
 local function ColorRow(panel, label, modeKey, colorKey, apply)
@@ -59,13 +93,41 @@ local function ColorRow(panel, label, modeKey, colorKey, apply)
     }
 end
 
+--- Pulls every given panel's layout cursor down to whichever is currently
+--- lowest. Without this, a section with more rows than its paired column
+--- (e.g. "Ring slots" has 5 rows to "Colours" 4) would leave the next pair of
+--- section headers -- "Resource ring" / "Combo pips", the pairing this whole
+--- layout exists for -- at two different heights.
+local function SyncColumns(...)
+    local panels = { ... }
+    local lowest = panels[1].cursorY
+    for i = 2, #panels do
+        if panels[i].cursorY < lowest then lowest = panels[i].cursorY end
+    end
+    for _, p in ipairs(panels) do
+        p.cursorY, p.rowTopY = lowest, lowest
+    end
+end
+
 function Page:Build(host, panel)
+    W = W or ThugUI.Widgets
     local er = ER()
 
     panel:Header("Cursor Rings")
     panel:Note("GCD and cast tracking drawn around the mouse pointer.")
 
-    panel:Section("Ring slots")
+    local LEFT_X, RIGHT_X, COL_WIDTH = 16, 390, 340
+    -- Both columns start right where the header/note left off, so widening
+    -- either of those does not require re-tuning a hardcoded y.
+    local colY = -panel.cursorY
+
+    local left  = W.NewPanel(host, { x = LEFT_X,  y = colY, width = COL_WIDTH })
+    local right = W.NewPanel(host, { x = RIGHT_X, y = colY, width = COL_WIDTH })
+    self.panels = { left, right }
+
+    -- ---- Ring slots / Colours ---------------------------------------------
+
+    left:Section("Ring slots")
 
     local ringOptions = {}
     for _, name in ipairs((er and er.ringOptions) or {}) do
@@ -76,69 +138,81 @@ function Page:Build(host, panel)
         table.insert(reticleOptions, { value = name, text = name })
     end
 
-    panel:Dropdown{
+    left:Dropdown{
         label = "Reticle:", width = 150, options = reticleOptions,
         get = function() return Cfg().reticle end,
         set = function(v) Cfg().reticle = v; Call("ApplySettings") end,
     }
-    panel:Slider{
+    left:Slider{
         label = "Reticle size", min = 0.5, max = 3.0, step = 0.1, format = "%.1f",
         get = function() return Cfg().reticleScale or 1.0 end,
         set = function(v) Cfg().reticleScale = v; Call("UpdateReticle") end,
     }
-    panel:Dropdown{
+    left:Dropdown{
         label = "Inner ring (small):", width = 150, options = ringOptions,
         get = function() return Cfg().innerRing end,
         set = function(v) Cfg().innerRing = v; Call("ApplySettings") end,
     }
-    panel:Dropdown{
+    left:Dropdown{
         label = "Main ring (medium):", width = 150, options = ringOptions,
         get = function() return Cfg().mainRing end,
         set = function(v) Cfg().mainRing = v; Call("ApplySettings") end,
     }
-    panel:Dropdown{
+    left:Dropdown{
         label = "Outer ring (large):", width = 150, options = ringOptions,
         get = function() return Cfg().outerRing end,
         set = function(v) Cfg().outerRing = v; Call("ApplySettings") end,
     }
 
-    panel:Section("Colours")
+    right:Section("Colours")
 
-    ColorRow(panel, "Reticle:",   "reticleColorMode",  "reticleCustomColor",  "UpdateReticle")
-    ColorRow(panel, "Main ring:", "mainRingColorMode", "mainRingCustomColor", "UpdateRingColors")
-    ColorRow(panel, "GCD:",       "gcdColorMode",      "gcdCustomColor",      "UpdateRingColors")
-    ColorRow(panel, "Cast:",      "castColorMode",     "castCustomColor",     "UpdateRingColors")
+    ColorRow(right, "Reticle:",   "reticleColorMode",  "reticleCustomColor",  "UpdateReticle")
+    ColorRow(right, "Main ring:", "mainRingColorMode", "mainRingCustomColor", "UpdateRingColors")
+    ColorRow(right, "GCD:",       "gcdColorMode",      "gcdCustomColor",      "UpdateRingColors")
+    ColorRow(right, "Cast:",      "castColorMode",     "castCustomColor",     "UpdateRingColors")
 
+    SyncColumns(left, right, panel)
+
+    -- ---- Animation: one header spanning the page, two columns beneath it --
+
+    panel.cursorY, panel.rowTopY = left.cursorY, left.cursorY
     panel:Section("Animation")
+    left.cursorY,  left.rowTopY  = panel.cursorY, panel.cursorY
+    right.cursorY, right.rowTopY = panel.cursorY, panel.cursorY
 
-    panel:Dropdown{
+    left:Dropdown{
         label = "GCD sweep:", width = 130, options = FILL_MODES,
         get = function() return Cfg().gcdFillDrain or "fill" end,
         set = function(v) Cfg().gcdFillDrain = v; Call("ResetCooldownFrames") end,
     }
-    panel:Slider{
+    left:Slider{
         label = "GCD start (o'clock)", min = 1, max = 12, step = 1, format = "%d", width = 130,
         get = function() return Cfg().gcdRotation or 12 end,
         set = function(v) Cfg().gcdRotation = v; Call("ResetCooldownFrames") end,
     }
-    panel:Dropdown{
+
+    right:Dropdown{
         label = "Cast sweep:", width = 130, options = FILL_MODES,
         get = function() return Cfg().castFillDrain or "fill" end,
         set = function(v) Cfg().castFillDrain = v; Call("ResetCooldownFrames") end,
     }
-    panel:Slider{
+    right:Slider{
         label = "Cast start (o'clock)", min = 1, max = 12, step = 1, format = "%d", width = 130,
         get = function() return Cfg().castRotation or 12 end,
         set = function(v) Cfg().castRotation = v; Call("ResetCooldownFrames") end,
     }
 
-    panel:Section("Resource ring")
+    SyncColumns(left, right)
 
-    panel:Note("A radial resource meter in the cast ring's band, with the cast sweep drawn "
+    -- ---- Resource ring / Combo pips ----------------------------------------
+
+    left:Section("Resource ring")
+
+    left:Note("A radial resource meter in the cast ring's band, with the cast sweep drawn "
         .. "over the top. The resource follows your form on its own — rage in Bear, energy "
         .. "in Cat, Astral Power in Moonkin — so there is nothing to configure per spec.")
 
-    panel:Checkbox{
+    left:Checkbox{
         label = "Show resource ring",
         get = function() return Cfg().showResourceRing end,
         set = function(v)
@@ -147,13 +221,9 @@ function Page:Build(host, panel)
         end,
     }
 
-    panel:Dropdown{
+    left:Dropdown{
         label = "Show:", width = 170,
-        options = {
-            { value = "always", text = "Always" },
-            { value = "combat", text = "Only in combat" },
-            { value = "rings",  text = "With the cursor rings" },
-        },
+        options = VISIBILITY_MODES,
         get = function() return Cfg().resourceRingVisibility or "always" end,
         set = function(v)
             Cfg().resourceRingVisibility = v
@@ -161,22 +231,7 @@ function Page:Build(host, panel)
         end,
     }
 
-    panel:Checkbox{
-        label = "Radial bar (tracks exact level in combat)",
-        tooltip = "Draws the ring on a StatusBar in 12.1's radial render mode instead "
-            .. "of a Cooldown sweep, so it can show the real resource level in combat "
-            .. "instead of freezing. Falls back to the sweep automatically on a client "
-            .. "without this render mode.",
-        get = function() return Cfg().resourceRingRadialBar end,
-        set = function(v)
-            Cfg().resourceRingRadialBar = v
-            -- The two implementations are different frame types; Update()
-            -- picks whichever the setting now points at and hides the other.
-            if ThugUI.ResourceRing then ThugUI.ResourceRing:Update() end
-        end,
-    }
-
-    panel:Dropdown{
+    left:Dropdown{
         label = "Colour:", width = 170,
         options = {
             { value = "power",  text = "Match the resource" },
@@ -189,7 +244,7 @@ function Page:Build(host, panel)
             if ThugUI.ResourceRing then ThugUI.ResourceRing:UpdateColor() end
         end,
     }
-    panel:Color{
+    left:Color{
         get = function()
             local c = Cfg().resourceRingCustomColor
             if not c then return 1, 1, 1 end
@@ -202,7 +257,7 @@ function Page:Build(host, panel)
         sameLine = true,
     }
 
-    panel:Slider{
+    left:Slider{
         label = "Resource ring opacity", min = 0.1, max = 1.0, step = 0.05, format = "%.2f",
         tooltip = "Kept below full by default so the cast sweep stays legible over it.",
         get = function() return Cfg().resourceRingAlpha or 0.55 end,
@@ -212,15 +267,30 @@ function Page:Build(host, panel)
         end,
     }
 
-    panel:Section("Combo pips")
+    -- The "Radial bar" checkbox that used to sit here is gone. It chose between
+    -- two implementations and there is only one left -- the Cooldown sweep was
+    -- removed on 2026-08-13 because it never tracked at all. DECISIONS.md §27.
 
-    panel:Note("Your class's secondary resource — combo points, Holy Power, Soul Shards, "
+    left:Dropdown{
+        label = "Drain:", width = 170,
+        tooltip = "Which way round the ring empties as you spend the resource.",
+        options = DRAIN_DIRECTIONS,
+        get = function() return Cfg().resourceRingDrainDirection or "clockwise" end,
+        set = function(v)
+            Cfg().resourceRingDrainDirection = v
+            if ThugUI.ResourceRing then ThugUI.ResourceRing:Update() end
+        end,
+    }
+
+    right:Section("Combo pips")
+
+    right:Note("Your class's secondary resource — combo points, Holy Power, Soul Shards, "
         .. "Chi, Arcane Charges, Essence — as dots around the ring. Classes without one "
         .. "show nothing, and the count follows talents on its own.\n\n"
         .. "Blizzard makes secondary resources readable to addons in 12.1. Before then "
         .. "the pips hold their last count during combat rather than tracking live.")
 
-    panel:Checkbox{
+    right:Checkbox{
         label = "Show combo pips",
         get = function() return Cfg().showComboPips end,
         set = function(v)
@@ -229,13 +299,9 @@ function Page:Build(host, panel)
         end,
     }
 
-    panel:Dropdown{
+    right:Dropdown{
         label = "Show:", width = 170,
-        options = {
-            { value = "always", text = "Always" },
-            { value = "combat", text = "Only in combat" },
-            { value = "rings",  text = "With the cursor rings" },
-        },
+        options = VISIBILITY_MODES,
         get = function() return Cfg().comboPipVisibility or "combat" end,
         set = function(v)
             Cfg().comboPipVisibility = v
@@ -243,7 +309,7 @@ function Page:Build(host, panel)
         end,
     }
 
-    panel:Dropdown{
+    right:Dropdown{
         label = "Colour:", width = 170,
         options = {
             { value = "power",  text = "Match the resource" },
@@ -256,7 +322,7 @@ function Page:Build(host, panel)
             if ThugUI.ComboPips then ThugUI.ComboPips:Refresh() end
         end,
     }
-    panel:Color{
+    right:Color{
         get = function()
             local c = Cfg().comboPipCustomColor
             if not c then return 1, 1, 1 end
@@ -269,7 +335,7 @@ function Page:Build(host, panel)
         sameLine = true,
     }
 
-    panel:Slider{
+    right:Slider{
         label = "Pip size", min = 4, max = 20, step = 1, format = "%d",
         get = function() return Cfg().comboPipSize or 9 end,
         set = function(v)
@@ -278,7 +344,7 @@ function Page:Build(host, panel)
         end,
     }
 
-    panel:Slider{
+    right:Slider{
         label = "Distance from the ring", min = -80, max = 40, step = 1, format = "%d",
         tooltip = "Negative values pull the pips inside the band, towards the cursor. "
             .. "Far enough in draws a tight ring near the centre rather than one that "
@@ -290,7 +356,7 @@ function Page:Build(host, panel)
         end,
     }
 
-    panel:Slider{
+    right:Slider{
         label = "Unspent pip opacity", min = 0, max = 1, step = 0.05, format = "%.2f",
         tooltip = "How visible a pip is before the point is earned.",
         get = function() return Cfg().comboPipDimAlpha or 0.25 end,
@@ -300,32 +366,36 @@ function Page:Build(host, panel)
         end,
     }
 
-    panel:Section("Visibility")
+    SyncColumns(left, right)
 
-    panel:Checkbox{
+    -- ---- Visibility / Test -------------------------------------------------
+
+    left:Section("Visibility")
+
+    left:Checkbox{
         label = "Only show in combat",
         get = function() return Cfg().showOnlyInCombat end,
         set = function(v) Cfg().showOnlyInCombat = v; Call("ApplySettings") end,
     }
-    panel:Checkbox{
+    left:Checkbox{
         label = "Hide the game cursor while rings are shown",
         get = function() return Cfg().hideGameCursor end,
         set = function(v) Cfg().hideGameCursor = v; Call("UpdateVisibility") end,
     }
-    panel:Slider{
+    left:Slider{
         label = "Transparency", min = 0.1, max = 1.0, step = 0.05, format = "%.2f",
         get = function() return Cfg().transparency or 1.0 end,
         set = function(v) Cfg().transparency = v; Call("ApplySettings") end,
     }
-    panel:Slider{
+    left:Slider{
         label = "Scale", min = 0.5, max = 4.0, step = 0.1, format = "%.1f",
         get = function() return Cfg().scale or 1.0 end,
         set = function(v) Cfg().scale = v; Call("ApplySettings") end,
     }
 
-    panel:Section("Test")
+    right:Section("Test")
 
-    panel:Checkbox{
+    right:Checkbox{
         label = "Test mode",
         tooltip = "Pretend to be in combat so combat-only elements show while you tune them.",
         get = function() return Cfg().testMode end,
@@ -333,11 +403,22 @@ function Page:Build(host, panel)
     }
 end
 
+--- Window:SelectPage already calls def.panel:Refresh() for the primary panel
+--- (the header/note -- it holds no widgets, so that call is a no-op). left
+--- and right are separate panels W.NewPanel does not know about, so they need
+--- their own refresh pass, the same way CooldownViewer.lua's self.panels does.
+function Page:Refresh()
+    for _, p in ipairs(self.panels or {}) do
+        p:Refresh()
+    end
+end
+
 ThugUI.Window:RegisterPage{
     id = "cursorrings",
     title = "Cursor Rings",
     order = 40,
     build = function(host, panel) Page:Build(host, panel) end,
+    refresh = function() Page:Refresh() end,
 }
 
 return Page
