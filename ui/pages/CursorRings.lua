@@ -127,7 +127,7 @@ function Page:Build(host, panel)
 
     -- ---- Ring slots / Colours ---------------------------------------------
 
-    left:Section("Ring slots")
+    left:Section("Rings")
 
     local ringOptions = {}
     for _, name in ipairs((er and er.ringOptions) or {}) do
@@ -281,17 +281,25 @@ function Page:Build(host, panel)
             if ThugUI.ResourceRing then ThugUI.ResourceRing:Update() end
         end,
     }
+    left:Slider{
+        label = "Resource start (o'clock)", min = 1, max = 12, step = 1, format = "%d", width = 130,
+        tooltip = "Matches the GCD and cast rings. This ring used to borrow the "
+            .. "cast ring's setting, which left it starting at 6 o'clock.",
+        get = function() return Cfg().resourceRingRotation or 12 end,
+        set = function(v)
+            Cfg().resourceRingRotation = v
+            if ThugUI.ResourceRing then ThugUI.ResourceRing:ApplyStartAngle() end
+        end,
+    }
 
-    right:Section("Combo pips")
+    right:Section("Radial pips")
 
-    right:Note("Your class's secondary resource — combo points, Holy Power, Soul Shards, "
+    right:Note("Your class's secondary resource — Combo Points, Holy Power, Soul Shards, "
         .. "Chi, Arcane Charges, Essence — as dots around the ring. Classes without one "
-        .. "show nothing, and the count follows talents on its own.\n\n"
-        .. "Blizzard makes secondary resources readable to addons in 12.1. Before then "
-        .. "the pips hold their last count during combat rather than tracking live.")
+        .. "show nothing, and the count follows talents on its own.")
 
     right:Checkbox{
-        label = "Show combo pips",
+        label = "Show radial pips",
         get = function() return Cfg().showComboPips end,
         set = function(v)
             Cfg().showComboPips = v
