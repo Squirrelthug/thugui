@@ -192,24 +192,55 @@ function RR:SyncGeometry()
         f:SetSize(90, 90)
     end
 
-    local radians = (ER and ER.ClockToRadians)
-        and ER:ClockToRadians(ThugUI_Config.castRotation or 12)
-        or 0
+    self:ApplyStartAngle(f)
+end
 
-    -- StatusBar has no SetRotation of its own -- that is a Cooldown method.
-    -- The closest analogue is rotating the managed texture, and the player
-    -- confirmed in game on 2026-08-13 that this does move the fill's start
-    -- angle and not merely the artwork under it.
-    --
-    -- 12.1 does have a first-class version of this in
-    -- SetRadialProgressBarStartOffset, and we are deliberately NOT using it --
-    -- the workaround is verified working and the player chose to leave it.
-    -- DECISIONS.md §23 carries the trigger for revisiting: if the start angle
-    -- ever misbehaves, especially after a patch, swap to that API rather than
-    -- debugging this rotation.
+--- Where the ring starts, from `resourceRingRotation` as a clock position.
+---
+--- Blizzard's generated docs for SetRadialProgressBarStartOffset state the
+--- convention outright: a normalized 0..1 offset "where 0 is at the bottom".
+--- So an untouched radial StatusBar starts at 6 o'clock, and 12 o'clock needs
+--- a half turn. That is the whole of the bug reported on 2026-08-13 -- the
+--- ring started at the bottom, and BOTH drain directions consequently read as
+--- backwards, because clockwise from 6 o'clock climbs the LEFT side of the
+--- ring and the eye judges direction at the top, where every other ThugUI ring
+--- starts. One cause, two symptoms; the drain mapping itself was right.
+---
+--- Offsets advance the same way the bar fills by default, which the Reverse
+--- doc pins as clockwise -- so 6 o'clock is 0, 9 is 0.25, 12 is 0.5, 3 is
+--- 0.75. If a future build turns out to advance the other way, the slider
+--- makes that visible immediately and the fix is to negate `turns`.
+---
+--- This replaces a texture SetRotation workaround that borrowed the CAST
+--- ring's rotation. That never applied at all for the default castRotation of
+--- 12, because ClockToRadians(12) is 0 -- which is exactly why the ring sat at
+--- Blizzard's native bottom start and looked untouched. DECISIONS.md §23 named
+--- this swap in advance as the response to the start angle misbehaving.
+function RR:ApplyStartAngle(f)
+    f = f or self.frame
+    if not f then return end
+
     local tex = f.GetStatusBarTexture and f:GetStatusBarTexture()
-    if tex and tex.SetRotation then
-        tex:SetRotation(radians)
+    if not tex then return end
+
+    local clock = ThugUI_Config.resourceRingRotation or 12
+    local turns = ((clock - 6) % 12) / 12
+
+    if tex.SetRadialProgressBarStartOffset then
+        tex:SetRadialProgressBarStartOffset(turns)
+        return
+    end
+
+    -- No first-class offset on this client: fall back to rotating the managed
+    -- texture, which is what this did before. Guarded rather than assumed --
+    -- we are the first consumer of this API family anywhere.
+    if ThugUI.Diagnostics then
+        ThugUI.Diagnostics:LogOnce("resource-ring-no-start-offset", "RING",
+            "SetRadialProgressBarStartOffset unavailable -- falling back to "
+            .. "texture rotation for the resource ring's start angle")
+    end
+    if tex.SetRotation then
+        tex:SetRotation(turns * 2 * math.pi)
     end
 end
 

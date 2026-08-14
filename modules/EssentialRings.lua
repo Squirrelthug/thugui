@@ -330,6 +330,20 @@ ER.defaults = {
     buffFrameCorner = "BOTTOMRIGHT",
     buffFrameScale = 1.0,
 
+    -- ThugUI_Config.cvCategoryArt (the CooldownViewer's persisted cache of a
+    -- category-only cell's name/icon -- potions, healthstones) is deliberately
+    -- NOT defaulted here. ER:InitializeSettings seeds this list with
+    -- `ThugUI_Config[key] = value`, a plain reference copy, so a table default
+    -- makes the live config and ER.defaults the SAME table. The *CustomColor
+    -- triples above get away with it because every setter REPLACES them
+    -- wholesale (`Cfg().xCustomColor = { r = r, ... }`), which breaks the
+    -- alias on first write. cvCategoryArt is the opposite: it is mutated in
+    -- place, one key per resolved category, so it would accumulate live data
+    -- inside "the defaults" and any reset assigning it back would be a silent
+    -- no-op. Data.CategoryArtCache seeds it lazily instead, exactly as
+    -- Data.Store already does for the table-valued ThugUI_Config.cv.
+    -- DECISIONS.md §25.
+
     -- Balance Cooldown Viewer (second bar, Balance spec only) — its own
     -- independent appearance/anchor settings, separate from the Resto bar.
     showBCV = false,
@@ -372,6 +386,15 @@ ER.defaults = {
     -- `false` left in a player's SavedVariables is simply ignored; it is not
     -- migrated, because neither value means anything now.
     resourceRingDrainDirection = "clockwise",
+    -- Where the ring starts, as a clock position, matching gcdRotation and
+    -- castRotation. Its own key rather than borrowing castRotation, which is
+    -- what it did until 2026-08-13: the resource ring is a StatusBar in radial
+    -- render mode, not a Cooldown, and the two do not share a start
+    -- convention (DECISIONS.md §23). Blizzard start radial bars at the BOTTOM
+    -- -- their own docs for SetRadialProgressBarStartOffset say "0 is at the
+    -- bottom" -- so 12 here needs a real half-turn of offset, where a Cooldown
+    -- at 12 needs none.
+    resourceRingRotation = 12,
 
     -- Test mode
     testMode = false,

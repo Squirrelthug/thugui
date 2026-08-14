@@ -106,6 +106,10 @@ frameMT.__index = function(tbl, key)
             a.__radialReverse = a1
             return
         end
+        if key == "SetRadialProgressBarStartOffset" and type(a) == "table" then
+            a.__radialStartOffset = a1
+            return
+        end
         -- FontStrings are ordinary stub frames, but they're recorded in a flat
         -- list rather than only reachable through whatever built them --
         -- Panel:Section and friends don't stash their return value anywhere,
@@ -141,6 +145,11 @@ frameMT.__index = function(tbl, key)
             if key == "SetAlpha" then a.__alpha = a1 return end
             if key == "GetAlpha" then return a.__alpha == nil and 1 or a.__alpha end
             if key == "SetVertexColor" then a.__color = { a1, a2, a3 } return end
+            -- Recorded so the category-cell repaint (task 19, DECISIONS.md
+            -- §25) is observable: before this, SetTexture fell through to the
+            -- generic no-op and no test could tell whether a resolved cache
+            -- entry ever reached the drawn cell.
+            if key == "SetTexture" then a.__texture = a1 return end
             -- Strata and scale are modelled because the Blizzard-buff tests
             -- assert on WHOSE frame changed. Lifting their viewer instead of
             -- lowering our icon is the taint bug that killed the cooldown
@@ -2730,6 +2739,79 @@ if ThugUI.ResourceRing then
             ThugUI_Config.resourceRingDrainDirection = "clockwise"
             RR.lastDrainDirection = nil
         end },
+
+        -- The start angle. Reported in game on 2026-08-13: the ring started at
+        -- 6 o'clock and BOTH drain directions read as backwards. One cause --
+        -- Blizzard's own docs for SetRadialProgressBarStartOffset say the
+        -- normalized offset is measured "where 0 is at the bottom", so an
+        -- untouched radial bar starts at the bottom and clockwise from there
+        -- climbs the left side of the ring.
+
+        { "the default start angle is a half turn, putting 12 o'clock at the top", function()
+            ThugUI_Config.resourceRingRotation = nil
+            ThugUI_Config.showResourceRing = true
+            ThugUI_Config.resourceRingVisibility = "always"
+            _G.__power, _G.__powerMax = 50, 100
+
+            RR:SyncGeometry()
+
+            local tex = RR.frame:GetStatusBarTexture()
+            assert(math.abs((tex.__radialStartOffset or 0) - 0.5) < 0.0001,
+                "12 o'clock should be half a turn from Blizzard's bottom start, got "
+                    .. tostring(tex.__radialStartOffset))
+        end },
+
+        { "start angle follows resourceRingRotation, not castRotation", function()
+            -- The old code read castRotation, and at its default of 12
+            -- ClockToRadians returned 0 -- so the ring silently kept Blizzard's
+            -- bottom start no matter what the player did. Moving the CAST
+            -- setting must now do nothing at all here.
+            ThugUI_Config.castRotation = 3
+            ThugUI_Config.resourceRingRotation = 9
+
+            RR:SyncGeometry()
+
+            local tex = RR.frame:GetStatusBarTexture()
+            assert(math.abs((tex.__radialStartOffset or 0) - 0.25) < 0.0001,
+                "9 o'clock should be a quarter turn from the bottom, got "
+                    .. tostring(tex.__radialStartOffset))
+
+            ThugUI_Config.castRotation = 12
+        end },
+
+        { "6 o'clock is Blizzard's zero offset", function()
+            ThugUI_Config.resourceRingRotation = 6
+
+            RR:SyncGeometry()
+
+            local tex = RR.frame:GetStatusBarTexture()
+            assert(math.abs(tex.__radialStartOffset or -1) < 0.0001,
+                "6 o'clock should be offset 0, got " .. tostring(tex.__radialStartOffset))
+
+            ThugUI_Config.resourceRingRotation = nil
+        end },
+
+        -- Same shape as the reverse guard above, and for the same reason: the
+        -- absent-method path is the likely one on a real client, not the exotic
+        -- one. The fallback keeps the old texture-rotation behaviour.
+        { "no SetRadialProgressBarStartOffset: falls back to rotation, no throw", function()
+            ThugUI_Config.resourceRingRotation = 12
+
+            local tex = RR.frame:GetStatusBarTexture()
+            rawset(tex, "SetRadialProgressBarStartOffset", false)
+            tex.__rotation = nil
+
+            local ok, err = pcall(function() RR:SyncGeometry() end)
+
+            rawset(tex, "SetRadialProgressBarStartOffset", nil)
+
+            assert(ok, "SyncGeometry threw with no start-offset method: " .. tostring(err))
+            assert(math.abs((tex.__rotation or 0) - math.pi) < 0.0001,
+                "fallback did not rotate the texture half a turn, got "
+                    .. tostring(tex.__rotation))
+
+            ThugUI_Config.resourceRingRotation = nil
+        end },
     }
 
     for _, step in ipairs(steps) do
@@ -3770,6 +3852,55 @@ if ThugUI.CooldownViewer then
         wipe(profile.placements)
     end
 
+    -- ------------------------------------------------------------------
+    -- Task 19 (DECISIONS.md §25): resolve category art, cache it, repaint.
+    --
+    -- A second pooled-item stand-in, registered under a viewer name none of
+    -- the "blizzard buff items" cases above use. It answers cooldownID 20
+    -- (category 4's), and is asked for the category's ART (GetSpellCategoryIcon
+    -- / GetSpellTexture / GetNameText) -- it is never adopted into a cell,
+    -- unlike the cooldownID-3/7 items above.
+    --
+    -- Presence in the pool and every method are OFF by default (ResetArtStubs)
+    -- so each case opts in only what it needs, and __artPoolEnumerations makes
+    -- "was the pool ever walked" observable -- Decision 4 requires proving
+    -- Data.CategoryEntry does NOT discover, and asserting a global stayed nil
+    -- is exactly the shape of test that was incapable of failing last time
+    -- (task 18's categoryInfoCache bug, DECISIONS.md §25).
+    local artViewer = NewFrame()
+    local artItem = NewFrame()
+    artItem.GetCooldownID = function() return 20 end
+    artItem.GetParent = function() return artViewer end
+    _G.__artPoolEnumerations = 0
+    _G.__artItemPresent = false
+    artViewer.itemFramePool = {
+        EnumerateActive = function()
+            _G.__artPoolEnumerations = _G.__artPoolEnumerations + 1
+            local yielded = false
+            return function()
+                if yielded or not _G.__artItemPresent then return nil end
+                yielded = true
+                return artItem
+            end
+        end,
+    }
+    _G.EssentialCooldownViewer = artViewer
+
+    --- Same discipline as ResetCategoryStubs: reset at the START of a case.
+    --- rawset(..., false) rather than leaving a method undefined -- the frame
+    --- stub synthesises EVERY Capitalised key as a truthy no-op
+    --- (Tests/README.md, "Hazards in the harness itself"), so an
+    --- un-rawset method reads as "present" here even though a real frame
+    --- missing it would read nil. Only `false` reproduces "absent".
+    local function ResetArtStubs()
+        ThugUI_Config.cvCategoryArt = {}
+        _G.__artPoolEnumerations = 0
+        _G.__artItemPresent = false
+        rawset(artItem, "GetSpellCategoryIcon", false)
+        rawset(artItem, "GetSpellTexture", false)
+        rawset(artItem, "GetNameText", false)
+    end
+
     local steps = {
         { "a spellCategoryID-only entry appears in the picker with a name and an icon", function()
             ResetCategoryStubs()
@@ -3920,6 +4051,175 @@ if ThugUI.CooldownViewer then
             CV:UpdateState()
             assert(aIcon.wanted, "always mode did not show a category item")
             assert(aIcon.cooldown.__cooldown, "always mode did not sweep a category item")
+        end },
+
+        -- Task 19 (DECISIONS.md §25): the drawn cell keeps its question mark
+        -- past login/combat until a dropdown forces a rebuild. Six cases
+        -- below, one per numbered requirement in the task file.
+
+        { "task 19 fault B: with nothing resolvable a category entry is the generic one; a persisted cache entry answers instantly", function()
+            ResetCategoryStubs()
+            ResetArtStubs()
+
+            local generic = Data.CategoryEntry(4)
+            assert(generic.name == "Consumable (category 4)",
+                "an unresolved category should read the generic label, got " .. tostring(generic.name))
+            assert(generic.icon == "Interface\\Icons\\INV_Misc_QuestionMark",
+                "an unresolved category should draw the generic icon, got " .. tostring(generic.icon))
+
+            -- The persisted cache answers on the very next call, with no
+            -- viewer walk and no GetLastCategoryCooldownSource call needed --
+            -- the login case fault B describes.
+            ThugUI_Config.cvCategoryArt[4] = { name = "Combat Potion", icon = "cached-icon-path" }
+            local cached = Data.CategoryEntry(4)
+            assert(cached.name == "Combat Potion",
+                "a persisted cache entry's name was not read -- got " .. tostring(cached.name))
+            assert(cached.icon == "cached-icon-path",
+                "a persisted cache entry's icon was not read -- got " .. tostring(cached.icon))
+        end },
+
+        { "task 19 fault A: a resolved category-art cache repaints the drawn cell via UpdateState, with no rebuild in between", function()
+            ResetCategoryStubs()
+            ResetArtStubs()
+
+            local GENERIC = "Interface\\Icons\\INV_Misc_QuestionMark"
+            local icon = PlaceCategory("cooldown")
+            assert(icon.tex.__texture == GENERIC,
+                "sanity: a category cell with nothing resolved should draw the generic icon")
+            assert(icon.baseTexture == GENERIC,
+                "sanity: baseTexture should start generic too")
+
+            -- Simulates a resolve landing (Data.ResolveCategoryArt, on a
+            -- combat transition) AFTER the cell was already drawn. Fault A:
+            -- the old UpdateState never touched icon.tex at all, so a cache
+            -- entry like this sat unused until the player forced a rebuild by
+            -- touching a dropdown.
+            ThugUI_Config.cvCategoryArt[4] = { name = "Combat Potion", icon = "resolved-icon-path" }
+
+            local ok = pcall(CV.UpdateState, CV)
+            assert(ok, "UpdateState threw while repainting a resolved category cell")
+            assert(icon.tex.__texture == "resolved-icon-path",
+                "UpdateState did not repaint icon.tex from the resolved cache -- got "
+                .. tostring(icon.tex.__texture))
+            assert(icon.baseTexture == "resolved-icon-path",
+                "UpdateState repainted icon.tex but left icon.baseTexture stale -- aura mode would "
+                .. "swap against the wrong art")
+        end },
+
+        { "task 19 decision 2: a resolved category entry is sticky -- a pass where every path fails again does not revert it", function()
+            ResetCategoryStubs()
+            ResetArtStubs()
+
+            ThugUI_Config.cvCategoryArt[4] = { name = "Combat Potion", icon = "resolved-icon-path" }
+            -- Nothing resolvable THIS pass: no item in the pool, no cooldown
+            -- source. A correct ResolveCategoryArt must skip category 4
+            -- entirely because it is already cached, not attempt-and-fail.
+            Data.ResolveCategoryArt()
+
+            local entry = Data.CategoryEntry(4)
+            assert(entry.name == "Combat Potion" and entry.icon == "resolved-icon-path",
+                "a resolve pass where every path failed downgraded an already-resolved category "
+                .. "back toward the generic entry -- got name=" .. tostring(entry.name)
+                .. " icon=" .. tostring(entry.icon))
+        end },
+
+        { "task 19 decision 1: GetSpellCategoryIcon is preferred over GetSpellTexture when both exist and differ", function()
+            ResetCategoryStubs()
+            ResetArtStubs()
+
+            _G.__artItemPresent = true
+            artItem.GetSpellCategoryIcon = function() return "category-art-path" end
+            artItem.GetSpellTexture = function() return "item-icon-path" end
+            artItem.GetNameText = function() return "Combat Potion" end
+
+            Data.ResolveCategoryArt()
+
+            local entry = Data.CategoryEntry(4)
+            assert(entry.icon == "category-art-path",
+                "GetSpellTexture's item icon was used instead of GetSpellCategoryIcon's category "
+                .. "art -- got " .. tostring(entry.icon))
+        end },
+
+        { "task 19 decision 3: invalidating the cooldown-info cache does not clear cvCategoryArt, though it still clears the spec-scoped category cache", function()
+            ResetCategoryStubs()
+            ResetArtStubs()
+
+            -- Spec-scoped category cache starts populated -- unaffected by
+            -- this case, but confirms nothing here was left in a broken
+            -- state; full coverage of THIS half is the existing
+            -- "invalidating rebuilds the category cache within one spec" case
+            -- above, which this one deliberately does not duplicate.
+            assert(Data.GetCategoryInfo(4), "category 4 missing from the initial sweep")
+
+            -- Persisted art cache, as if a prior resolve had already run.
+            -- Nothing in the pool or the cooldown source can answer for
+            -- category 4 this pass, so if Data.CategoryEntry falls back to
+            -- the generic label, the persisted cache was wrongly cleared.
+            ThugUI_Config.cvCategoryArt[4] = { name = "Combat Potion", icon = "resolved-icon-path" }
+
+            Data.InvalidateCooldownInfoCache()
+
+            local entry = Data.CategoryEntry(4)
+            assert(entry.name == "Combat Potion" and entry.icon == "resolved-icon-path",
+                "Data.InvalidateCooldownInfoCache cleared the persisted category-art cache -- got "
+                .. "name=" .. tostring(entry.name) .. " icon=" .. tostring(entry.icon))
+        end },
+
+        { "task 19 decision 4: Data.CategoryEntry does not discover -- with the cache empty it never walks the item-frame pool", function()
+            ResetCategoryStubs()
+            ResetArtStubs()
+            Data.InvalidateCooldownInfoCache()
+
+            local entry = Data.CategoryEntry(4)
+            assert(entry.name == "Consumable (category 4)",
+                "sanity: an unresolved category should read the generic label, got " .. tostring(entry.name))
+            assert(_G.__artPoolEnumerations == 0,
+                "Data.CategoryEntry walked the item-frame pool on a cache miss -- it must only read "
+                .. "the persisted cache and fall back to the generic entry")
+        end },
+
+        -- The regression the player reported on 2026-08-13: after task 19 the
+        -- category cells stopped updating ENTIRELY, where before combat had at
+        -- least refreshed the picker and a dropdown change had refreshed the
+        -- drawn grid. Cause: ResolveCategoryArt only visited categories that
+        -- DISCOVERY reported, and discovery is built from the Cooldown Manager
+        -- sweep -- which that session logged as finding nothing. The old
+        -- uncached CategoryEntry never had the hole, because it was called
+        -- with the placed categoryID directly.
+        { "task 19 regression: a PLACED category resolves even when discovery cannot see it", function()
+            ResetCategoryStubs()
+            ResetArtStubs()
+
+            -- cooldownID 20 is what carries spellCategoryID 4 into the sweep.
+            -- Without it, discovery never mentions category 4 at all.
+            _G.__categorySets.Essential = { 1, 2, 4 }
+            Data.InvalidateCooldownInfoCache()
+
+            for _, id in ipairs(Data.DiscoverCategoryIDs()) do
+                assert(id ~= 4, "sanity: discovery was supposed to be blind to category 4 here")
+            end
+
+            -- Path 2 can still answer, exactly as it could before the cache.
+            _G.__categorySource[4] = { spellID = 5, itemID = 6 }
+            _G.__itemNamesByID[6] = "Algari Healing Potion"
+            _G.__itemIconsByID[6] = "placed-potion-icon"
+
+            local icon = PlaceCategory("cooldown")
+
+            assert(ThugUI_Config.cvCategoryArt[4],
+                "a placed category was never resolved -- ResolveCategoryArt only "
+                .. "looked at what discovery reported")
+            assert(icon.tex.__texture == "placed-potion-icon",
+                "the drawn cell did not pick up the resolved art, got "
+                    .. tostring(icon.tex.__texture))
+            assert(Data.CategoryEntry(4).name == "Algari Healing Potion",
+                "the picker would still read the generic label, got "
+                    .. tostring(Data.CategoryEntry(4).name))
+
+            _G.__categorySets.Essential = { 1, 2, 4, 20 }
+            _G.__itemNamesByID[6] = nil
+            _G.__itemIconsByID[6] = nil
+            Data.InvalidateCooldownInfoCache()
         end },
 
         { "restore", function()
