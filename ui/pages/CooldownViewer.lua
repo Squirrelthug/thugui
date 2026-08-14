@@ -47,12 +47,37 @@ local COLS, ROWS = Data.GRID_COLS, Data.GRID_ROWS
 -- can be built for a spec before ever stepping into it.
 Page.editSpecID = nil
 Page.selectedKey = nil
-Page.armedSpellID = nil
+-- The armed picker row (or nil), as an IDENTITY table: { spellID = n } or
+-- { categoryID = n }, never a bare number. A category placement has no spell
+-- ID to be one, so a single field would have to lie about which kind it held.
+-- Compared through Data.PlacementKey wherever "is this the same thing" is the
+-- question -- never field-by-field. Task 18; DECISIONS.md §25.
+Page.armed = nil
 Page.anchorMode = false
 
-local drag = { active = false, spellID = nil, fromKey = nil }
+local drag = { active = false, identity = nil, fromKey = nil }
 
 local BuildAnchorOverlay  -- defined below, called from BuildGrid
+
+--- The identity of whatever a placement (or a picker row -- both shapes carry
+--- spellID/categoryID the same way) stands for, as {spellID=} or
+--- {categoryID=}. Centralised so every drag/click/tooltip site builds the
+--- same shape rather than five slightly different inline tables.
+local function PlacementIdentity(placement)
+    if not placement then return nil end
+    if placement.categoryID then return { categoryID = placement.categoryID } end
+    return { spellID = placement.spellID }
+end
+
+--- The texture for a picker row or a placement, whichever kind it is.
+local function IdentityTexture(identity)
+    if not identity then return nil end
+    if identity.categoryID then
+        local entry = Data.CategoryEntry(identity.categoryID)
+        return entry and entry.icon
+    end
+    return C_Spell.GetSpellTexture(identity.spellID)
+end
 
 local function Profile()
     return Data.GetProfile(Page.editSpecID)
@@ -112,16 +137,16 @@ local function EnsureFollower()
     return follower
 end
 
-local function BeginDrag(spellID, fromKey)
-    drag.active, drag.spellID, drag.fromKey = true, spellID, fromKey
+local function BeginDrag(identity, fromKey)
+    drag.active, drag.identity, drag.fromKey = true, identity, fromKey
     local f = EnsureFollower()
-    f.tex:SetTexture(C_Spell.GetSpellTexture(spellID))
+    f.tex:SetTexture(IdentityTexture(identity))
     f:ClearAllPoints()
     f:Show()
 end
 
 local function EndDrag()
-    drag.active, drag.spellID, drag.fromKey = false, nil, nil
+    drag.active, drag.identity, drag.fromKey = false, nil, nil
     if follower then follower:Hide() end
 end
 
@@ -129,7 +154,8 @@ end
 -- Placement operations
 -- ----------------------------------------------------------------------------
 
-local function PlaceSpell(row, col, spellID, fromKey)
+--- @param identity table {spellID=} or {categoryID=} -- see PlacementIdentity
+local function PlaceSpell(row, col, identity, fromKey)
     local profile = Profile()
 
     if fromKey then
@@ -137,11 +163,16 @@ local function PlaceSpell(row, col, spellID, fromKey)
         Data.MovePlacement(profile, fromRow, fromCol, row, col)
     else
         local existing = Data.GetPlacement(profile, row, col)
-        Data.SetPlacement(profile, row, col, spellID, existing and existing.mode or "cooldown")
+        local mode = existing and existing.mode or "cooldown"
+        if identity.categoryID then
+            Data.SetCategoryPlacement(profile, row, col, identity.categoryID, mode)
+        else
+            Data.SetPlacement(profile, row, col, identity.spellID, mode)
+        end
     end
 
     Page.selectedKey = Data.CellKey(row, col)
-    Page.armedSpellID = nil
+    Page.armed = nil
     Apply()
     Page:Refresh()
 end
@@ -208,7 +239,7 @@ local function BuildGrid(host)
 
             cell:SetScript("OnDragStart", function(self)
                 local placement = Data.GetPlacement(Profile(), self.row, self.col)
-                if placement then BeginDrag(placement.spellID, self.key) end
+                if placement then BeginDrag(PlacementIdentity(placement), self.key) end
             end)
 
             -- Dropping is resolved here rather than in OnReceiveDrag: this fires
@@ -218,7 +249,7 @@ local function BuildGrid(host)
                 if not drag.active then return end
                 for _, target in pairs(Page.cells) do
                     if target:IsMouseOver() then
-                        PlaceSpell(target.row, target.col, drag.spellID, drag.fromKey)
+                        PlaceSpell(target.row, target.col, drag.identity, drag.fromKey)
                         EndDrag()
                         return
                     end
@@ -236,8 +267,8 @@ local function BuildGrid(host)
                     return
                 end
 
-                if Page.armedSpellID and not placement then
-                    PlaceSpell(self.row, self.col, Page.armedSpellID)
+                if Page.armed and not placement then
+                    PlaceSpell(self.row, self.col, Page.armed)
                 elseif placement then
                     Page.selectedKey = self.key
                     Page:Refresh()
@@ -248,7 +279,14 @@ local function BuildGrid(host)
                 local placement = Data.GetPlacement(Profile(), self.row, self.col)
                 if not placement then return end
                 GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:SetSpellByID(placement.spellID)
+                if placement.categoryID then
+                    -- No spell ID to hand SetSpellByID -- a category placement
+                    -- is named from the same resolution the grid draws it
+                    -- with, not a Blizzard tooltip.
+                    GameTooltip:SetText(Data.CategoryEntry(placement.categoryID).name)
+                else
+                    GameTooltip:SetSpellByID(placement.spellID)
+                end
                 GameTooltip:AddLine(" ")
                 GameTooltip:AddLine(Data.ModeText(placement.mode), 0, 1, 0.8)
                 GameTooltip:AddLine("Right-click to remove", 0.6, 0.6, 0.6)
@@ -423,13 +461,13 @@ local function AcquirePickerRow(index)
     row:RegisterForDrag("LeftButton")
 
     row:SetScript("OnDragStart", function(self)
-        if self.spellID then BeginDrag(self.spellID, nil) end
+        if self.spellID or self.categoryID then BeginDrag(PlacementIdentity(self), nil) end
     end)
     row:SetScript("OnDragStop", function()
         if not drag.active then return end
         for _, cell in pairs(Page.cells) do
             if cell:IsMouseOver() then
-                PlaceSpell(cell.row, cell.col, drag.spellID, nil)
+                PlaceSpell(cell.row, cell.col, drag.identity, nil)
                 EndDrag()
                 return
             end
@@ -439,15 +477,29 @@ local function AcquirePickerRow(index)
 
     -- Click-to-arm, then click a cell. Drag is nicer; this is the path that
     -- always works, including for anyone who finds drag fiddly.
+    --
+    -- Compared through Data.PlacementKey rather than a field-by-field check:
+    -- a category row and a spell row can share the same NUMBER (category 4
+    -- and spell 4 are unrelated), so only the string-vs-number-typed key can
+    -- tell them apart.
     row:SetScript("OnClick", function(self)
-        Page.armedSpellID = (Page.armedSpellID ~= self.spellID) and self.spellID or nil
+        local identity = PlacementIdentity(self)
+        if Data.PlacementKey(Page.armed) == Data.PlacementKey(identity) then
+            Page.armed = nil
+        else
+            Page.armed = identity
+        end
         Page:Refresh()
     end)
 
     row:SetScript("OnEnter", function(self)
-        if not self.spellID then return end
+        if not self.spellID and not self.categoryID then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetSpellByID(self.spellID)
+        if self.categoryID then
+            GameTooltip:SetText(Data.CategoryEntry(self.categoryID).name)
+        else
+            GameTooltip:SetSpellByID(self.spellID)
+        end
         GameTooltip:AddLine(" ")
         GameTooltip:AddLine("Drag onto the grid, or click then click a cell.", 0.6, 0.6, 0.6, true)
         GameTooltip:Show()
@@ -482,16 +534,21 @@ function Page:RefreshPicker()
     for i, entry in ipairs(entries) do
         local row = AcquirePickerRow(i)
         row.spellID = entry.spellID
+        -- Rows are pooled; a row that was a category row last refresh must
+        -- not leave a stale categoryID on the spell entry that reuses it.
+        row.categoryID = entry.categoryID
         row.icon:SetTexture(entry.icon)
 
         -- Already-placed spells stay in the list but read as spent, so the
         -- catalogue does not reshuffle every time something is dropped.
-        if Data.IsSpellPlaced(profile, entry.spellID, greyMode) then
+        -- Keyed through PlacementKey so a category entry greys against a
+        -- category placement, never against a same-numbered spell placement.
+        if Data.IsSpellPlaced(profile, Data.PlacementKey(entry), greyMode) then
             row.label:SetText("|cff808080" .. entry.name .. "|r")
         else
             row.label:SetText(entry.name)
         end
-        row.armedTex:SetShown(self.armedSpellID == entry.spellID)
+        row.armedTex:SetShown(Data.PlacementKey(Page.armed) == Data.PlacementKey(entry))
         row:Show()
     end
 
@@ -559,7 +616,7 @@ function Page:Build(host, panel)
         function(value)
             Page.editSpecID = value
             Page.selectedKey = nil
-            Page.armedSpellID = nil
+            Page.armed = nil
             -- Keep an open preview pointed at whatever is being edited.
             if CV.previewMode then CV:SetPreview(true, value) end
             Page:Refresh()
@@ -854,7 +911,7 @@ function Page:Refresh()
         local row, col = Data.ParseCellKey(key)
         local placement = Data.GetPlacement(profile, row, col)
         if placement then
-            cell.icon:SetTexture(C_Spell.GetSpellTexture(placement.spellID))
+            cell.icon:SetTexture(IdentityTexture(PlacementIdentity(placement)))
             cell.icon:Show()
         else
             cell.icon:Hide()
@@ -897,9 +954,15 @@ function Page:Refresh()
         local row, col = Data.ParseCellKey(self.selectedKey)
         local placement = Data.GetPlacement(profile, row, col)
         if placement then
-            local info = C_Spell.GetSpellInfo(placement.spellID)
+            local name
+            if placement.categoryID then
+                name = Data.CategoryEntry(placement.categoryID).name
+            else
+                local info = C_Spell.GetSpellInfo(placement.spellID)
+                name = (info and info.name) or ("#" .. placement.spellID)
+            end
             self.selectedLabel:SetText(("|cffffffff%s|r\ncell %d,%d")
-                :format(info and info.name or ("#" .. placement.spellID), col, row))
+                :format(name, col, row))
         else
             self.selectedKey = nil
         end

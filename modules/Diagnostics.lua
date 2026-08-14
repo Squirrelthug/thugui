@@ -94,14 +94,18 @@ local function CaptureProfiles()
     local icons = {}
 
     for _, placement in ipairs(Data.GetPlacements(profile)) do
-        local info = C_Spell and C_Spell.GetSpellInfo(placement.spellID)
+        -- A category placement (potion, healthstone -- 12.1, no spell ID at
+        -- all) has nothing to pass to GetSpellInfo; guarded rather than
+        -- handed a nil, since that argument is not documented to accept one.
+        -- Task 18; DECISIONS.md §25.
+        local info = placement.spellID and C_Spell and C_Spell.GetSpellInfo(placement.spellID)
         local cooldownInfo = Data.GetCooldownInfoForSpell(placement.spellID)
         local linked = cooldownInfo and cooldownInfo.linkedSpellIDs or {}
 
         table.insert(icons, ("%s  %-28s id=%-9s mode=%-9s linked=%d%s")
             :format(placement.key,
-                    (info and info.name) or "?",
-                    tostring(placement.spellID),
+                    (info and info.name) or (placement.categoryID and ("category " .. placement.categoryID)) or "?",
+                    tostring(placement.spellID or placement.categoryID),
                     placement.mode,
                     #linked,
                     cooldownInfo and ("  cat=" .. tostring(cooldownInfo.category)) or "  (no entry)"))

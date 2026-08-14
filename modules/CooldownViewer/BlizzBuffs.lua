@@ -283,6 +283,18 @@ function BB:ItemsByCooldownID()
     return map
 end
 
+--- Blizzard's pooled item frame for one cooldownID, if one currently exists.
+--- Read-only, and public: callers outside the adoption pass use this too --
+--- Data.CategoryEntry (task 18) resolves a category placement's name and icon
+--- from it, the same way BB:Apply resolves an adopted spell's. Rebuilds the
+--- whole map on every call rather than caching it, matching BB:Apply, which
+--- already does the same on every pass -- the pool is small (a handful of
+--- items across four viewers) and this is not called every frame.
+function BB:ItemForCooldownID(cooldownID)
+    if not cooldownID then return nil end
+    return self:ItemsByCooldownID()[cooldownID]
+end
+
 -- ----------------------------------------------------------------------------
 -- Placing them
 -- ----------------------------------------------------------------------------

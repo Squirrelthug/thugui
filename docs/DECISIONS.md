@@ -1853,13 +1853,60 @@ Server-side and data-driven; nothing in the Lua source states it. Do not assume
 `SpecAgnosticEssential`. Read `.category` off the live entry, or read the probe
 dump — `/thugcv probe` already records `spellCategoryID`.
 
-### The design — PROPOSED 2026-08-13, NOT YET APPROVED OR BUILT
+### BUILT 2026-08-13 — task 18
 
-Recorded so the reasoning is not re-derived. **Do not build this until the player
-has agreed to it.** The expensive half is not the drawing; it is that a saved
-placement is `{ spellID, mode }` and `Data.GetPlacements` drops any placement
-without a `spellID` before anything downstream sees it, with roughly fifteen
-call sites treating `spellID` as a placement's only possible identity.
+Approved by the player the same day (*"we should not be locked out of these just
+because they don't have spell IDs"*) and built by a Sonnet agent against
+`tasks/18-place-potions-and-healthstones.md`. **213 passing, 0 failures**; eight
+cases added, none removed, all eight re-run here against the unmodified source
+and confirmed failing. Report in `tasks/reports/`.
+
+What shipped:
+
+- **Discovery, never a hardcoded list.** `Data.DiscoverCategoryIDs` and
+  `BuildCategoryInfoCache` collect distinct `spellCategoryID`s from the sweep
+  the addon already performs, keeping only entries where `PickerSpellIDFor`
+  returns nil. The regression test asserts against **2566**, the category with
+  no named constant, precisely because a hardcoded list would have missed it.
+- **A second identity, not a fake spell ID.** Placements gain `categoryID`, with
+  `Data.PlacementKey` returning the bare spell ID for a spell and the string
+  `"cat:N"` for a category. The differing *types* are the point: category 4 and
+  spell 4 can never collide in a Lua table.
+- **`Data.GetPlacements`' guard was the whole bug.** It tested
+  `placement.spellID` alone and dropped every category placement before anything
+  downstream saw it.
+- Name and icon resolve from Blizzard's pooled item frame by `cooldownID`, then
+  from `GetLastCategoryCooldownSource`, then a generic label. Drawing follows the
+  existing `equipSlot` item-cell branch and fails **open** — an unresolved cell
+  draws without a sweep rather than vanishing.
+
+**Not verified in game.** Which `Enum.CooldownViewerCategory` these actually
+arrive under is still unverified (§25 above), and so is the resolution order
+against a real Cooldown Manager. The harness proves it does not throw and the
+logic is right; it cannot prove a potion draws in the cell.
+
+### The review catch: a `local` below the function that assigns it
+
+Worth recording because the harness could not see it and nearly nothing would
+have.
+
+`local categoryInfoCache` was declared **below** `Data.InvalidateCooldownInfoCache`,
+which assigns it. Lua binds names at parse time, so that assignment bound to a
+**global** of the same name: the cache was never invalidated, and the name leaked
+into WoW's shared namespace — the same class of collision as §15.
+
+**The spec check in `GetCategoryInfo` masked it.** Any spec change rebuilt the
+cache anyway, so the only visible symptom was stale category data after a talent
+change *within one spec* — narrow enough to be dismissed as something else
+entirely.
+
+And the first regression test written for it was **incapable of failing**: it
+asserted no global had been written, but the buggy code assigns `nil` to that
+global, and assigning nil does not create one. It was green against the very bug
+it was written for. It was deleted and replaced with a behavioural test that
+invalidates without changing spec, which does fail against the original ordering.
+The dead assertion is kept as a comment in `loadtest.lua`. **A test that cannot
+fail is worse than no test, and this one looked entirely convincing.**
 
 ---
 

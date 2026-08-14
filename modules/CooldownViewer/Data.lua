@@ -376,10 +376,15 @@ function Data.GetPlacements(profile)
     local list = {}
     for key, placement in pairs(profile.placements) do
         local row, col = Data.ParseCellKey(key)
-        if row and col and placement and placement.spellID then
+        -- Either identity counts. This used to guard on `placement.spellID`
+        -- alone, which silently dropped every category placement (potions,
+        -- healthstones -- 12.1, no spell ID at all) before anything
+        -- downstream ever saw it. Task 18; DECISIONS.md §25.
+        if row and col and placement and (placement.spellID or placement.categoryID) then
             table.insert(list, {
                 row = row, col = col, key = key,
                 spellID = placement.spellID,
+                categoryID = placement.categoryID,
                 mode = placement.mode or "cooldown",
             })
         end
@@ -399,6 +404,19 @@ function Data.SetPlacement(profile, row, col, spellID, mode)
     if row < 1 or row > Data.GRID_ROWS or col < 1 or col > Data.GRID_COLS then return end
     profile.placements[Data.CellKey(row, col)] = spellID
         and { spellID = spellID, mode = mode or "cooldown" }
+        or nil
+end
+
+--- Save a placement identified by CATEGORY rather than spell -- potions and
+--- healthstones, which 12.1 tracks with no spell ID at all
+--- (`spellCategoryID` only). A sibling of SetPlacement rather than an
+--- overload of it: smuggling a category into the `spellID` field would make
+--- that field lie, and every C_Spell/C_Item call site would still need a
+--- guard either way. DECISIONS.md §25, task 18.
+function Data.SetCategoryPlacement(profile, row, col, categoryID, mode)
+    if row < 1 or row > Data.GRID_ROWS or col < 1 or col > Data.GRID_COLS then return end
+    profile.placements[Data.CellKey(row, col)] = categoryID
+        and { categoryID = categoryID, mode = mode or "cooldown" }
         or nil
 end
 
@@ -426,9 +444,15 @@ end
 --- way to ask for that. Data does not know what a "picker source" is; the
 --- caller decides which mode family a given row's placement should be judged
 --- against.
+--- `spellID` here is really "an identity" -- a plain spell ID, or the string
+--- key Data.PlacementKey hands back for a category placement. Comparing
+--- through PlacementKey rather than `placement.spellID == spellID` directly
+--- is what lets a caller ask about a category placement at all; for a plain
+--- spell ID it is the exact same comparison as before, since PlacementKey
+--- returns `placement.spellID` unchanged whenever one is present.
 function Data.IsSpellPlaced(profile, spellID, mode)
     for _, placement in pairs(profile.placements) do
-        if placement.spellID == spellID then
+        if Data.PlacementKey(placement) == spellID then
             if mode == nil then return true end
             local placementMode = placement.mode or "cooldown"
             local isAura = placementMode == "aura"
@@ -563,6 +587,31 @@ local function CooldownViewerSpellIDs(categoryName)
     return spellIDs
 end
 
+--- Same walk as CooldownViewerSpellIDs, but for the entries it has to skip:
+--- ones with NO spell ID at all -- potions and healthstones on 12.1, tracked
+--- only by `spellCategoryID` (DECISIONS.md §25). Which Enum category they are
+--- filed under is unverified, so this asks every named source's category the
+--- same question rather than assuming one.
+local function CooldownViewerCategoryIDs(categoryName)
+    if not C_CooldownViewer or not C_CooldownViewer.GetCooldownViewerCategorySet then
+        return {}
+    end
+    local category = Enum and Enum.CooldownViewerCategory and Enum.CooldownViewerCategory[categoryName]
+    if category == nil then return {} end
+
+    local ok, cooldownIDs = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category)
+    if not ok or type(cooldownIDs) ~= "table" then return {} end
+
+    local categoryIDs = {}
+    for _, cooldownID in ipairs(cooldownIDs) do
+        local infoOK, info = pcall(C_CooldownViewer.GetCooldownViewerCooldownInfo, cooldownID)
+        if infoOK and info and info.spellCategoryID and not Data.PickerSpellIDFor(info) then
+            table.insert(categoryIDs, info.spellCategoryID)
+        end
+    end
+    return categoryIDs
+end
+
 --- The spell ID a Cooldown Manager entry should appear under in the picker.
 ---
 --- overrideSpellID first, so a talent that replaces a base spell shows the icon
@@ -576,6 +625,20 @@ function Data.PickerSpellIDFor(info)
         or info.spellID
         or info.overrideTooltipSpellID
         or (info.linkedSpellIDs and info.linkedSpellIDs[1])
+end
+
+--- A non-nil identity for any placement, for keying and equality only.
+--- Never pass this to a C_Spell/C_Item API -- it is not a spell ID.
+---
+--- A spell placement's key is its bare spell ID (a number); a category
+--- placement's is the string "cat:N". The types can never collide with each
+--- other in a Lua table, which is the property this exists for -- category 4
+--- (combat potion) and spell 4 must never be treated as the same identity.
+function Data.PlacementKey(p)
+    if not p then return nil end
+    if p.spellID then return p.spellID end
+    if p.categoryID then return "cat:" .. p.categoryID end
+    return nil
 end
 
 -- Cooldown Manager entries, indexed by every spell ID that can stand for them.
@@ -689,8 +752,146 @@ function Data.GetCooldownInfoForSpell(spellID)
     return cooldownInfoCache[spellID]
 end
 
+-- ----------------------------------------------------------------------------
+-- Category-only entries -- potions, healthstones (12.1)
+--
+-- These carry no spell ID at all, only `spellCategoryID`, so they cannot live
+-- in cooldownInfoCache above and must not be folded into it: IndexableSpellIDs
+-- stays exactly what it is (nothing here indexes a category under a spell ID),
+-- and a caller asking "what does spell 4 mean" must never collide with "what
+-- does category 4 mean". DECISIONS.md §25, task 18.
+-- ----------------------------------------------------------------------------
+
+-- Declared BEFORE InvalidateCooldownInfoCache, and that ordering is
+-- load-bearing. Lua binds a name at parse time: with the `local` below the
+-- function, the assignment inside it would create two GLOBALS that nothing
+-- reads, leaving the real cache un-invalidated on any talent change within one
+-- spec -- and leaking two names into WoW's shared global namespace, which is
+-- how §15's Edit Mode collision started. Shipped that way in task 18 and
+-- caught in review; the harness cannot see it, because the spec check in
+-- GetCategoryInfo masks the symptom whenever the spec actually changes.
+local categoryInfoCache, categoryInfoCacheSpec
+
 function Data.InvalidateCooldownInfoCache()
     cooldownInfoCache, cooldownInfoCacheSpec = nil, nil
+    categoryInfoCache, categoryInfoCacheSpec = nil, nil
+end
+
+--- Every Cooldown Manager entry that names a category and no spell, indexed
+--- by spellCategoryID. The FIRST entry found for a category wins -- only the
+--- category's identity matters here (name/icon are resolved from its
+--- cooldownID via Blizzard's own pooled frame, not from anything stored on
+--- `info` itself), so which of possibly several cooldownIDs sharing a
+--- category happens to be scanned first does not matter.
+local function BuildCategoryInfoCache()
+    local cache = {}
+    if not C_CooldownViewer or not C_CooldownViewer.GetCooldownViewerCategorySet then
+        return cache
+    end
+
+    for _, item in ipairs(CooldownViewerCategories()) do
+        local category = item.value
+        local ok, cooldownIDs = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category)
+        if ok and type(cooldownIDs) == "table" then
+            for _, cooldownID in ipairs(cooldownIDs) do
+                local infoOK, info = pcall(C_CooldownViewer.GetCooldownViewerCooldownInfo, cooldownID)
+                if infoOK and info and info.spellCategoryID and not Data.PickerSpellIDFor(info) then
+                    if not cache[info.spellCategoryID] then
+                        cache[info.spellCategoryID] = info
+                    end
+                end
+            end
+        end
+    end
+    return cache
+end
+
+--- The Cooldown Manager entry behind a category ID, or nil. Mirrors
+--- GetCooldownInfoForSpell, keyed by category instead of spell.
+function Data.GetCategoryInfo(categoryID)
+    if not categoryID then return nil end
+
+    local specID = Data.GetActiveSpecID()
+    if not categoryInfoCache or categoryInfoCacheSpec ~= specID then
+        categoryInfoCache = BuildCategoryInfoCache()
+        categoryInfoCacheSpec = specID
+    end
+    return categoryInfoCache[categoryID]
+end
+
+--- Every spellCategoryID actually true for this character right now,
+--- discovered from the sweep above -- never a hardcoded list. Blizzard's own
+--- (unexported) table carries a FOURTH category with no named constant
+--- anywhere (2566, Demonic Healthstone), so a hardcoded list of the three
+--- documented ones was already wrong before it was written. DECISIONS.md §25.
+function Data.DiscoverCategoryIDs()
+    local ids = {}
+    for categoryID in pairs(BuildCategoryInfoCache()) do
+        table.insert(ids, categoryID)
+    end
+    table.sort(ids)
+    return ids
+end
+
+-- A generic WoW icon, used only when nothing else answers -- see
+-- Data.CategoryEntry's resolution order below. Never a spell/item ID guess:
+-- this is a plain texture path, the same kind of fallback art many addons
+-- reach for, not anything read out of Blizzard's data.
+local GENERIC_CATEGORY_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+
+--- Name and icon for a category-only placement (potions, healthstones -- no
+--- spell ID exists to look either up from). Resolution order, first that
+--- answers wins -- DECISIONS.md §25, task 18:
+---
+---   1. Blizzard's own pooled item frame for this category's cooldownID.
+---      Localised and correct for all four categories; the same kind of call
+---      BlizzBuffs already makes (item:GetCooldownID()) to match placements
+---      to frames. Reading it is fine; writing to it is what caused §15's
+---      taint bug, and nothing here writes anything.
+---   2. C_Spell.GetLastCategoryCooldownSource -- a catch-up call that returns
+---      NOTHING until the category has actually been triggered this session
+---      (MayReturnNothing = true). That is the normal case on a fresh login,
+---      not a failure. SecretWhenCooldownsRestricted, so both returns are
+---      screened with issecretvalue before any nil test.
+---   3. A generic label. Never returns nil -- the picker row and the drawn
+---      cell both need SOMETHING, and an empty one reads as a broken addon,
+---      the exact §13 failure shape this project keeps hitting.
+function Data.CategoryEntry(categoryID)
+    if not categoryID then return nil end
+
+    local info = Data.GetCategoryInfo(categoryID)
+    local cooldownID = info and info.cooldownID
+
+    if cooldownID and CV.BlizzBuffs and CV.BlizzBuffs.ItemForCooldownID then
+        local item = CV.BlizzBuffs:ItemForCooldownID(cooldownID)
+        if item then
+            local texOK, texture = pcall(item.GetSpellTexture, item)
+            local nameOK, name = pcall(item.GetNameText, item)
+            if texOK and texture and nameOK and name and name ~= "" then
+                return { categoryID = categoryID, name = name, icon = texture }
+            end
+        end
+    end
+
+    if C_Spell and C_Spell.GetLastCategoryCooldownSource then
+        local ok, spellID, itemID = pcall(C_Spell.GetLastCategoryCooldownSource, categoryID)
+        -- issecretvalue asked FIRST: comparing a secret against nil is itself
+        -- a comparison, and comparison is the operation that throws.
+        local secret = issecretvalue and (issecretvalue(spellID) or issecretvalue(itemID))
+        if ok and not secret and spellID and itemID then
+            local name = C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(itemID)
+            local icon = C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(itemID)
+            if name and icon then
+                return { categoryID = categoryID, name = name, icon = icon }
+            end
+        end
+    end
+
+    return {
+        categoryID = categoryID,
+        name = ("Consumable (category %d)"):format(categoryID),
+        icon = GENERIC_CATEGORY_ICON,
+    }
 end
 
 --- Everything the Cooldown Manager reports for this spec, for /thugcv probe.
@@ -819,9 +1020,17 @@ end
 --- @param search string? case-insensitive substring filter
 function Data.BuildSpellList(source, search)
     local ids = {}
+    -- Category-only entries (potions, healthstones) walk beside `ids` rather
+    -- than inside it: their identity is not a spell ID, so mixing the two
+    -- lists would need every consumer of `ids` to learn a second kind of
+    -- value. Task 18; DECISIONS.md §25.
+    local categoryIDs = {}
 
     local function collect(list)
         for _, id in ipairs(list) do table.insert(ids, id) end
+    end
+    local function collectCategories(list)
+        for _, id in ipairs(list) do table.insert(categoryIDs, id) end
     end
 
     -- Withheld, not filtered out afterwards: a buff that cannot be drawn must
@@ -843,6 +1052,7 @@ function Data.BuildSpellList(source, search)
             local isBuff = IsBuffCategory(categoryName)
             if buffsAvailable or not isBuff then
                 collect(CooldownViewerSpellIDs(categoryName))
+                collectCategories(CooldownViewerCategoryIDs(categoryName))
             end
         end
         collect(SpellbookSpellIDs())
@@ -853,6 +1063,7 @@ function Data.BuildSpellList(source, search)
                 withheld = true
             else
                 collect(CooldownViewerSpellIDs(categoryName))
+                collectCategories(CooldownViewerCategoryIDs(categoryName))
             end
         end
         -- A spec Blizzard has not categorised would otherwise show an empty
@@ -860,7 +1071,7 @@ function Data.BuildSpellList(source, search)
         -- was withheld on purpose, though: answering "tracked buffs" with the
         -- whole spellbook is worse than answering it with nothing and saying
         -- why, which is what the picker does instead.
-        if #ids == 0 and not withheld then collect(SpellbookSpellIDs()) end
+        if #ids == 0 and #categoryIDs == 0 and not withheld then collect(SpellbookSpellIDs()) end
     end
 
     if search and search ~= "" then search = search:lower() else search = nil end
@@ -870,6 +1081,16 @@ function Data.BuildSpellList(source, search)
         if not seen[id] then
             seen[id] = true
             local entry = SpellEntry(id)
+            if entry and (not search or entry.name:lower():find(search, 1, true)) then
+                table.insert(entries, entry)
+            end
+        end
+    end
+    for _, categoryID in ipairs(categoryIDs) do
+        local key = Data.PlacementKey({ categoryID = categoryID })
+        if not seen[key] then
+            seen[key] = true
+            local entry = Data.CategoryEntry(categoryID)
             if entry and (not search or entry.name:lower():find(search, 1, true)) then
                 table.insert(entries, entry)
             end

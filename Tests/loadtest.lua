@@ -3697,6 +3697,258 @@ if ThugUI.CooldownViewer then
     end
 end
 
+-- Potions and healthstones (task 18; DECISIONS.md §25). 12.1 puts these in the
+-- Cooldown Manager as entries with NO spell ID at all, identified only by
+-- `spellCategoryID`. Category 4 (combat potion) stands for the documented
+-- shape; category 2566 (Demonic Healthstone) stands for the one Blizzard's
+-- own local table carries with no named constant anywhere, and exists here
+-- specifically to prove discovery never falls back to a hardcoded list.
+if ThugUI.CooldownViewer then
+    say("\n-- category cells (potions and healthstones) --")
+    local CV = ThugUI.CooldownViewer
+    local Data = CV.Data
+
+    -- C_Spell.GetLastCategoryCooldownSource(spellCategory) -> spellID?, itemID?
+    -- MayReturnNothing = true, SecretWhenCooldownsRestricted = true. An absent
+    -- entry models "not triggered this session yet" -- the normal case on a
+    -- fresh login, not a failure; `secret = true` models the secrecy flag.
+    _G.__categorySource = {}
+    function C_Spell.GetLastCategoryCooldownSource(spellCategory)
+        local state = _G.__categorySource[spellCategory]
+        if not state then return nil end
+        if state.secret then return _G.__SECRET, _G.__SECRET end
+        return state.spellID, state.itemID
+    end
+
+    -- C_Item.GetItemCooldown(itemID) -> startTime, duration, enableCooldownTimer.
+    -- Carries no SecretWhen* flag at all (DECISIONS.md §20) -- plain numbers,
+    -- keyed by item ID rather than an equip slot: a category cell has no slot.
+    C_Item = C_Item or {}
+    _G.__itemCooldownsByID = {}
+    function C_Item.GetItemCooldown(itemID)
+        local state = _G.__itemCooldownsByID[itemID]
+        if not state then return 0, 0, 1 end
+        return state.startTime or 0, state.duration or 0, 1
+    end
+    _G.__itemNamesByID = {}
+    _G.__itemIconsByID = {}
+    function C_Item.GetItemNameByID(itemID) return _G.__itemNamesByID[itemID] end
+    function C_Item.GetItemIconByID(itemID) return _G.__itemIconsByID[itemID] end
+
+    -- cooldownID 20: category 4, the documented "combat potion" shape, filed
+    -- under Essential. cooldownID 21: category 2566, filed under Utility --
+    -- unnamed anywhere in Blizzard's own constants, the reason discovery has
+    -- to walk the live sweep rather than trust a list.
+    _G.__cooldownEntries[20] = { cooldownID = 20, spellCategoryID = 4, linkedSpellIDs = {} }
+    _G.__cooldownEntries[21] = { cooldownID = 21, spellCategoryID = 2566, linkedSpellIDs = {} }
+    _G.__categorySets.Essential = { 1, 2, 4, 20 }
+    _G.__categorySets.Utility = { 7, 21 }
+
+    --- Places category 4 at (row, col) -- defaults to 1,1 -- and rebuilds.
+    --- Does NOT wipe existing placements first, so a caller can place a
+    --- second entry beside it (see the "adjacent cells" case below).
+    local function PlaceCategory(mode, row, col)
+        row, col = row or 1, col or 1
+        local profile = Data.GetActiveProfile()
+        profile.collapse = "none"
+        profile.enabled, profile.onlyInCombat = true, false
+        Data.SetCategoryPlacement(profile, row, col, 4, mode or "cooldown")
+        Data.InvalidateCooldownInfoCache()
+        CV:Rebuild()
+        CV.container.__shown = true
+        return CV.icons[Data.CellKey(row, col)]
+    end
+
+    -- Reset to a known baseline at the START of each case, not only at the
+    -- end -- a case that fails and errors skips its own trailing cleanup
+    -- (Lua `error` unwinds past it), which would otherwise leak state into
+    -- whichever case runs next. Same discipline as ResetItemStubs above.
+    local function ResetCategoryStubs()
+        wipe(_G.__categorySource)
+        wipe(_G.__itemCooldownsByID)
+        local profile = Data.GetActiveProfile()
+        wipe(profile.placements)
+    end
+
+    local steps = {
+        { "a spellCategoryID-only entry appears in the picker with a name and an icon", function()
+            ResetCategoryStubs()
+            Data.InvalidateCooldownInfoCache()
+            local list = Data.BuildSpellList("essential", nil)
+
+            local found
+            for _, entry in ipairs(list) do
+                if entry.categoryID == 4 then found = entry end
+            end
+            assert(found, "the category-4 entry never appeared in the essential picker")
+            assert(found.name and found.name ~= "", "category picker row has no name")
+            assert(found.icon, "category picker row has no icon")
+        end },
+
+        -- Proof of discovery, not of the documented shape: 2566 has no named
+        -- constant anywhere in Blizzard's own Lua, so finding it can only
+        -- come from actually walking the sweep.
+        { "discovery finds a category the code does not name (2566), never a hardcoded list", function()
+            ResetCategoryStubs()
+            Data.InvalidateCooldownInfoCache()
+            local ids = Data.DiscoverCategoryIDs()
+
+            local found = false
+            for _, id in ipairs(ids) do
+                if id == 2566 then found = true end
+            end
+            assert(found, "discovery did not surface category 2566 from the live sweep")
+        end },
+
+        -- Review catch, task 18: `local categoryInfoCache` was declared BELOW
+        -- Data.InvalidateCooldownInfoCache, so the assignment inside that
+        -- function bound to a GLOBAL of the same name. The cache was never
+        -- invalidated, and the name leaked into WoW's shared namespace --
+        -- which is how §15's Edit Mode collision began.
+        --
+        -- A "no global was written" assertion was drafted here and DELETED: it
+        -- can never fail. The buggy code assigns `nil` to the global, and
+        -- assigning nil does not create one, so rawget(_G, ...) reads nil
+        -- either way. It was green against the bug it was written for. Left as
+        -- a comment because a test that cannot fail is worse than no test, and
+        -- this one looked entirely convincing.
+        --
+        -- What does catch it is the behaviour: a talent change fires
+        -- InvalidateCooldownInfoCache WITHOUT changing spec, so the spec check
+        -- in GetCategoryInfo cannot mask it and stale category data survives.
+        { "invalidating rebuilds the category cache within one spec", function()
+            ResetCategoryStubs()
+            assert(Data.GetCategoryInfo(2566), "category 2566 missing from the initial sweep")
+
+            -- Take 2566 away as a talent change might, with the spec unchanged.
+            for id, entry in pairs(_G.__cooldownEntries) do
+                if entry and entry.spellCategoryID == 2566 then
+                    _G.__cooldownEntries[id] = nil
+                end
+            end
+            for _, set in pairs(_G.__categorySets) do
+                for i = #set, 1, -1 do
+                    if _G.__cooldownEntries[set[i]] == nil then table.remove(set, i) end
+                end
+            end
+
+            Data.InvalidateCooldownInfoCache()
+
+            assert(Data.GetCategoryInfo(2566) == nil,
+                "category 2566 survived an invalidate -- the cache was not rebuilt")
+            ResetCategoryStubs()
+        end },
+
+        { "a category placement survives Data.GetPlacements rather than being dropped", function()
+            ResetCategoryStubs()
+            local profile = Data.GetActiveProfile()
+            Data.SetCategoryPlacement(profile, 1, 1, 4, "cooldown")
+
+            local placed = Data.GetPlacements(profile)
+            assert(#placed == 1, "category placement was dropped by GetPlacements")
+            assert(placed[1].categoryID == 4, "the surviving placement lost its categoryID")
+        end },
+
+        { "Data.PlacementKey is distinct for spell 4 and category 4", function()
+            local spellKey = Data.PlacementKey({ spellID = 4 })
+            local catKey = Data.PlacementKey({ categoryID = 4 })
+            assert(spellKey ~= catKey, "a string key and a number key collided: "
+                .. "spell 4 and category 4 read as the same identity")
+            assert(type(spellKey) == "number", "a spell placement's key should be its bare spell ID")
+            assert(type(catKey) == "string", "a category placement's key should not be a bare number")
+        end },
+
+        { "GetLastCategoryCooldownSource returning nothing draws the cell anyway, with no sweep and no error", function()
+            ResetCategoryStubs()
+            local icon = PlaceCategory("cooldown")
+            assert(icon.categoryID == 4, "categoryID was not captured onto the icon")
+
+            local ok = pcall(CV.UpdateState, CV)
+            assert(ok, "UpdateState threw when the category source had not resolved yet")
+            assert(icon.wanted, "an unresolved category source hid the cell instead of drawing it")
+            assert(not icon.cooldown.__cooldown, "an unresolved category source got a sweep")
+        end },
+
+        { "a secret return from GetLastCategoryCooldownSource does not throw and does not hide the cell", function()
+            ResetCategoryStubs()
+            _G.__categorySource[4] = { secret = true }
+            local icon = PlaceCategory("cooldown")
+
+            local ok = pcall(CV.UpdateState, CV)
+            assert(ok, "UpdateState threw on a secret GetLastCategoryCooldownSource return")
+            assert(icon.wanted, "a secret category source hid the cell instead of drawing it")
+        end },
+
+        { "placing a category entry and a spell in adjacent cells leaves both drawing", function()
+            ResetCategoryStubs()
+            local profile = Data.GetActiveProfile()
+            profile.collapse = "none"
+            profile.enabled, profile.onlyInCombat = true, false
+            Data.SetCategoryPlacement(profile, 1, 1, 4, "cooldown")
+            Data.SetPlacement(profile, 1, 2, 777, "cooldown")
+            Data.InvalidateCooldownInfoCache()
+            CV:Rebuild()
+            CV.container.__shown = true
+
+            local catIcon = CV.icons[Data.CellKey(1, 1)]
+            local spellIcon = CV.icons[Data.CellKey(1, 2)]
+            _G.__cooldownState[777] = { isOnGCD = false, isActive = false }
+
+            CV:UpdateState()
+            assert(catIcon.wanted, "the category cell did not draw beside a spell cell")
+            assert(spellIcon.wanted, "the spell cell did not draw beside a category cell")
+        end },
+
+        -- The success path, not just the fail-open one: once the category has
+        -- actually been triggered this session, its cooldown drives the cell
+        -- exactly like an item-backed cell's does.
+        { "once resolved, the category item's own cooldown drives cooldown/recharging/always modes", function()
+            ResetCategoryStubs()
+            _G.__categorySource[4] = { spellID = 17545, itemID = 191545 }
+            _G.__itemCooldownsByID[191545] = { startTime = 100, duration = 20 }
+
+            local cdIcon = PlaceCategory("cooldown")
+            CV:UpdateState()
+            assert(not cdIcon.wanted, "cooldown mode showed a category item that is on cooldown")
+
+            local rIcon = PlaceCategory("recharging")
+            CV:UpdateState()
+            assert(rIcon.wanted, "recharging mode did not show a category item that is on cooldown")
+            assert(rIcon.cooldown.__cooldown, "recharging mode did not sweep a category item on cooldown")
+
+            local aIcon = PlaceCategory("always")
+            CV:UpdateState()
+            assert(aIcon.wanted, "always mode did not show a category item")
+            assert(aIcon.cooldown.__cooldown, "always mode did not sweep a category item")
+        end },
+
+        { "restore", function()
+            _G.__cooldownEntries[20] = nil
+            _G.__cooldownEntries[21] = nil
+            _G.__categorySets.Essential = { 1, 2, 4 }
+            _G.__categorySets.Utility = { 7 }
+            _G.__categorySource = {}
+            _G.__itemCooldownsByID = {}
+            C_Spell.GetLastCategoryCooldownSource = nil
+            C_Item = nil
+            Data.InvalidateCooldownInfoCache()
+            local profile = Data.GetActiveProfile()
+            wipe(profile.placements)
+            CV:Rebuild()
+        end },
+    }
+
+    for _, step in ipairs(steps) do
+        local ok, err = pcall(step[2])
+        if ok then
+            say("ok         " .. step[1])
+        else
+            say(("STEP FAIL  %s\n           %s"):format(step[1], tostring(err)))
+            failures = failures + 1
+        end
+    end
+end
+
 -- Combo pips: which resource, how many, and how many are lit.
 if ThugUI.ComboPips then
     say("\n-- combo pips --")

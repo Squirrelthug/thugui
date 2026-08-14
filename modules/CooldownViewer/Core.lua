@@ -313,6 +313,77 @@ local function ApplyItemSweep(icon, equipSlot)
     end
 end
 
+-- ----------------------------------------------------------------------------
+-- Category-backed cells -- potions, healthstones (12.1)
+--
+-- 12.1 puts these in the Cooldown Manager with NO spell ID at all, only a
+-- `spellCategoryID` (set on the icon in Rebuild, exactly like equipSlot
+-- above) -- so unlike a trinket there is no on-use spell to fall back to and
+-- no equipment slot to ask about. The only handle on WHICH item is currently
+-- in play is C_Spell.GetLastCategoryCooldownSource, a catch-up call that
+-- answers nothing until the category has actually been triggered this
+-- session (MayReturnNothing = true) -- the normal case on a fresh login, not
+-- a failure -- and carries SecretWhenCooldownsRestricted, so its returns are
+-- screened before any nil test. DECISIONS.md §25, task 18.
+-- ----------------------------------------------------------------------------
+
+--- The item currently backing a category, or nil if nothing has resolved.
+--- Nil covers three cases that all need the SAME fail-open handling below:
+--- the category has not been used this session, the call threw, and the
+--- return was secret. Collapsing them into one nil is deliberate -- none of
+--- the three should ever hide the cell.
+local function ResolveCategoryItem(categoryID)
+    if not categoryID or not C_Spell or not C_Spell.GetLastCategoryCooldownSource then
+        return nil
+    end
+
+    local ok, spellID, itemID = pcall(C_Spell.GetLastCategoryCooldownSource, categoryID)
+    if not ok then return nil end
+
+    -- issecretvalue asked FIRST, same ordering Readable() uses -- comparing a
+    -- secret against nil is itself a comparison, and comparison is the
+    -- operation that throws.
+    if not Readable(spellID) or not Readable(itemID) then return nil end
+    return itemID
+end
+
+--- Is the resolved item off cooldown? Mirrors IsItemReady, but sourced from an
+--- item ID rather than an equip slot -- a category cell has no slot.
+--- C_Item.GetItemCooldown carries no SecretWhen* flag at all (DECISIONS.md
+--- 20), so this is plain numbers once an item ID is known. No item ID
+--- resolved is treated as ready, same as an unreadable answer: never hide the
+--- cell on a failed resolve.
+local function IsCategoryReady(itemID)
+    if not itemID or not C_Item or not C_Item.GetItemCooldown then return true end
+
+    local ok, startTime, duration = pcall(C_Item.GetItemCooldown, itemID)
+    if not ok or not Readable(startTime) or not Readable(duration) then return true end
+
+    return duration == 0
+end
+
+--- Drive a category cell's sweep, for "always" and "recharging" modes.
+--- Mirrors ApplyItemSweep exactly, for the same reason: an item cooldown is
+--- ordinary numbers even in combat, so no secret screen beyond Readable() is
+--- needed, but the pcall discipline stays -- an uncaught throw here would
+--- freeze every icon UpdateState has not yet reached (DECISIONS.md §19).
+local function ApplyCategorySweep(icon, itemID)
+    if not itemID or not C_Item or not C_Item.GetItemCooldown then
+        icon.cooldown:Clear()
+        return
+    end
+
+    local ok, startTime, duration = pcall(C_Item.GetItemCooldown, itemID)
+    if not ok or not Readable(startTime) or not Readable(duration) or duration == 0 then
+        icon.cooldown:Clear()
+        return
+    end
+
+    if not pcall(icon.cooldown.SetCooldown, icon.cooldown, startTime, duration) then
+        icon.cooldown:Clear()
+    end
+end
+
 --- A buff on the player cast by the player, for one spell ID.
 ---
 --- Blizzard's CooldownViewerItemDataMixin:FindLinkedSpellForCurrentAuras uses
@@ -682,7 +753,20 @@ function CV:Rebuild()
         icon:SetParent(f)
         icon:SetSize(iconSize, iconSize)
 
-        local texture = C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(placement.spellID)
+        -- Category placements (potions, healthstones) have no spell ID to
+        -- pass to C_Spell.GetSpellTexture -- that call is guarded per-branch
+        -- rather than handed a nil, since a nil spellID is not a case the
+        -- real API is documented to accept. Data.CategoryEntry runs the same
+        -- resolution order the drawn cell needs (DECISIONS.md §25): Blizzard's
+        -- pooled item frame first, then GetLastCategoryCooldownSource, then a
+        -- generic label -- so the picker and the grid never disagree.
+        local texture
+        if placement.categoryID then
+            local entry = Data.CategoryEntry(placement.categoryID)
+            texture = entry and entry.icon
+        else
+            texture = C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(placement.spellID)
+        end
         icon.tex:SetTexture(texture)
         -- Icons are pooled, and a cell adopted by Blizzard's buff frame leaves
         -- its texture at zero alpha. Without this reset, the next spell to
@@ -692,11 +776,17 @@ function CV:Rebuild()
         -- Remembered so aura mode can swap to a linked buff's art and back.
         icon.baseTexture = texture
         icon.spellID = placement.spellID
+        -- Set only when the placement actually carries one -- explicitly nil
+        -- otherwise, for the same pooled-icon reason as equipSlot below: a
+        -- cell that used to be category-backed must not leave a stale
+        -- categoryID on whatever spell reuses its frame next.
+        icon.categoryID = placement.categoryID
 
         -- The set of buffs this entry can stand for, e.g. the Roll the Bones
         -- outcomes. Resolved here rather than stored in the placement,
         -- so it follows talent changes and survives a patch renumbering
-        -- cooldown IDs.
+        -- cooldown IDs. Only meaningful for a spell placement -- a category
+        -- entry has no spell ID to look up with.
         local cooldownInfo = Data.GetCooldownInfoForSpell(placement.spellID)
         icon.linkedSpellIDs = cooldownInfo and cooldownInfo.linkedSpellIDs or nil
         -- Set only when the Cooldown Manager entry actually carries one --
@@ -706,8 +796,11 @@ function CV:Rebuild()
         icon.equipSlot = cooldownInfo and cooldownInfo.equipSlot or nil
         -- Resolved by ID (which works for any spell in the game) and cached, so
         -- the per-frame path can query by name. Rebuild re-runs on
-        -- SPELLS_CHANGED / PLAYER_TALENT_UPDATE, so this stays current.
-        local spellInfo = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(placement.spellID)
+        -- SPELLS_CHANGED / PLAYER_TALENT_UPDATE, so this stays current. Guarded
+        -- on placement.spellID for the same reason as the texture above -- a
+        -- category placement has none to ask about.
+        local spellInfo = placement.spellID and C_Spell and C_Spell.GetSpellInfo
+            and C_Spell.GetSpellInfo(placement.spellID)
         icon.spellName = spellInfo and spellInfo.name
         icon.mode = placement.mode
         icon.row, icon.col = placement.row, placement.col
@@ -959,6 +1052,39 @@ function CV:UpdateState()
                     icon.cooldown:Clear()
                 end
                 -- Items do not report a charge count through this path.
+                icon.count:Hide()
+            end
+        elseif icon.categoryID then
+            -- Category-backed cell (potion, healthstone). No spellbook name,
+            -- no equip slot -- the only handle on which item is currently in
+            -- play is a catch-up call that answers nothing until the category
+            -- has actually been triggered this session, and that is the
+            -- normal case on a fresh login, not a failure. An unresolved
+            -- source fails OPEN here, same as an unreadable item cooldown
+            -- above: never hide the cell on a failed resolve (§13's failure
+            -- shape -- an empty cell reads as a broken addon).
+            local itemID = ResolveCategoryItem(icon.categoryID)
+
+            if not itemID then
+                show = true
+                icon.cooldown:Clear()
+                icon.count:Hide()
+            else
+                local ready = IsCategoryReady(itemID)
+
+                if icon.mode == "always" then
+                    show = true
+                    ApplyCategorySweep(icon, itemID)
+                elseif icon.mode == "recharging" then
+                    show = not ready
+                    ApplyCategorySweep(icon, itemID)
+                elseif icon.mode == "proc" then
+                    show = (ready and procced) and true or false
+                    icon.cooldown:Clear()
+                else
+                    show = ready and true or false
+                    icon.cooldown:Clear()
+                end
                 icon.count:Hide()
             end
         elseif not IsSpellAvailable(spellName) then
@@ -1473,9 +1599,14 @@ SlashCmdList["THUGCV"] = function(msg)
 
         local unknown = {}
         for _, placement in pairs(profile.placements) do
-            local info = C_Spell.GetSpellInfo(placement.spellID)
-            if not IsSpellAvailable(info and info.name) then
-                table.insert(unknown, (info and info.name or placement.spellID))
+            -- A category placement (potion, healthstone) has no spell ID to
+            -- ask about here -- it is never "not talented", it is a different
+            -- kind of placement entirely, so it is simply skipped.
+            if placement.spellID then
+                local info = C_Spell.GetSpellInfo(placement.spellID)
+                if not IsSpellAvailable(info and info.name) then
+                    table.insert(unknown, (info and info.name or placement.spellID))
+                end
             end
         end
         if #unknown > 0 then
