@@ -114,20 +114,86 @@ tightly enough that none of the three needed a decision made for it.
   from reading `ThugUI_BCVDump` — 20 of 31 entries affected — not from reasoning
   about the code. The player had reported it as a Roll the Bones quirk.
 
-## Next batch — nothing written yet, on purpose
+## Batch 5 — the Cursor Rings page and the resource ring — COMPLETE
 
-The open thread is in `docs/HANDOFF.md`, "Read this first". It needs the player
-to test in game before any further task can be specified: the Opportunity fix is
-unconfirmed, and there is a second fault in `BB:Apply` that the new logging
-should finally name. Writing tasks against either right now would mean
-specifying work against a guess.
+| # | Task | Outcome |
+|---|---|---|
+| 16 | Radial StatusBar resource ring | Clean, and **verified in game 2026-08-13** — tracks live in combat and through form swaps |
+| 17 | Two-column Cursor Rings page, drain direction | **Agent died mid-edit on a session limit.** Finished by the coordinator — see below |
+
+### Task 17 is the first delegation failure of a new kind
+
+The agent hit an **account-level session limit** partway through and stopped
+with the page rewritten, `ResourceRing.lua` untouched, no tests written and **no
+report**. The `00-AGENT-BRIEF.md` rule *"no report file means the task did not
+happen"* did its job: the tree was checked before anything was believed.
+
+What it left was **live and broken** — `ui/pages/CursorRings.lua` referenced an
+unbound `W`, so opening the config window would have thrown. The addon folder is
+the working copy, so a partial agent edit is one `/reload` from the player's
+game. **Check `git status` and run the harness before anything else when an
+agent does not finish.** That is now the first thing this file says about
+failure.
+
+Worth recording in the agent's favour: the layout work it did complete was good,
+including a `SyncColumns` helper nobody specified, which keeps paired sections
+aligned when one column has more rows than the other. The failure was
+environmental, not a quality problem.
+
+**The coordinator finished it by hand rather than re-delegating**, because the
+limit was account-wide and would have hit a second agent too. That is a
+deliberate exception to the cost rule in `CLAUDE.md` §4a, recorded here so the
+exception stays visible.
+
+### What this batch taught the process
+
+- **A dead agent is more dangerous than a wrong one.** A wrong agent leaves a
+  reviewable diff; a dead one leaves an unreviewable half of one, in a live
+  addon folder, with no report saying which half.
+- **The harness found a hazard in itself again, and it was load-bearing.**
+  `GetHeight`/`GetWidth` ignored `SetHeight`/`SetWidth` and returned a flat
+  `100`, so frame size was unobservable — which is exactly why the scroll-height
+  bug in `Window:BuildPage` had no test. **When a getter cannot see what its
+  setter did, that is a region of the code no test can describe.**
+
+## Batch 6 — in flight
+
+| # | Task | State |
+|---|---|---|
+| 18 | Potions and healthstones: a second kind of placement | Running |
+
+Task 18 rests on `DECISIONS.md` §25, which is research rather than code — it
+records both what Blizzard's source confirms and, deliberately, what it does
+**not** (which `Enum.CooldownViewerCategory` these arrive under is unverified,
+and so is whether the drain-direction texture API exists at runtime at all).
+A task file that says which of its facts are unverified is worth more than one
+that reads as uniformly confident.
 
 **The `isInvisible` task is deliberately unwritten.** Task 01 established the
 field is hard-gated behind `CDM_HIDE_INVISIBLE_ITEMS = false`, which Blizzard
 marks as debug code slated for removal, so filtering on it today would implement
 a behaviour the game does not have.
 
+## When an agent does not finish
+
+Do this in order, before believing anything the agent said and before writing a
+replacement task:
+
+1. **`git status --short` and `git diff --stat`.** Find out whether there are
+   edits at all. "The task did not run" and "the task ran halfway" need
+   completely different responses.
+2. **Check `tasks/reports/` for the report.** No report means the task did not
+   complete, whatever the final message claimed.
+3. **`luac -p` every modified file, then run the harness.** The addon folder is
+   the live addon. A half-written file is one `/reload` from the player's game,
+   and a syntax error there takes out more than the feature.
+4. **Only then** decide between finishing it by hand, re-delegating, or
+   reverting. If the failure was environmental (a session limit, a timeout),
+   re-delegating may hit the same wall.
+
 ## Baseline
 
 `lua Tests/loadtest.lua .` → **0 failures**, from a clean tree.
 Any failure an agent reports is one the agent caused.
+
+Current: **203 passing**, as of 2026-08-13.
