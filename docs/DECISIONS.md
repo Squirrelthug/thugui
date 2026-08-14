@@ -1702,6 +1702,38 @@ one condition under which a mismatch would be visible. Had that not been
 recorded, the feature would have been tested at a convenient moment, probably at
 full resource, and shipped looking fine.
 
+### The start angle uses a substitute for an API that exists — WATCH ITEM
+
+Research on 2026-08-13 turned up a texture-level radial API that nothing in
+Blizzard's own 12.1 UI uses, on
+`SimpleTextureBaseAPIDocumentation.lua`:
+
+| Method | Documented as |
+|---|---|
+| `SetRadialProgressBarStartOffset(0..1)` | *"the start angle offset … where 0 is at the bottom"* |
+| `SetRadialProgressBarReverse(bool)` | *"whether the radial progress bar fills in reverse (counterclockwise) direction"* |
+| `SetRadialProgressBarPercent`, `…EndOffset`, `…Feather`, `ClearRadialProgressBar` | the rest of the family |
+
+`SetRadialProgressBarStartOffset` is a first-class version of what
+`RR:SyncGeometry` currently achieves by **rotating the managed texture**, which
+was only ever a workaround for `StatusBar` having no `SetRotation`.
+
+**Deliberately not changed, by the player's decision on 2026-08-13.** The
+workaround is verified working in game — the ring reads correctly at mid-range,
+at full, and while refilling — so this is cleanup with no visible symptom, and
+the rule about not breaking what has worked applies.
+
+**The trigger for revisiting it:** if the ring's start angle ever misbehaves,
+especially after a patch, this is the first place to look and the fix is already
+identified. Do not go hunting the rotation maths.
+
+`SetRadialProgressBarReverse` *is* being used, for the drain-direction setting
+(task 17). Note what that means: we are the first consumer of this API family in
+either codebase, so every call is capability-guarded rather than assumed. It is
+also **unverified** that the texture returned by `GetStatusBarTexture()` exposes
+these methods at all — the generated docs do not state object composition, and
+that link is a naming-convention inference.
+
 ---
 
 ## 24. Salvage from the 12.1 patch file, kept when it was deleted
@@ -1828,3 +1860,55 @@ has agreed to it.** The expensive half is not the drawing; it is that a saved
 placement is `{ spellID, mode }` and `Data.GetPlacements` drops any placement
 without a `spellID` before anything downstream sees it, with roughly fifteen
 call sites treating `spellID` as a placement's only possible identity.
+
+---
+
+## 26. A setting that cannot be found is a setting that does not exist
+
+On 2026-08-13 the player asked for the resource ring to be given *"a combat
+conditional like the other settings have"*.
+
+**It already had one.** `resourceRingVisibility` — Always / Only in combat / With
+the cursor rings — has been on the Cursor Rings page the whole time, sitting
+*directly above* the radial-bar checkbox they had just been using. Their own
+setting was `always`, which they had never chosen. When shown where it was, they
+said: *"I didn't see that it has its own drop down."*
+
+This is worth a section because of how nearly it became a build. The obvious
+reading of the request was "add a conditional", and there was a plausible design
+for it — mirror the `always`/`combat`/`rings` dropdown onto the radial checkbox.
+Building that would have added a second, redundant conditional to a page whose
+actual defect is that a control can sit in plain sight and not be seen.
+
+**What made the difference was mapping the page before answering it.** The
+enumeration turned up that the ring already had the exact setting being asked
+for, which turned the question from "which conditional do you want" into "did you
+know this exists". Asking cost one message; building would have cost a feature
+nobody needed and left the real problem in place.
+
+### The cause, and the standard that follows from it
+
+Roughly forty controls, every one of them left-aligned in a single column about
+200px wide, on a page 762px wide. Over 500px of empty space to the right, and a
+vertical stack long enough that a lone dropdown between two checkboxes reads as
+scenery.
+
+So the two-column rework in task 17 is **not a tidying job**, and its acceptance
+test is not "the right-hand side is full":
+
+> **A layout change to a settings page is judged on whether the settings are
+> findable. A prettier page that still hides a dropdown has failed.**
+
+The specific mechanism chosen follows from that. Resource ring and Combo pips are
+paired side by side because they are structurally near-identical — show toggle,
+`Show:` dropdown, colour, sliders — so the two `Show:` dropdowns land in matching
+positions and each explains the other. Mirroring is what makes a control legible;
+an unpaired control in a long stack is what made this one invisible.
+
+### Carry this further than the one page
+
+The player has used this addon daily for months. **Daily use is not discovery**,
+and it is not evidence that an interface communicates. This project has no user
+research and never will — there is one player — so the only signal available is
+the occasional moment when they ask for something they already have. Treat every
+one of those as a UI defect report, not as a misunderstanding to be corrected.
