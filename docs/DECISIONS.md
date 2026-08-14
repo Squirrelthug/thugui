@@ -1912,3 +1912,101 @@ and it is not evidence that an interface communicates. This project has no user
 research and never will — there is one player — so the only signal available is
 the occasional moment when they ask for something they already have. Treat every
 one of those as a UI defect report, not as a misunderstanding to be corrected.
+
+---
+
+## 27. The Cooldown resource ring is deleted, and what that says about fallbacks
+
+**Removed 2026-08-13**, with `resourceRingRadialBar`, at the player's
+instruction: *"the old cooldown ring's frozen sweep is no longer needed so we
+should just get rid of it and keep going forward."*
+
+`modules/ResourceRing.lua` carried two implementations. The Cooldown-widget one
+was the default and the radial `StatusBar` was opt-in. That relationship had
+already inverted — the radial ring is verified working in combat (§23) and the
+Cooldown one was measured never to have worked at all.
+
+### It was never a fallback, because it never fell back
+
+It seeded a sweep with `SetCooldown` and called `Pause()`, and **`Resume()` was
+never called anywhere in the file.** A paused Cooldown does not re-evaluate a
+fresh `SetCooldown`, so the ring froze at the first value it ever drew. Colour
+kept tracking, because `SetSwipeColor` is unaffected by pause — which is exactly
+why it looked alive and went unreported for months.
+
+**`CLAUDE.md` §3 says never break the fallback, and that rule was protecting
+something that had never worked once.** The rule is still right; it just needs
+its actual condition stated:
+
+> A fallback earns its keep only if it is **known** to work. An untested one is
+> not insurance — it is a second thing that can be wrong, and it costs a branch
+> at every call site that consults it.
+
+The ECV/BCV/GCV bars keep their protection under exactly that test: they are
+known to work, and `/thugcv legacy` reaches them. The difference is evidence.
+
+### What replaced the fallback: nothing, deliberately
+
+On a client with no `StatusBarRenderMode.Radial` the ring now does not draw, and
+says so once in the log. That is a real regression in robustness and it is
+accepted, because the TOC targets 12.1 and 12.1 has the render mode. A silent
+fall back to a ring that freezes is worse than no ring: **a broken thing that
+looks like a working thing is the failure mode this project keeps paying for.**
+
+### What the deletion took with it
+
+- `RR.frameKind`, `RR.cooldownFrame`, `RR.lastFraction`, `ARC_DURATION`, and the
+  whole `EnsureFrame` two-way dispatch. `Update` now calls one path.
+- The "Radial bar" checkbox. It chose between two things and there is one thing.
+- Four harness cases, listed in `Tests/README.md` so the coverage drop stays
+  visible rather than looking like tests that quietly wandered off.
+- A stale `resourceRingRadialBar` in a player's SavedVariables is **ignored, not
+  migrated** — neither value means anything now, so there is nothing to migrate
+  it to.
+
+---
+
+## 28. `QA.md` is deleted: an unrun checklist is a liability
+
+**Deleted 2026-08-13.** The player asked outright whether a case for keeping it
+had ever been made. Reasoning it through, the answer was no.
+
+### The argument against it
+
+- **It was never run**, in the three days it existed or since.
+- **It was a release gate for a project with no releases.** Its own framing was
+  *"run this before calling a state a release candidate"*. There is one player,
+  no versions and no ship dates; the actual rhythm is edit, `/reload`, look.
+  A process document describing a process nobody performs is fiction.
+- **It was already going stale.** Its per-spec sweep still listed the Maul and
+  Grappling Hook charge bugs as undiagnosed; both had been closed for a day.
+  That is precisely the decay that made `UPCOMING-PATCH.md` worth deleting
+  (§24) — and stale process docs are worse than absent ones, because they are
+  read as current.
+- **Its section 1 asked for nine reload-heavy scale combinations**, which is a
+  cost large enough that it guaranteed the file would keep not being run.
+
+### What it held that was real, and where it went
+
+Two things lived nowhere else, and were moved to `KNOWN-ISSUES.md` rather than
+lost:
+
+1. **Geometry is only ever tested at one UI scale.** Three scales multiply and
+   this addon lives at one point in that space; it has already hidden a real bug
+   (§17). Now framed as a standing blind spot with a first move when a geometry
+   bug appears, rather than a nine-cell matrix nobody will run.
+2. **Two characters of the same spec share one layout.** A real limitation —
+   the player has two resto druids — recorded as a limitation rather than queued
+   as work, because nobody has yet wanted them configured apart.
+
+Everything else in it duplicated `CLAUDE.md` (read the debug log, check
+BugGrabber) or `KNOWN-ISSUES.md` (the legacy bars still work).
+
+### The general rule
+
+**A checklist that is never run does not represent work not yet done; it
+represents a judgement that the work is not worth doing.** Write that judgement
+down as a known limitation, where it will actually be read, and delete the
+checklist. This project's docs are load-bearing precisely because each one earns
+its place — the moment a file is kept out of good intentions it starts costing
+attention it does not repay.

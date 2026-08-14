@@ -248,9 +248,8 @@ Ones that actually apply here:
 | `docs/DECISIONS.md` | Why the addon is built the way it is. The reasoning log |
 | `docs/SOURCES.md` | Where trustworthy information comes from, with last-checked dates |
 | `docs/KNOWN-ISSUES.md` | Understood problems deliberately not fixed, and what would change that |
-| `docs/QA.md` | The in-game pass before a release candidate. Everything the harness cannot prove |
+| `Tests/README.md` | What the harness covers, what it cannot, and the hazards in the harness itself |
 | `docs/UPCOMING-PATCH.md` | What we know about the *next* game patch, accrued before it ships |
-| `Tests/README.md` | What the harness covers and what it cannot |
 | `skills/wow-addon-dev/SKILL.md` | Our own addon-development skill. Generalised lessons, meant to outlive this project |
 
 **Keep `DECISIONS.md` current.** When you solve something non-obvious, add the

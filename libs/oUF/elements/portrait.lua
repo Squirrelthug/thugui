@@ -56,7 +56,33 @@ local function Update(self, event, unit)
 	if(element.PreUpdate) then element:PreUpdate(unit) end
 
 	local guid = UnitGUID(unit)
-	local isAvailable = UnitIsConnected(unit) and UnitIsVisible(unit)
+
+	-- THUGUI LOCAL PATCH -- not upstream oUF. Re-apply if this library is
+	-- updated; upstream guards the `guid` half just below and leaves this half
+	-- unguarded.
+	--
+	-- `UnitIsConnected(unit) and UnitIsVisible(unit)` performs a truth test on
+	-- each return, and those may be SECRET booleans. Every operation this
+	-- function then does with the result -- `and`, `~=` on line below, `not`
+	-- in the branch further down -- is one that throws on a secret. oUF is
+	-- vendored under our name so any error here reports as ThugUI's
+	-- (DECISIONS.md §12), which is what made this look like a taint problem
+	-- rather than the ordinary bug it is.
+	--
+	-- issecretvalue is asked FIRST, before any test of the values themselves:
+	-- comparing a secret to anything, nil included, is itself the operation
+	-- that errors (Tests/README.md, "the secret stub does not throw on a nil
+	-- comparison").
+	local connected = UnitIsConnected(unit)
+	local visible = UnitIsVisible(unit)
+	local isAvailable = true
+	if(not issecretvalue(connected) and not issecretvalue(visible)) then
+		isAvailable = (connected and visible) and true or false
+	end
+	-- Fails OPEN when unreadable: the unit is treated as available, so the
+	-- real portrait keeps drawing. The alternative failure is replacing a
+	-- perfectly good portrait with a question mark every combat, which is a
+	-- visible regression where a stale portrait is not.
 
 	local hasStateChanged = event ~= 'OnUpdate'
 		or (not issecretvalue(guid) and not issecretvalue(element.guid) and element.guid ~= guid)

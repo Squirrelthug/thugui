@@ -144,9 +144,20 @@ start-angle worry did not materialise.
 
 ---
 
-## The old Cooldown-widget resource ring never tracked — SECRECY RULED OUT
+## ~~The old Cooldown-widget resource ring never tracked~~ — DELETED 2026-08-13
 
-**Status: the diagnostic experiment ran on 2026-08-13 and came back clean.**
+**Resolved by removal, not by repair.** The player's call, same day: *"the old
+cooldown ring's frozen sweep is no longer needed so we should just get rid of it
+and keep going forward."* The Cooldown path and the `resourceRingRadialBar`
+setting that selected it are both gone; the radial ring is the only
+implementation. `DECISIONS.md` §27.
+
+The account below is kept because the *diagnosis* is the reusable part — it is
+how the cause was narrowed without ever fixing anything, and the experiment that
+did it was designed before either answer was known.
+
+**Status when it was closed: the diagnostic experiment ran on 2026-08-13 and
+came back clean.**
 
 The player reported on 2026-08-12 that the Cooldown ring's colour follows
 shapeshift form correctly while the level never moves. Their
@@ -177,11 +188,19 @@ comment at the top of the file says the ring is a frozen sweep on purpose, and
 `ARC_DURATION` is 1000 seconds precisely so an unpaused ring drains slowly rather
 than not at all.
 
-**And consider not fixing it at all.** The Cooldown path now exists only as the
-fallback for a radial path that is verified working. Repairing a fallback nobody
-uses, on a widget whose pause semantics are undocumented, is a poor trade against
-leaving it exactly as it has been for months. That is a decision for the player,
-not a defect to be closed out.
+**And consider not fixing it at all.** *(Written before the player decided. They
+went further and deleted it — see the top of this entry.)* The Cooldown path
+existed only as the fallback for a radial path that is verified working.
+Repairing a fallback nobody uses, on a widget whose pause semantics are
+undocumented, was a poor trade.
+
+**The transferable lesson is about what "fallback" earns.** This project's
+standing rule is *never break the fallback* (`CLAUDE.md` §3), and that rule was
+protecting something which had never worked once. A fallback is only worth its
+keep if it actually falls back; an untested one is not insurance, it is a second
+thing that can be wrong. The rule still holds for the ECV/BCV/GCV bars, which are
+**known** to work and are reachable with `/thugcv legacy` — the difference is
+evidence, not sentiment.
 
 ---
 
@@ -355,3 +374,56 @@ setting does not currently do what it says.
 The feature panels under `modules/` are still registered alongside the new
 config window, as the fallback while the window settles in. Remove only when
 asked.
+
+---
+
+## Geometry is only ever tested at one UI scale
+
+**Status: a standing blind spot, not a specific bug.** Moved here on 2026-08-13
+when `docs/QA.md` was deleted — it was the one genuinely load-bearing thing in
+that file (`DECISIONS.md` §28).
+
+Three scales multiply, and this addon is built and used at one point in that
+space:
+
+| Scale | Where | Range |
+|---|---|---|
+| WoW UI Scale | System → Advanced | 0.53 – 1.0 |
+| `profile.scale` | ThugUI, per spec | 0.5 – 2.0 |
+| Blizzard viewer scale | Edit Mode, Cooldown Manager | user set |
+
+**This has already hidden a real bug.** The adopted-buff sizing defect
+(`DECISIONS.md` §17) survived because the only profile in daily use sat at
+`scale = 1`, where the grid's coordinate space and the screen's coincide. The
+fix is *designed* to be UI-scale independent — it divides two
+`GetEffectiveScale()` values and UIParent appears in both — but **that is
+reasoning, not evidence, and it has still never been checked at a non-default UI
+scale.**
+
+**What to do about it:** nothing, until a geometry bug appears. Then the first
+question is "at what scale?", and the first experiment is to change one of the
+three and see whether the symptom moves. `FitItem` logs its arithmetic once per
+session — `CVBUFF: fit: base=… icon=… ours=… theirs=… -> scale=…` — and that
+line says which of the two coordinate spaces disagreed. **Read it before
+theorising.**
+
+---
+
+## Two characters of the same spec share one layout
+
+**Status: a real design limitation, deliberately not fixed.** Also moved from
+`docs/QA.md` on 2026-08-13.
+
+Profiles are keyed by **specialisation ID** and stored **account-wide** —
+`## SavedVariables` in the TOC, with no `SavedVariablesPerCharacter`. So two
+characters of the same class and spec share one layout and cannot be configured
+apart.
+
+The player has exactly this: **two resto druids, Eowyn and Ixloatel**, on one
+profile.
+
+Fine for one main, and it has never actually bitten. It becomes a real problem
+the moment anyone wants those two set up differently — and it would need
+deciding, with a migration that does not discard existing profiles, before this
+addon went to anyone else. It is recorded as a limitation rather than queued as
+work because **nobody has yet wanted the two configured apart.**

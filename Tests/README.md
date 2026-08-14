@@ -125,3 +125,22 @@ stub always provides `SetRadialProgressBarReverse`, so the case that matters is
 the one that removes it (`no SetRadialProgressBarReverse: no throw, ring still
 draws`). **Green on this family is weaker evidence than usual — only the game
 settles it.**
+
+## What the harness does not load at all: `libs/oUF/`
+
+`loadtest.lua` builds no oUF environment, and there are no stubs for
+`UnitIsConnected`, `UnitIsVisible` or `UnitGUID`. **Nothing under `libs/oUF/` has
+any coverage**, including the two things ThugUI actually depends on it for
+(Target of Target, and the portrait element).
+
+This matters because oUF is vendored **under our name**, so anything it touches
+is attributed to ThugUI and any error it throws reports as ours
+(`DECISIONS.md` §12). A bug in there looks exactly like a bug in our code.
+
+The secret-value fix to `elements/portrait.lua` (2026-08-13) is therefore
+**verified only by reading and by `luac -p`** — it is a ThugUI local patch,
+marked as such in the file, and it has no regression test. Closing this would
+mean teaching the harness to load oUF's addon-namespace files (`local _, ns = ...`)
+and stubbing the unit-state API. That is real work and nobody has judged it worth
+doing for a vendored library; the honest state is recorded here rather than left
+looking like coverage that exists.
