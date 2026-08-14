@@ -1702,7 +1702,7 @@ one condition under which a mismatch would be visible. Had that not been
 recorded, the feature would have been tested at a convenient moment, probably at
 full resource, and shipped looking fine.
 
-### The start angle uses a substitute for an API that exists — WATCH ITEM
+### The start angle uses a substitute for an API that exists — WATCH ITEM, FIRED 2026-08-13
 
 Research on 2026-08-13 turned up a texture-level radial API that nothing in
 Blizzard's own 12.1 UI uses, on
@@ -1718,14 +1718,89 @@ Blizzard's own 12.1 UI uses, on
 `RR:SyncGeometry` currently achieves by **rotating the managed texture**, which
 was only ever a workaround for `StatusBar` having no `SetRotation`.
 
-**Deliberately not changed, by the player's decision on 2026-08-13.** The
-workaround is verified working in game — the ring reads correctly at mid-range,
-at full, and while refilling — so this is cleanup with no visible symptom, and
-the rule about not breaking what has worked applies.
+**Deliberately not changed, by the player's decision on 2026-08-13** — and then
+changed the same evening, because the trigger below fired within hours. The
+paragraph is kept as written because the decision was correct on the evidence
+available when it was made.
 
 **The trigger for revisiting it:** if the ring's start angle ever misbehaves,
 especially after a patch, this is the first place to look and the fix is already
 identified. Do not go hunting the rotation maths.
+
+### The trigger fired, and the workaround had never once run
+
+**Reported in game 2026-08-13:** the ring started at **6 o'clock**, and the drain
+looked wrong for **both** the clockwise and counter-clockwise settings. The
+player's own reading was that it was "flipped on its x axis, or the code is
+somehow reversed".
+
+**One cause produced both symptoms**, and the answer was in the table above all
+along — `SetRadialProgressBarStartOffset` is documented as *"where 0 is at the
+bottom"*. A radial StatusBar starts at the **bottom**, not the top. A Cooldown
+swipe starts at the top. The two never shared a convention, and
+`RR:SyncGeometry` had been feeding the Cooldown convention into a StatusBar.
+
+The second symptom falls straight out of the first, and this is the part worth
+carrying: **clockwise from 6 o'clock climbs the LEFT side of the ring.** The eye
+judges rotation at the top, where every other ThugUI ring starts, so a
+bottom-started clockwise fill reads as counter-clockwise and vice versa. Both
+settings looked wrong; neither was. **The drain mapping was never the bug**, and
+inverting the boolean — the obvious "fix" — would have papered over the start
+angle and left a second wrong thing cancelling the first.
+
+**The workaround was never doing anything at all.** `SyncGeometry` read
+`castRotation`, and `ER:ClockToRadians(12)` returns `0`. At the default cast
+rotation the ring got `SetRotation(0)` — a no-op — so what the player saw was
+Blizzard's raw native start, untouched. The "verified working in game" note above
+was therefore verifying a rotation that had never applied. **A workaround that
+happens to be a no-op is indistinguishable from a workaround that works, right up
+until the default changes.**
+
+What replaced it:
+
+- `resourceRingRotation`, its **own** flat key defaulting to 12, no longer
+  borrowing the cast ring's. The two rings are different objects with different
+  start conventions; sharing one setting was the original mistake.
+- `RR:ApplyStartAngle` maps clock position to a normalized turn,
+  `((clock - 6) % 12) / 12`, so 6 o'clock is 0 and 12 o'clock is half a turn.
+- `SetRadialProgressBarStartOffset` when present, falling back to the old texture
+  rotation with a `LogOnce` when it is not.
+- A **"Resource start (o'clock)" slider** on the Cursor Rings page, matching the
+  GCD and cast ones. The player asked for it by noticing it was the only ring
+  without one — a gap that existed *because* the setting was borrowed.
+
+**VERIFIED IN GAME 2026-08-13.** The player confirmed the ring is correct: it
+starts at 12 o'clock and both drain directions read the right way round. So the
+inference held on two counts that were open when this was written — the offset
+advances **clockwise**, and `SetRadialProgressBarStartOffset` is genuinely
+present on the texture, not merely assumed by family. The drain mapping was
+right all along, and **not** inverting it was the correct call: had it been
+flipped as well, the ring would have looked fine and carried two wrong things
+cancelling out, until the next patch moved one of them.
+
+This closes the whole start-angle thread. `resourceRingRotation` and its slider
+stay as controls the player can use, not as a workaround under observation.
+
+### `SetRadialProgressBarReverse` is real — measured, not inferred
+
+The paragraph below calls the texture's exposure of this API family
+"**unverified**". It is now verified, from the player's own session on
+2026-08-13: a full evening with five combats and the resource ring enabled
+produced **no** `RING: SetRadialProgressBarReverse unavailable` line in
+`ThugUI_DebugLog`, and `LogOnce` entries demonstrably reach that log — a
+`CVBUFF:` line from the same session sits a few rows above.
+
+So `GetStatusBarTexture()` **does** return an object carrying the
+`SetRadialProgressBar*` family, the naming-convention inference held, and ThugUI
+is the first consumer of it in either codebase. The capability guards stay
+anyway: one client is not every client, and the guards cost nothing.
+
+**The method by which that was settled is the reusable part.** Nobody had to
+watch the screen or add a probe — a guard that logs its own miss turns *silence
+in the log* into positive evidence that the guarded path was taken. That only
+works because the log is always-on (§11) and because the absence was checked
+against a known-present line from the same session rather than trusted on its
+own.
 
 `SetRadialProgressBarReverse` *is* being used, for the drain-direction setting
 (task 17). Note what that means: we are the first consumer of this API family in
@@ -1907,6 +1982,157 @@ it was written for. It was deleted and replaced with a behavioural test that
 invalidates without changing spec, which does fail against the original ordering.
 The dead assertion is kept as a comment in `loadtest.lua`. **A test that cannot
 fail is worse than no test, and this one looked entirely convincing.**
+
+### The icon is Blizzard's category art, and it never becomes the item's
+
+Decided by the player on 2026-08-13 after seeing task 18 in game, and settled by
+reading Blizzard's source rather than by preference. From
+`Blizzard_CooldownViewer/CooldownViewerItemData.lua` @ `live`:
+
+```lua
+function CooldownViewerItemDataMixin:GetSpellTexture()
+	local spellCategoryIcon = self:GetSpellCategoryIcon();
+	if spellCategoryIcon then
+		return spellCategoryIcon;      -- returns unconditionally, before
+	end                                -- any spell-based resolution
+```
+
+`GetSpellCategoryIcon` reads a hardcoded texture out of the local
+`spellCategoryMetadataLookup` — `INV_POTION_114` for combat potions,
+`INV_POTION_54` for health, `Warlock_ Healthstone` and `Warlock_ Bloodstone` for
+the two stones. Blizzard **record the triggering item's icon** in
+`cooldownInfo.lastItemIDForCategoryIcon` and then deliberately decline to use
+it, with a comment saying so.
+
+So a question this project spent a turn on — "how do we show a placeholder
+without blocking the real item icon Blizzard passes through?" — had a false
+premise. **Blizzard never pass the item icon through.** Their own potion cell
+shows the same flask forever, and the art is a constant per category, which is
+why it is safe to cache and persist. `ResolveCategoryArt` prefers
+`item:GetSpellCategoryIcon()` over `item:GetSpellTexture()` for exactly this
+reason: it names what we want and cannot drift if that internal ordering ever
+changes.
+
+### BUILT 2026-08-13 — task 19, the three faults task 18 shipped
+
+The player ran task 18 in game. It drew, and it was wrong in three separate
+ways — all confirmed in code before any fix was written:
+
+| Fault | Cause |
+|---|---|
+| **A** — the drawn cell never repaints | `Rebuild` sets `icon.tex` once; `UpdateState`'s category branch resolved an item ID for the *sweep* and never touched the texture again |
+| **B** — nothing resolves at login | Both live resolution paths need Blizzard's viewer to already be drawing. `BB:ItemsByCooldownID` walks `pool:EnumerateActive()`, and pre-combat the pool is empty |
+| **C** — `CategoryEntry` was uncached | It re-ran the full resolution, rebuilding `BlizzBuffs`' entire cooldownID→frame map, on **every call** — which fixing A would have made a per-tick cost |
+
+The player's report is what made this diagnosable, and it is a good shape to
+ask for again: *the picker list and the config-window grid were correct after
+combat while the field icon was still a question mark, and any dropdown fixed
+it.* Those three facts separate A from B precisely — the picker calls
+`CategoryEntry` fresh on every open, and a config change forces a `Rebuild`.
+
+The fix splits the cheap read from the expensive resolve:
+
+- **`Data.CategoryEntry` is now cheap and non-discovering.** It reads
+  `ThugUI_Config.cvCategoryArt` and returns the generic entry on a miss. Safe to
+  call from `UpdateState` every tick.
+- **`Data.ResolveCategoryArt`** carries the walk, for categories not already
+  cached, called from the existing `PLAYER_REGEN_DISABLED`/`ENABLED` handler —
+  **no new event registered**. Combat entry is when Blizzard's pool populates,
+  which is fault B's whole story.
+- **A resolved entry is sticky.** `GetLastCategoryCooldownSource` carries
+  `SecretWhenCooldownsRestricted`, so a live re-resolve could drop back to
+  generic on entering combat — trading a stale icon for a flickering one.
+- **`UpdateState` repaints** `icon.tex` and `icon.baseTexture` from the cache,
+  guarded by an inequality check so it is a no-op after the tick that changed.
+  `baseTexture` matters too: aura mode swaps art against it.
+
+**The cache is persisted and account-wide**, which turns fault B from "correct
+after your first pull, every session" into "correct always, after the first pull
+you ever do". Category art does not vary by character, spec, or talent — so it
+must **not** be cleared by `Data.InvalidateCooldownInfoCache`, which exists to
+drop spec-scoped Cooldown Manager data. Adding it there is the obvious wrong
+move and there is a regression test against it.
+
+### A table default in `ER.defaults` is not the same as a scalar one
+
+Found in review of task 19, and worth more than the feature.
+
+`ER:InitializeSettings` seeds with `ThugUI_Config[key] = value` — **a reference
+copy**. The agent put `cvCategoryArt = {}` in `ER.defaults`, which works, and
+also makes the live config and the defaults table the *same table*.
+
+The five `*CustomColor` triples already in `ER.defaults` get away with this
+because every setter **replaces** them wholesale
+(`Cfg().resourceRingCustomColor = { r = r, g = g, b = b }`), which breaks the
+alias on first write. `cvCategoryArt` is the opposite: it is **mutated in
+place**, one key per resolved category. It would have accumulated live data
+inside "the defaults", and any future reset assigning it back would have been a
+silent no-op.
+
+So it is seeded lazily by `Data.CategoryArtCache` instead, exactly as `Data.Store`
+already does for the table-valued `ThugUI_Config.cv` — which is *why* no
+CooldownViewer key was ever in `ER.defaults`, a convention nobody had written
+down. **The rule: a table default is safe in `ER.defaults` only if it is always
+replaced, never written into.**
+
+**213 → 219 passing, 0 failures**; six cases added, none removed or renamed —
+both re-verified here by diffing passing-case names against a pristine `HEAD`
+tree, and all six re-run against unmodified source and confirmed failing.
+
+**Not verified in game.** The harness cannot prove `item:GetSpellCategoryIcon()`
+exists on the live client, that the pool populates on `PLAYER_REGEN_DISABLED`
+rather than some earlier moment, or that a real login → combat → `/reload`
+round-trip leaves the cache correctly persisted.
+
+### Task 19 made it worse before it made it better — the discovery hole
+
+**Reported in game 2026-08-13, within hours of the above.** The category cells
+stopped updating **entirely**. Before task 19, entering combat refreshed the
+picker and the config grid, and changing any cell's display mode refreshed the
+cursor-following grid. After it, neither worked.
+
+The cause was in the task file, not in the agent's execution of it. Task 19
+specified that `Data.ResolveCategoryArt` iterate `Data.DiscoverCategoryIDs()` —
+and discovery is built from the Cooldown Manager sweep. The player's session
+logged the sweep finding nothing:
+
+```
+[20:29:46] CVBUFF: no Blizzard cooldown-viewer item frames found
+```
+
+With discovery empty, a **placed** category was never even attempted, so the
+cache stayed empty forever and the now-cheap `Data.CategoryEntry` had nothing
+to return but the generic entry. The old uncached version never had this hole,
+because it was called with the placed `categoryID` **directly** and tried
+`GetLastCategoryCooldownSource` on it regardless of what discovery believed
+existed.
+
+**The general rule, which is the reusable part:** when a refactor moves work
+from *pull* to *push* — from "resolve on demand, wherever asked" to "resolve on
+a schedule, for a known set" — the set becomes load-bearing in a way it never
+was before. Anything that used to arrive by being *asked for* has to be added to
+it explicitly. Ask what the old code was reached with, not just what it did.
+
+Three restorations, all of which keep the cache's benefit because a resolved
+category is skipped:
+
+| Where | Why it has to be there |
+|---|---|
+| `CategoriesNeedingArt` unions discovery with **placed** categories | A cell the player can see is always worth an attempt |
+| `CV:Rebuild` resolves | This is what the dropdown-change workaround actually was — `Rebuild` called the resolving `CategoryEntry` per placement |
+| `Data.BuildSpellList` resolves when the list has categories | Opening the picker used to resolve for free, for the same reason |
+
+**Dropping a workaround before its replacement is proven is a regression even
+when the replacement is better.** The dropdown poke was ugly and the player had
+to know about it, but it worked, and task 19 removed the mechanism behind it
+while adding a replacement nobody had yet seen run. The two should have
+overlapped. This is `CLAUDE.md` §3's "never break the fallback" applied to a
+fallback nobody had labelled as one — the player had found it themselves and it
+had never been written down.
+
+**219 → 224 passing, 0 failures.** The new regression case places a category
+while discovery is deliberately blind to it; verified failing against the
+unfixed source and passing after, rather than assumed.
 
 ---
 

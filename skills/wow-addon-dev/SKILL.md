@@ -173,6 +173,23 @@ they repay themselves within a session.
    one: readable value, secret, nothing, or error. One fight and one reload then
    answers questions that otherwise take a week of inference.
 
+### Make every capability guard log its own miss
+
+When you guard a call because the method might not exist, log the miss —
+once, keyed. The payoff is not the warning. It is that **silence in the log
+becomes positive evidence the call went through.**
+
+That is how ThugUI established that `GetStatusBarTexture()` really does expose
+Blizzard's undocumented `SetRadialProgressBar*` family: a whole session with the
+feature in use and no `... unavailable` line. Nobody watched the screen, nobody
+added a probe, and the question had been sitting open as "unverified" for days.
+
+Two conditions make it sound, and both matter:
+
+- The log is **always on**. An opt-in log proves nothing by being empty.
+- You check the absence against a **known-present line from the same session**.
+  Otherwise you are reading a log that never wrote, and concluding from it.
+
 Snapshot timing matters: `PLAYER_LOGOUT` is too late for anything spec-related
 (`GetSpecializationInfo` has already stopped resolving). Capture on
 `PLAYER_REGEN_ENABLED` and `PLAYER_ENTERING_WORLD` instead, and never let a
@@ -269,6 +286,43 @@ share the namespace.
   code the game rejects. Run `luac -p` with a matching version if you can.
 - **Windows shells mangle inline commit messages.** Write the message to a file
   and use `git commit -F`.
+- **Different widget families do not share a coordinate convention.** A
+  `Cooldown` swipe starts at the top; a 12.1 radial `StatusBar` starts at the
+  **bottom** — Blizzard say so in one clause of one doc string, "where 0 is at
+  the bottom". Feeding one widget's convention to the other put a ring 180° out,
+  which then made *both* directions of its fill look wrong, because the eye
+  judges rotation at the top of a circle. **One geometry error can present as two
+  unrelated bugs, and "fixing" the second cancels rather than corrects.** When
+  two symptoms appear together, look for the single transform that produces both
+  before treating either.
+- **A workaround that is a no-op is indistinguishable from one that works.**
+  The rotation above was fed a value that converted to exactly 0 at its default,
+  so it had never once applied — and it was written up as "verified working in
+  game". If a fix has a value at which it does nothing, test it at that value
+  before believing it.
+
+## Refactors that move work from pull to push
+
+Caching a lookup usually means splitting "resolve it" out of "read it", and
+running the resolve on a schedule instead of on demand. The trap is not the
+cache. It is that **the set of things you resolve becomes load-bearing**, and it
+never was before.
+
+On-demand code is reached with whatever argument the caller happens to have. The
+scheduled version is reached with a list you wrote. Anything that used to arrive
+by being *asked for* has to be added to that list explicitly, or it silently
+stops being handled — and the failure is total, not partial, so it reads as "the
+feature is dead" rather than "one case is missing".
+
+ThugUI hit exactly this: a per-call lookup keyed on whatever ID the caller held
+became a scheduled pass over "every category the game reports", and every
+category the *player had actually placed* fell out of scope on a client where
+the game reported none.
+
+**Ask what the old code was reached with, not just what it did.** And keep the
+old trigger points calling the new resolve — a rebuild, a panel opening, a user
+action — rather than assuming the schedule covers them. They are cheap once the
+cache answers, and they are the paths the user already trusts.
 
 ## Where to look things up
 

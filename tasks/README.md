@@ -156,11 +156,46 @@ exception stays visible.
   bug in `Window:BuildPage` had no test. **When a getter cannot see what its
   setter did, that is a region of the code no test can describe.**
 
-## Batch 6 — in flight
+## Batch 6 — potions and healthstones — COMPLETE
 
-| # | Task | State |
+| # | Task | Outcome |
 |---|---|---|
-| 18 | Potions and healthstones: a second kind of placement | Running |
+| 18 | Potions and healthstones: a second kind of placement | Landed. **The player ran it in game and it was wrong in three ways** — see 19. Also shipped a `local` below the function that assigned it, caught in review |
+| 19 | Category cells: resolve their art, remember it, and repaint | Clean, and the best-behaved run so far. Every claim re-verified here and every one held |
+
+### Task 19 is the model for what a good report looks like
+
+Everything it claimed was re-checked and nothing was overstated:
+
+- Six cases added, **none removed or renamed** — verified by diffing passing-case
+  names against a pristine `HEAD` tree, not by trusting the count. Six failures
+  against unmodified source, one per task requirement.
+- It **flagged a wrong pointer in the task file instead of quietly working around
+  it.** The brief said to put the new default "alongside the existing `cv*` keys
+  in `ER.defaults`". There are none — the CooldownViewer's config never goes
+  through `ER.defaults` at all. The agent said so, explained what it did instead,
+  and offered the alternative. The brief was wrong; the agent was right.
+- It reported the shallow-copy hazard in `ER:InitializeSettings` under **"noticed
+  but did not touch"**, including the detail that a table default already existed
+  (`resourceRingCustomColor`) — which corrected the coordinator's own reasoning
+  during review. That entry is now `DECISIONS.md` §25's last subsection.
+
+**The coordinator changed the agent's work in exactly one place**: the
+`ER.defaults` entry was removed in favour of lazy seeding. Not because the agent
+disobeyed — it did what the brief said — but because the brief was wrong, and the
+agent had already supplied the evidence that it was.
+
+### What this batch taught the process
+
+- **A task file's citations can be wrong, and the agent is the one positioned to
+  notice.** Two batches running now (06 and 19) have had the agent check the
+  brief's claim and find it did not match the repo. Keep telling them to.
+- **"Noticed but did not touch" earns its place in the report template.** Task
+  19's entry there was the single most valuable paragraph it wrote, and a report
+  format without that section would have thrown it away.
+- **A test that fails only because the function does not exist yet is weak
+  evidence**, and task 19 said so about two of its six rather than dressing them
+  up. That honesty is worth more than six uniformly confident claims.
 
 Task 18 rests on `DECISIONS.md` §25, which is research rather than code — it
 records both what Blizzard's source confirms and, deliberately, what it does
@@ -196,4 +231,4 @@ replacement task:
 `lua Tests/loadtest.lua .` → **0 failures**, from a clean tree.
 Any failure an agent reports is one the agent caused.
 
-Current: **203 passing**, as of 2026-08-13.
+Current: **219 passing**, as of 2026-08-13.

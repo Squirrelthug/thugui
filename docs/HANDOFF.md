@@ -1,41 +1,59 @@
-# Handoff — state as of 2026-08-13
+# Handoff — state as of 2026-08-13 (latest — after the task 19 regression and the ring start angle)
 
 ## START HERE
 
 **Branch `radial-resource-ring`, 9 commits ahead of `main`, nothing pushed.**
-Working tree clean. **213 passing, 0 failures.** Nothing is half-done and no
-agent is mid-flight.
+**224 passing, 0 failures.** No agent is mid-flight and nothing is half-done.
 
-**The branch is deliberately not merged.** Everything on it is green and
-reviewed, but the potion/healthstone work has never been seen in the game. The
-merge is a one-liner whenever the player is happy — ask before doing it.
+**The working tree is NOT clean, and every change in it is wanted:**
+
+| Uncommitted | Whose | What to do |
+|---|---|---|
+| `ui/pages/CursorRings.lua` label edits | **The player's own** — `Ring slots`→`Rings`, `Combo pips`→`Radial pips`, matching checkbox label, obsolete "readable in 12.1" note removed | Keep. Commit **separately** — unrelated to everything else |
+| `Data.lua`, `Core.lua`, `EssentialRings.lua`, `Tests/loadtest.lua` | Task 19 **plus its regression fix** | Commit as one change |
+| `ResourceRing.lua`, `EssentialRings.lua`, `CursorRings.lua` slider | The ring start angle (§23) | Commit as one change |
+| `tasks/19-*.md`, `tasks/reports/19-*.md` | Task 19's brief and its reconstructed report | Untracked, commit with task 19 |
+
+**The branch is still deliberately not merged.** Ask before merging.
 
 ### What the player needs to look at in game, in priority order
 
-1. **Potions and healthstones (task 18) — nothing here has been seen on
-   screen.** Open the Cooldown Viewer picker and look for a potion / healthstone
-   row; place one; check it draws and that its cooldown runs after you drink
-   something. The harness proves it does not throw and the logic is right. It
-   **cannot** prove a potion appears in a cell.
-   - Specifically unverified: which `Enum.CooldownViewerCategory` these arrive
-     under (server-driven, not stated in Blizzard's source), and whether the
-     name/icon resolution order works against a real Cooldown Manager.
-   - On a fresh login, before you have drunk anything, a potion cell having no
-     spell behind it is **normal**, not a bug — Blizzard's own code skips it too.
+1. **Category cells update again — this is a REGRESSION FIX, so the bar is "as
+   good as before", not just "works".** Task 19 shipped a hole that stopped them
+   updating at all (`DECISIONS.md` §25, "the discovery hole"). What to check:
+   - **Enter combat.** A generic cell should resolve and **repaint on screen
+     without you touching a dropdown.** That is the original task 19 promise and
+     it has still never been seen working.
+   - **Change a cell's display mode.** This must still work — it is the
+     workaround the player found themselves, and the regression removed it.
+   - **Open the picker.** Names and icons should be right there.
+   - **`/reload` and check it persisted.** The cache is account-wide, so a
+     different character should also start with correct icons. The very first
+     login after this lands may still be generic; it should never be generic
+     twice.
+   - Icons are **Blizzard's own category art** and will not change to the
+     specific potion you drank. Chosen, not a bug (§25).
 2. **The rebuilt Cursor Rings page.** The test is not "does it look tidier". It
    is **"can you find the resource ring's `Show:` dropdown without being told
-   where it is"** — that is the defect this rebuild exists for (§26).
-3. **Drain direction.** New dropdown under the resource ring. Flip it to
-   counter-clockwise and confirm the ring actually reverses. **This is the least
-   certain thing in the session**: Blizzard's own 12.1 UI uses *none* of the
-   `SetRadialProgressBar*` family, and it is unverified that the texture even
-   exposes those methods. If the dropdown does nothing, look for
-   `RING: SetRadialProgressBarReverse unavailable` in the log — that is the
-   guard firing, not a crash, and it is a real possible outcome.
-4. **The resource ring after the Cooldown path was deleted.** It should behave
-   exactly as it did when you tested it, since the radial path is untouched. If
-   the ring vanishes entirely, that is the capability gate — there is no
-   fallback any more, by design.
+   where it is"** — the defect this rebuild exists for (§26).
+
+**The resource ring is finished and closed.** Start angle, drain direction and
+the new slider were all **verified in game 2026-08-13** — §23. Do not re-open it,
+and do not treat `resourceRingRotation` as a workaround under observation; it is
+a control the player has.
+
+### Settled this session, from the player's own log — do not re-open
+
+**`SetRadialProgressBarReverse` exists and works on this client.** A full evening
+with five combats and the ring enabled produced no
+`RING: SetRadialProgressBarReverse unavailable` line, and `LogOnce` entries
+demonstrably reach that log (a `CVBUFF:` line sits a few rows above). So
+`GetStatusBarTexture()` *does* expose the `SetRadialProgressBar*` family, and the
+handoff's long-standing "unverified that the texture even exposes those methods"
+is retired. §23.
+
+The method matters more than the fact: **a guard that logs its own miss turns
+silence in the log into positive evidence.** Nobody had to watch the screen.
 
 ### Verified in game this session
 
@@ -45,22 +63,45 @@ retired the "permanently impossible" framing this project carried since
 2026-08-09, confirmed the start angle, and proved the creation path is not
 combat-gated. `DECISIONS.md` §23.
 
+**Task 18 works, partly.** The player placed potions and healthstones and they
+draw. Two of §25's open questions are answered by that alone: the categories
+**do** arrive under a viewer category the picker sweeps, and the placement path
+is sound. Three faults came with it, all now fixed by task 19 and all unseen —
+see the priority list above.
+
+**Two facts worth keeping from that report**, because they cost nothing to
+observe and pinned the diagnosis exactly:
+
+- The picker list and the config-window grid were correct after combat *while
+  the on-screen cell was still a question mark*. That separates "resolution
+  failed" from "the drawn cell never repaints" without reading any code.
+- Changing any dropdown fixed the on-screen cell. That is a forced `Rebuild`,
+  which is the only thing that used to repaint it.
+
 ### What changed this session
 
 | Change | Where | State |
 |---|---|---|
 | Radial ring confirmed working in combat | `DECISIONS.md` §23 | **Verified in game** |
+| Potions/healthstones draw and can be placed | §25, task 18 | **Verified in game**, with three faults |
+| Category art cached, persisted, and repainted | §25, task 19 | Green, unseen |
+| Task 19's discovery hole fixed — placed categories always resolve | §25 | Green, unseen — **the one open thread** |
+| Ring start angle moved to `SetRadialProgressBarStartOffset` | §23 | **Verified in game** |
+| `resourceRingRotation` + "Resource start (o'clock)" slider | §23 | **Verified in game** |
+| `SetRadialProgressBarReverse` confirmed present on this client | §23 | **Measured from the log** |
+| Task 19's report reconstructed after the agent filed none | `tasks/reports/19-*.md` | Docs |
+| Icon is Blizzard's category art, never the item's | §25 | Decided by the player |
+| `SetTexture` recorded in the frame stub | `Tests/README.md` | Harness gap closed |
 | Cooldown resource ring + `resourceRingRadialBar` **deleted** | §27 | Green, unseen |
 | Clockwise / counter-clockwise drain direction | §23, task 17 | Green, unseen |
 | Cursor Rings page rebuilt in two columns | §26, task 17 | Green, unseen |
 | `Window:BuildPage` sizes scroll from the tallest panel | task 17 | Green, unseen |
-| Potions/healthstones placeable, discovered not hardcoded | §25, task 18 | Green, unseen |
 | oUF `portrait.lua` secret-boolean guard | — | **No test possible**, see below |
 | `UPCOMING-PATCH.md` retired, 12.2 skeleton started | §24 | Docs |
 | `QA.md` deleted, its two real facts moved | §28 | Docs |
 | Charge spells in `cooldown` mode: settled, not open | §21 | Decision |
 
-### Three things that are decided — do not re-open them
+### Four things that are decided — do not re-open them
 
 - **A charge spell in `cooldown` mode stays exactly as it is.** Hide when spent,
   no sweep. Asked twice, answered 2026-08-13. Do **not** build the
@@ -70,6 +111,10 @@ combat-gated. `DECISIONS.md` §23.
   its keep only if it is *known* to work.
 - **`QA.md` is deleted on purpose.** §28. Do not recreate it as a checklist;
   what survived is in `KNOWN-ISSUES.md` where it will actually be read.
+- **A potion cell shows Blizzard's category art, not the potion you drank.**
+  Chosen by the player 2026-08-13 after seeing both. The route to the item's own
+  icon exists and is deliberately unused — Blizzard record that item ID and
+  decline to use it too. §25. Do not "improve" this.
 
 ### Known gaps, stated plainly
 
@@ -78,13 +123,48 @@ combat-gated. `DECISIONS.md` §23.
   reading and `luac -p` only, and it is a **ThugUI local patch** — marked in the
   file, because upstream guards the neighbouring line and a library update would
   silently drop ours. `Tests/README.md` has the detail.
-- **We are the first consumer of the radial texture API anywhere.** Green in the
-  harness is weaker evidence than usual for anything `SetRadialProgressBar*`.
+- **We are the first consumer of the radial texture API anywhere**, and as of
+  2026-08-13 three of its methods are confirmed working on a live client:
+  `SetRenderMode(Radial)`, `SetRadialProgressBarReverse`, and
+  `SetRadialProgressBarStartOffset` (§23). The rest of the family is still
+  unexercised, and green in the harness remains weaker evidence than usual for
+  anything in it — the stub records arguments, it does not draw a ring.
+- **`item:GetSpellCategoryIcon()` has never been called on a live client.** Task
+  19 prefers it over `GetSpellTexture()` on the strength of Blizzard's `live`
+  source. If category cells go blank rather than generic, that method is the
+  first suspect — the fallback to `GetSpellTexture()` is right there and tested.
+- **Only category 4 is exercised by tests.** 30, 1711 and 2566 follow the same
+  path, but "the same path" is reasoning, not evidence.
 
 ### Still open, unclaimed
 
-- **Merge `radial-resource-ring` into `main` and push**, once the player has
-  looked at the four items above.
+- **The category-cell fix is merged but UNSEEN, by the player's choice.** They
+  closed out the resource ring on 2026-08-13 and deferred testing the potion and
+  healthstone icons — *"I'll hold off on the item icon fixes till later"*. So the
+  discovery-hole fix and the original task 19 repaint are both on `main` with
+  nobody having watched them run. **This is the one thread to pick up**, and the
+  test sequence is item 1 at the top of this file. Do not assume the merge means
+  it works.
+- **`agent-bridge` does not work, and it is not ours.** It lives at
+  `C:\Users\Squirrel\.local\bin\` (`.cmd`, `-core.ps1`, `.README.md`), is
+  registered in `~/.codex/AGENTS.md`, and is meant to launch a task-file agent in
+  a new Windows Terminal window. Tested 2026-08-13: **every job dies at launch**
+  and no job has ever completed. One cause was found and fixed (an unquoted
+  `--title` with spaces, which made `wt.exe` try to execute the second word of
+  the title and fail with `0x80070002`); a second, unidentified cause remains —
+  the job folder gets `request.json` and `prompt.txt` but never `output.txt` or
+  `status.json`, so the child window is still dying before the script runs.
+  A `Set-Location` fix for the child's working directory is also in there, and
+  `agent-bridge-core.ps1.bak` is the original. **Delegation is still manual.**
+- **A healthstone has never been seen in a cell.** The player has none. Blizzard
+  resolve the art with no reference to your bags (`GetSpellCategoryIcon` reads a
+  hardcoded table), so it *should* draw regardless — untested, and cheap to
+  check the next time a warlock is around.
+- **`Data.DiscoverCategoryIDs` sweeps every category on every call**, uncached,
+  and `ResolveCategoryArt` calls it twice per fight even when nothing is left to
+  resolve. Deliberately not optimised — same cost class as the sweep `Rebuild`
+  already does. Noted by the task 19 agent; revisit only if a fight-start hitch
+  ever shows up.
 - **Whether `GroupBuff` rows should be excluded from the picker.** §20 flags that
   the category has no viewer frame, so any rows it returns can never draw. Check
   the probe before deciding.

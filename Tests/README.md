@@ -106,6 +106,22 @@ blind spot with no test able to see it. Fixed 2026-08-13: `SetWidth`/`SetHeight`
 for a frame nobody sized. **When a getter cannot see what its setter did, the gap
 is not neutral — it is a region of the code no test can describe.**
 
+**`SetTexture` recorded nothing, so a drawn icon's texture was unobservable.**
+It fell through the shared frame stub's generic no-op branch and vanished, and
+only `icon.baseTexture` — a plain field, not a frame method — could be checked.
+Closed 2026-08-13 (task 19) by recording it alongside the existing
+`SetVertexColor`/`SetAlpha` recorders, which is what let the potion-repaint bug
+get a real assertion on `icon.tex`. Exactly the same shape as the
+`GetHeight`/`GetWidth` gap above, and it had gone unnoticed because nothing
+before task 19 needed to tell two textures on one icon apart.
+
+**The stub synthesises every Capitalised key as a truthy no-op**, so
+`item.GetSpellCategoryIcon` reads as *present* on a bare stub even when it was
+never defined — which is useless for testing a fallback that only runs when a
+method is **absent**. Use `rawset(frame, "MethodName", false)` to reproduce a
+genuinely missing method; plain `nil` or leaving it undefined will not work.
+Task 19 needed this, and `SetRadialProgressBarReverse` already did.
+
 **Deliberately deleted on 2026-08-13, when the Cooldown resource ring was
 removed** (`DECISIONS.md` §27). Listed so the drop in coverage is visible rather
 than looking like tests that quietly wandered off:
@@ -119,12 +135,24 @@ than looking like tests that quietly wandered off:
 
 **The radial texture API is exercised nowhere but here.** An exhaustive search of
 Blizzard's own live 12.1 source found **zero** uses of `StatusBarRenderMode.Radial`,
-`SetRenderMode`, or any `SetRadialProgressBar*` method, and it is **unverified**
-that the texture from `GetStatusBarTexture()` exposes that family at all. The
-stub always provides `SetRadialProgressBarReverse`, so the case that matters is
-the one that removes it (`no SetRadialProgressBarReverse: no throw, ring still
-draws`). **Green on this family is weaker evidence than usual — only the game
-settles it.**
+`SetRenderMode`, or any `SetRadialProgressBar*` method. The stub always provides
+`SetRadialProgressBarReverse` and `SetRadialProgressBarStartOffset`, so the cases
+that matter are the two that remove them (`no SetRadialProgressBarReverse: no
+throw, ring still draws` and `no SetRadialProgressBarStartOffset: falls back to
+rotation, no throw`). **Green on this family is weaker evidence than usual — only
+the game settles it.**
+
+The one thing the game *has* now settled: `SetRadialProgressBarReverse` is
+confirmed present on a live client, from the absence of its guard's `LogOnce`
+line across a whole session (`DECISIONS.md` §23). `SetRadialProgressBarStartOffset`
+has not been confirmed the same way and is assumed present by family.
+
+**The stub records; it does not simulate.** `__radialStartOffset` is the value we
+passed, not where the ring actually starts. The harness cannot tell you Blizzard
+measure that offset from the **bottom** — that came from their generated docs,
+after the ring shipped starting at 6 o'clock with four green tests over it. A
+stub that only echoes arguments can never catch a wrong convention, only a wrong
+call.
 
 ## What the harness does not load at all: `libs/oUF/`
 
