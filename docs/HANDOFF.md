@@ -33,6 +33,14 @@ Everything above is verified only by the harness. The border's real appearance,
 and that a locked frame genuinely passes hovers through to the world, both need
 the game.
 
+**The workaround panel is buffs only again.** `DECISIONS.md` §30. The
+charge-spell/item step is gone, the intro and the checkbox tooltip no longer
+describe borrowing for them, and the panel title reads `PROTECTED BUFF
+WORKAROUND`. The one surviving fact about charges and items — they still have to
+be tracked or they never reach the picker — is a sentence in the intro. Open the
+`[WORKAROUND]` link and read it end to end; the test can only see the numbered
+steps, not the intro or the tooltip.
+
 ### Older, still true
 
 The radial-resource-ring work described below **merged to `main`** and its

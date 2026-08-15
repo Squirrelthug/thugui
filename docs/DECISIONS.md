@@ -2341,3 +2341,41 @@ No migration preserves the old always-editable behaviour, because that behaviour
 game.** If a frame has no visible extent, its resting state should be inert, and
 the moment it becomes interactive it must draw its own edge. The grid is the case
 that bit; it is not the only frame here that is larger than what it displays.
+
+## 30. The workaround guide is scoped back to buffs, and why it drifted twice
+
+**2026-08-15, at the player's instruction.** `ui/pages/CooldownViewerGuide.lua`
+is the panel that explains the one thing ThugUI cannot do for the player: the
+Blizzard settings that make a buff frame exist to be borrowed.
+
+It has now been wrong about its own subject twice, in the same direction both
+times. It first claimed charge spells were *protected and borrowed exactly like
+buffs*; §21 had already given charge spells back to us. The 2026-08-12 rewrite
+fixed the mechanism but widened the framing to "three kinds of cell", carrying
+charges and items along as things the reader had to set up. By 12.1 neither is
+borrowed at all — ThugUI draws both itself (§21, §22) — so a numbered step of a
+*workaround* was teaching setup for two things the workaround does not apply to.
+
+Now: buffs only. One sentence in the intro keeps the single fact the deleted step
+carried that is still true — charges and items must be tracked in the Cooldown
+Manager or they never reach the picker — because that is a *picker* fact, not a
+borrowing one, and it costs a line instead of a step.
+
+### The rule, which is not about this page
+
+**A document drifts by accretion, not by going wrong.** Each addition was true
+when written; what rotted was the *scope*, and scope has no line number to fail a
+test on. Two habits came out of it:
+
+- **When a mechanism stops applying to something, delete its instructions, do not
+  reword them.** The 2026-08-12 pass reworded, and the page stayed wrong for
+  three days in a way that read as deliberate.
+- **A guide that covers more than its subject is read as covering less of it.**
+  A reader who sees items mentioned assumes the page is the complete story for
+  items too, and stops looking.
+
+`Tests/loadtest.lua` now asserts no numbered step mentions charges or items. A
+test on prose is unusual here and it is worth saying why it earns its place: this
+page's scope has now been the defect twice, and the failure
+mode is silent — nothing errors, the player just follows instructions that do
+nothing.

@@ -139,21 +139,12 @@ local STEPS = {
         shots = { "buffsTab" },
         caption = "Both areas are highlighted. Drag any buff you want on the grid into one of them",
     },
-    -- No screenshot: the cooldown tabs are the same window and the same drag as
-    -- the step above, and a near-identical picture would read as a different
-    -- window rather than as the same one. The step exists at all because the
-    -- failure is silent -- a charge spell that is in neither list simply sits
-    -- there looking permanently ready, which is indistinguishable from a bug.
-    {
-        text = "|cffffd100For spells with charges, do the same on the Cooldowns tabs|r -- "
-            .. "drag them into |cffffd100Essential Cooldowns|r or |cffffd100Utility "
-            .. "Cooldowns|r. ThugUI draws these itself now, but it can only place what "
-            .. "the Cooldown Manager lists: a spell in neither list never reaches the "
-            .. "picker at all.\n\n"
-            .. "|cffffd100Items work the same way|r -- a trinket lives under "
-            .. "|cffffd100Items|r in the same window, and has to be tracked there "
-            .. "before it can go on the grid.",
-    },
+    -- The charge-spell/item step was removed 2026-08-15. It was a numbered step
+    -- in a workaround that no longer has anything to do with them: ThugUI draws
+    -- both itself (DECISIONS.md §21, §22), so nothing here is borrowed for them
+    -- and no setting on this list is theirs. The one fact it carried that is
+    -- still true -- they have to be tracked to reach the picker at all -- moved
+    -- into the intro, where it costs a sentence instead of a step.
     {
         text = "|cffffd100Done.|r The two |cffffd100Tracked Buffs|r or |cffffd100Tracked Bars|r areas render the buff in the cell in two "
             .. "different ways, exactly as the default UI draws it.",
@@ -392,7 +383,9 @@ function Guide:Ensure()
 
     local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", PANEL_INSET, -16)
-    title:SetText("|cff00ffccPROTECTED SPELL WORKAROUND|r")
+    -- "PROTECTED SPELL" while the panel still claimed charge spells; buffs are
+    -- the only protected thing left on it, so the title says so.
+    title:SetText("|cff00ffccPROTECTED BUFF WORKAROUND|r")
 
     local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -4, -4)
@@ -402,23 +395,22 @@ function Guide:Ensure()
     intro:SetPoint("TOPLEFT", PANEL_INSET, -38)
     intro:SetWidth(PANEL_WIDTH - PANEL_INSET * 2)
     intro:SetJustifyH("LEFT")
-    -- Rewritten 2026-08-12. It used to say charge spells were borrowed from
-    -- Blizzard, which stopped being true the day tasks 14 and 15 landed:
-    -- charge spells came back to us (DECISIONS.md §21) and items were never
-    -- borrowed at all, because item cooldowns carry no secrecy flag
-    -- (DECISIONS.md §20, §22). What is still true of all three, and what these
-    -- steps actually set up, is that the Cooldown Manager has to list them.
-    intro:SetText("Three kinds of cell depend on Blizzard's Cooldown Manager: "
-        .. "|cffffd100buffs|r, |cffffd100spells with charges|r, and "
-        .. "|cffffd100items|r -- trinkets and other on-use gear.\n\n"
-        .. "Only |cffffd100buffs|r are still drawn by Blizzard. In combat the game will "
-        .. "not tell an addon which buff is up, so ThugUI BORROWS Blizzard's own icon "
-        .. "and puts it in your cell. A cell set to |cffffd100show always|r is borrowed "
-        .. "too, whatever is in it, because its sweep is the only thing saying whether "
-        .. "the ability is ready.\n\n"
-        .. "ThugUI draws the other two itself. But all three have to be tracked in the "
-        .. "Cooldown Manager first, or the cell simply stays empty -- and an empty cell "
-        .. "looks exactly like a broken addon. Below are the settings that makes possible.")
+    -- Scoped back to buffs 2026-08-15. This panel spent a version describing
+    -- "three kinds of cell" because charges and items once needed the same
+    -- borrowing; by 12.1 neither does (DECISIONS.md §21, §22), which left the
+    -- page teaching a workaround for two things it does not apply to. A guide
+    -- that covers more than its subject is read as covering less of it.
+    intro:SetText("The buff icon in your cell is |cffffd100Blizzard's own|r. In combat "
+        .. "the game will not tell an addon which aura is up, so ThugUI BORROWS "
+        .. "Blizzard's buff frame and puts it in the cell you assigned.\n\n"
+        .. "It has to have something to borrow. Until the buff is tracked in the "
+        .. "|cffffd100Cooldown Manager|r the cell simply stays empty -- and an empty "
+        .. "cell looks exactly like a broken addon. Below are the settings that makes "
+        .. "possible.\n\n"
+        .. "|cffffd100Buffs only.|r Spells with charges and items are drawn by ThugUI "
+        .. "itself and borrow nothing. They do still have to be tracked in the Cooldown "
+        .. "Manager -- on its Cooldowns and Items tabs, the way step 6 does it for a "
+        .. "buff -- or they never reach the picker.")
 
     -- The checkbox that used to live on the main window. It moved here because
     -- every step below it explains what it turns on -- reading the setting and
@@ -447,16 +439,15 @@ function Guide:Ensure()
     useBlizzardBuffs:Refresh()
 
     W.AttachTooltip(useBlizzardBuffs, "Use Blizzard's frames",
-        "Some cells cannot be drawn by an addon during combat. The game will not say "
-            .. "which aura is up while you are fighting, and it will not let an addon "
-            .. "draw a sweep from a cooldown it is not allowed to read. With this on, "
-            .. "Blizzard's own icon is placed in the cell you assigned it instead, so "
-            .. "it works in combat.\n\n"
-            .. "This covers buff cells and \"show always\" cells. Everything else -- "
-            .. "spells with charges, items, and ordinary cooldowns -- is unaffected: "
-            .. "ThugUI draws all of those correctly in combat itself and keeps doing "
-            .. "so.\n\n"
-            .. "Needs the Cooldown Manager turned on, with those spells tracked in "
+        "A buff cannot be drawn by an addon during combat: the game will not say which "
+            .. "aura is up while you are fighting. With this on, Blizzard's own buff "
+            .. "frame is placed in the cell you assigned it instead, so it works in "
+            .. "combat.\n\n"
+            .. "This covers buff cells, and any cell set to \"show always\" -- that mode "
+            .. "has no readiness signal of its own but Blizzard's sweep. Spells with "
+            .. "charges, items and ordinary cooldowns are unaffected: ThugUI draws all "
+            .. "of those correctly in combat itself.\n\n"
+            .. "Needs the Cooldown Manager turned on, with those buffs tracked in "
             .. "Edit Mode. Turn this off to go back to ThugUI's own icons, which only "
             .. "draw out of combat.")
 

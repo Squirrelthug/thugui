@@ -2583,6 +2583,22 @@ if ThugUI.CooldownViewer then
             assert(named > 0, "no step named a screenshot at all")
         end },
 
+        -- The panel is the BUFF workaround. Charge spells came back to us in
+        -- 12.1 (DECISIONS.md §21) and items never needed borrowing at all
+        -- (§22), so a numbered step telling the player to set something up for
+        -- either one is teaching a workaround that does not apply to it. This
+        -- page has now drifted that way twice; the guard is cheap.
+        { "no guide step instructs the player about charges or items", function()
+            local BuffGuide = ThugUI.CooldownViewer.BuffGuide
+            for i, step in ipairs(BuffGuide.STEPS) do
+                local text = step.text:lower()
+                assert(not text:find("charge"),
+                    ("guide step %d still instructs about charge spells"):format(i))
+                assert(not text:find("trinket") and not text:find("items tab"),
+                    ("guide step %d still instructs about items"):format(i))
+            end
+        end },
+
         -- The clickToEdit/advButton step used to also tell the player to set
         -- Always/In Combat; that instruction now belongs to the visibility
         -- step alone. Regression: a step that says it twice is confusing, not
