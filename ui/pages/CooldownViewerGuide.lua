@@ -397,20 +397,22 @@ function Guide:Ensure()
     intro:SetJustifyH("LEFT")
     -- Scoped back to buffs 2026-08-15. This panel spent a version describing
     -- "three kinds of cell" because charges and items once needed the same
-    -- borrowing; by 12.1 neither does (DECISIONS.md §21, §22), which left the
-    -- page teaching a workaround for two things it does not apply to. A guide
-    -- that covers more than its subject is read as covering less of it.
-    intro:SetText("The buff icon in your cell is |cffffd100Blizzard's own|r. In combat "
+    -- borrowing; by 12.1 neither does (DECISIONS.md §21, §22, §30), which left
+    -- the page teaching a workaround for two things it does not apply to. A
+    -- guide that covers more than its subject is read as covering less of it.
+    --
+    -- Exposed as Guide.INTRO because the first attempt at this scoping left a
+    -- wrong sentence HERE, where the step test could not see it. §30.
+    Guide.INTRO = "The buff icon in your cell is |cffffd100Blizzard's own|r. In combat "
         .. "the game will not tell an addon which aura is up, so ThugUI BORROWS "
         .. "Blizzard's buff frame and puts it in the cell you assigned.\n\n"
         .. "It has to have something to borrow. Until the buff is tracked in the "
         .. "|cffffd100Cooldown Manager|r the cell simply stays empty -- and an empty "
         .. "cell looks exactly like a broken addon. Below are the settings that makes "
         .. "possible.\n\n"
-        .. "|cffffd100Buffs only.|r Spells with charges and items are drawn by ThugUI "
-        .. "itself and borrow nothing. They do still have to be tracked in the Cooldown "
-        .. "Manager -- on its Cooldowns and Items tabs, the way step 6 does it for a "
-        .. "buff -- or they never reach the picker.")
+        .. "|cffffd100Buffs only.|r Everything else on the grid ThugUI draws itself, "
+        .. "in combat, with nothing set up here."
+    intro:SetText(Guide.INTRO)
 
     -- The checkbox that used to live on the main window. It moved here because
     -- every step below it explains what it turns on -- reading the setting and

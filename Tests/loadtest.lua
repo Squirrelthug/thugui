@@ -2599,6 +2599,24 @@ if ThugUI.CooldownViewer then
             end
         end },
 
+        -- The intro is checked separately because the first pass at scoping
+        -- this page left a WRONG sentence there -- charges and items "still
+        -- have to be tracked or they never reach the picker" -- while the step
+        -- test above passed. The player disproved it in game: they draw and
+        -- work in combat untracked, because GetCooldownViewerCategorySet
+        -- returns a category's whole set, not the player's Edit Mode bars.
+        -- Guide.INTRO exists so this half of the panel is testable at all.
+        { "the guide intro claims nothing about charges or items", function()
+            local BuffGuide = ThugUI.CooldownViewer.BuffGuide
+            BuffGuide:Ensure()
+            local intro = BuffGuide.INTRO
+            assert(intro, "the guide did not expose its intro text")
+            local text = intro:lower()
+            assert(not text:find("charge") and not text:find("trinket"),
+                "the guide intro still describes charge spells or items")
+            assert(text:find("buff"), "the guide intro stopped mentioning buffs at all")
+        end },
+
         -- The clickToEdit/advButton step used to also tell the player to set
         -- Always/In Combat; that instruction now belongs to the visibility
         -- step alone. Regression: a step that says it twice is confusing, not

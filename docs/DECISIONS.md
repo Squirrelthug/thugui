@@ -2356,10 +2356,20 @@ charges and items along as things the reader had to set up. By 12.1 neither is
 borrowed at all — ThugUI draws both itself (§21, §22) — so a numbered step of a
 *workaround* was teaching setup for two things the workaround does not apply to.
 
-Now: buffs only. One sentence in the intro keeps the single fact the deleted step
-carried that is still true — charges and items must be tracked in the Cooldown
-Manager or they never reach the picker — because that is a *picker* fact, not a
-borrowing one, and it costs a line instead of a step.
+Now: buffs only, and nothing else.
+
+The first pass at this scoping kept one sentence of the deleted step, on the
+grounds that it was a *picker* fact rather than a borrowing one: charges and
+items must be tracked in the Cooldown Manager or they never reach the picker.
+**The player tested it and that is false.** They draw, and work in combat,
+without ever being put on a Blizzard bar. The reason is in the API we already
+use: `GetCooldownViewerCategorySet(category)` returns everything in a category
+for the player, **not** the subset they placed in Edit Mode — so the picker sees
+them whether or not Blizzard is drawing them anywhere.
+
+Which is the same mistake in miniature, one commit later: the step went, and the
+claim it carried was reworded into the intro instead of being checked. **Delete,
+do not relocate.**
 
 ### The rule, which is not about this page
 
@@ -2374,8 +2384,12 @@ test on. Two habits came out of it:
   A reader who sees items mentioned assumes the page is the complete story for
   items too, and stops looking.
 
-`Tests/loadtest.lua` now asserts no numbered step mentions charges or items. A
-test on prose is unusual here and it is worth saying why it earns its place: this
-page's scope has now been the defect twice, and the failure
-mode is silent — nothing errors, the player just follows instructions that do
-nothing.
+`Tests/loadtest.lua` asserts it of the numbered steps **and, separately, of the
+intro** — `Guide.INTRO` exists only so the intro is visible to a test at all.
+The step case passed while the intro was wrong, which is precisely why both
+halves are covered.
+
+A test on prose is unusual here and it is worth saying why it earns its place:
+this page's scope has been the defect three times now, and the failure mode is
+silent — nothing errors, no cell is empty, the player just follows instructions
+that do nothing.

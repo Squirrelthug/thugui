@@ -36,10 +36,17 @@ the game.
 **The workaround panel is buffs only again.** `DECISIONS.md` §30. The
 charge-spell/item step is gone, the intro and the checkbox tooltip no longer
 describe borrowing for them, and the panel title reads `PROTECTED BUFF
-WORKAROUND`. The one surviving fact about charges and items — they still have to
-be tracked or they never reach the picker — is a sentence in the intro. Open the
-`[WORKAROUND]` link and read it end to end; the test can only see the numbered
-steps, not the intro or the tooltip.
+WORKAROUND`.
+
+**Settled in game 2026-08-15, do not re-open:** charge spells and items draw and
+work in combat **without being tracked in the Cooldown Manager at all** — the
+player tested it. An intermediate version of this rewrite claimed they still had
+to be tracked to reach the picker; that was wrong, and it is gone.
+`GetCooldownViewerCategorySet` returns a category's whole set, not the player's
+Edit Mode bars, which is why the picker sees them either way.
+
+The tooltip is still the one part of the panel no test can see — it is a string
+passed to `W.AttachTooltip`, not a table. Worth a read in game.
 
 ### Older, still true
 
