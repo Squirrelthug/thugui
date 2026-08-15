@@ -1,6 +1,44 @@
-# Handoff — state as of 2026-08-13 (latest — after the task 19 regression and the ring start angle)
+# Handoff — state as of 2026-08-15 (latest — the cooldown grid can be locked)
 
 ## START HERE
+
+**Branch `main`. 229 passing, 0 failures.** No agent is mid-flight.
+
+**Uncommitted, all of it task 20 and all of it wanted:**
+`modules/CooldownViewer/{Core,Data}.lua`, `modules/Diagnostics.lua`,
+`ui/pages/CooldownViewer.lua`, `ui/Widgets.lua`, `Tests/loadtest.lua`, plus
+untracked `tasks/20-*.md` and `tasks/reports/20-*.md`.
+
+### What the player needs to look at in game
+
+**The cooldown grid now has a `Lock position` checkbox** (Cooldown Viewer page,
+"This layout" panel, above `Show proc glow`). `DECISIONS.md` §29. Green, unseen.
+What to check:
+
+1. **Default is locked, and that applies to profiles that already existed** —
+   `Data.GetProfile` backfills new default keys. So on the next login the grid
+   should stop eating clicks in the game world without anything being ticked.
+   Hover something behind where the grid sits and confirm the tooltip appears.
+2. **Untick it.** A thin teal 1px border should appear around the whole 10x10
+   grid — that rectangle is the draggable area — and dragging should work
+   exactly as it did before.
+3. **Re-tick it.** Border gone, clicks pass through again.
+4. **Open the settings page.** Preview mode overrides the lock on purpose, so
+   the grid is draggable and bordered while the window is open even when
+   locked. That is the design, not a leak.
+5. `Follow cursor` is unaffected in either state — it never took the mouse and
+   still does not.
+
+Everything above is verified only by the harness. The border's real appearance,
+and that a locked frame genuinely passes hovers through to the world, both need
+the game.
+
+### Older, still true
+
+The radial-resource-ring work described below **merged to `main`** and its
+"uncommitted" table no longer applies; the reasoning in it does.
+
+## Superseded: the `radial-resource-ring` branch, before it merged (2026-08-13)
 
 **Branch `radial-resource-ring`, 9 commits ahead of `main`, nothing pushed.**
 **224 passing, 0 failures.** No agent is mid-flight and nothing is half-done.

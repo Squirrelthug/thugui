@@ -315,6 +315,10 @@ function Panel:Checkbox(opts)
     local label = cb:CreateFontString(nil, "OVERLAY", FONT_LABEL)
     label:SetPoint("LEFT", cb, "RIGHT", 4, 0)
     label:SetText(opts.label)
+    -- Kept on the frame so a test can find a checkbox by what it says rather
+    -- than by its index in panel.widgets. Index-based lookups turn every added
+    -- control into a broken test that was guarding something else entirely.
+    cb.labelText = opts.label
 
     cb:SetScript("OnClick", function(self)
         opts.set(self:GetChecked() and true or false)

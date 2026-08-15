@@ -115,6 +115,22 @@ get a real assertion on `icon.tex`. Exactly the same shape as the
 `GetHeight`/`GetWidth` gap above, and it had gone unnoticed because nothing
 before task 19 needed to tell two textures on one icon apart.
 
+**`EnableMouse` was swallowed, so "does this frame take input" was
+unobservable.** The same shape as the two gaps above: it fell through the generic
+no-op branch, and the only way to describe the cooldown grid's mouse behaviour
+was to assert on the profile table instead — which tests the setting, not the
+frame. Closed 2026-08-15 (task 20) by recording it as `frame.__mouse`, which is
+what let the locked-grid fix get a real assertion.
+
+**A test that identifies a widget by its index in `panel.widgets` is a
+tripwire.** `"the misc panel drops the Blizzard-buffs checkbox"` asserted
+`#misc.widgets == 1` and drove `widgets[1]`. Task 20 added a second checkbox to
+that panel and the case failed — while everything it was written to protect was
+still true. Rewritten 2026-08-15 to find checkboxes by `widget.labelText` (added
+to `Panel:Checkbox` for exactly this). **Assert on the thing you named in the
+test's title**; a proxy for it will fail on unrelated changes and, worse, will be
+"fixed" by whoever hits it next.
+
 **The stub synthesises every Capitalised key as a truthy no-op**, so
 `item.GetSpellCategoryIcon` reads as *present* on a bare stub even when it was
 never defined — which is useless for testing a fallback that only runs when a

@@ -140,6 +140,12 @@ frameMT.__index = function(tbl, key)
             if key == "Hide" then a.__shown = false return end
             if key == "SetShown" then a.__shown = a1 and true or false return end
             if key == "IsShown" then return a.__shown == true end
+            -- Recorded so the cooldown grid's lock state is observable: it used
+            -- to be swallowed as a no-op, which meant no test could tell an
+            -- unlocked grid (should take the mouse) from a locked one (should
+            -- not) -- exactly the bug this recorded EnableMouse call exists to
+            -- catch (task 20).
+            if key == "EnableMouse" then a.__mouse = a1 and true or false return end
             -- Alpha and vertex colour are recorded because that is the whole
             -- observable state of a combo pip: lit or dim, and what colour.
             if key == "SetAlpha" then a.__alpha = a1 return end
@@ -694,6 +700,22 @@ if ThugUI.CooldownViewer then
             assert(not ThugUI_Config.cv.profiles[0],
                 "a profile was stored under specID 0")
         end },
+
+        -- Task 20, decision 1: locked defaults true, and GetProfile's
+        -- key-backfill (Data.lua:354-357) means a profile saved before this
+        -- task existed comes back locked too, not left with a nil that would
+        -- read as "unlocked" everywhere this task compares against it.
+        { "task 20 decision 1: locked defaults true, including on an old profile", function()
+            assert(Data.DefaultProfile().locked == true,
+                "the default profile is not locked by default")
+
+            local specID = 999901
+            ThugUI_Config.cv.profiles[specID] = { placements = {} }  -- no `locked` key at all
+            local profile = Data.GetProfile(specID)
+            assert(profile.locked == true,
+                "a profile saved before this task did not come back locked")
+            ThugUI_Config.cv.profiles[specID] = nil
+        end },
         { "place + rebuild", function()
             local profile = Data.GetActiveProfile()
             Data.SetPlacement(profile, 3, 4, 12345, "cooldown")
@@ -718,6 +740,101 @@ if ThugUI.CooldownViewer then
             CV:SetPreview(true, Data.GetActiveSpecID())
             CV:UpdateState()
             CV:SetPreview(false)
+        end },
+
+        -- Task 20: the reported bug. Locked, not following the cursor, out of
+        -- combat -- the state a player sits in most of the time -- the grid
+        -- must not take the mouse, and must not show a border since it isn't
+        -- draggable. Self-contained rather than relying on a placement left by
+        -- an earlier case (Tests/README.md, "a case can silently depend on the
+        -- case before it").
+        { "task 20: a locked grid takes no mouse and shows no border", function()
+            local profile = Data.GetActiveProfile()
+            if next(profile.placements) == nil then
+                Data.SetPlacement(profile, 1, 1, 111, "cooldown")
+            end
+            profile.enabled, profile.onlyInCombat = true, false
+            profile.followCursor = false
+            profile.locked = true
+            CV.previewMode = false
+            _G.__inCombat = false
+
+            CV:UpdateVisibility()
+
+            assert(CV.container.__mouse == false,
+                "a locked grid still took the mouse")
+            assert(CV.container.dragBorder.__shown == false,
+                "a locked grid still showed its drag border")
+        end },
+
+        { "task 20: an unlocked grid takes the mouse and shows its border", function()
+            local profile = Data.GetActiveProfile()
+            if next(profile.placements) == nil then
+                Data.SetPlacement(profile, 1, 1, 111, "cooldown")
+            end
+            profile.enabled, profile.onlyInCombat = true, false
+            profile.followCursor = false
+            profile.locked = false
+            CV.previewMode = false
+            _G.__inCombat = false
+
+            CV:UpdateVisibility()
+
+            assert(CV.container.__mouse == true,
+                "an unlocked grid did not take the mouse")
+            assert(CV.container.dragBorder.__shown == true,
+                "an unlocked grid did not show its drag border")
+        end },
+
+        -- Decision 2's override: locking is done from the settings page, so a
+        -- lock that cannot be undone from preview (opened from that same page)
+        -- would be a trap. Preview wins regardless of `locked`.
+        { "task 20: preview overrides the lock", function()
+            local profile = Data.GetActiveProfile()
+            if next(profile.placements) == nil then
+                Data.SetPlacement(profile, 1, 1, 111, "cooldown")
+            end
+            profile.enabled, profile.onlyInCombat = true, false
+            profile.followCursor = false
+            profile.locked = true
+            CV.previewMode = true
+            _G.__inCombat = false
+
+            CV:UpdateVisibility()
+
+            assert(CV.container.__mouse == true,
+                "preview did not override the lock")
+            assert(CV.container.dragBorder.__shown == true,
+                "preview did not show the border despite being locked")
+
+            CV.previewMode = false
+        end },
+
+        -- The half that already worked, kept working: following the cursor
+        -- means the frame moves itself, so it must never take the mouse --
+        -- whatever `locked` says, even while previewing.
+        { "task 20: follow cursor never takes the mouse, even while previewing", function()
+            local profile = Data.GetActiveProfile()
+            if next(profile.placements) == nil then
+                Data.SetPlacement(profile, 1, 1, 111, "cooldown")
+            end
+            profile.enabled, profile.onlyInCombat = true, false
+            profile.followCursor = true
+            profile.locked = false
+            CV.previewMode = true
+            _G.__inCombat = false
+
+            CV:UpdateVisibility()
+
+            assert(CV.container.__mouse == false,
+                "follow cursor took the mouse while previewing")
+            assert(CV.container.dragBorder.__shown == false,
+                "follow cursor showed the border while previewing")
+
+            -- Leave the profile in a sane state for whatever runs next.
+            CV.previewMode = false
+            profile.followCursor = false
+            profile.locked = true
         end },
         { "legacy toggle", function()
             SlashCmdList["THUGCV"]("legacy")
@@ -2258,21 +2375,32 @@ if ThugUI.CooldownViewer then
             end
             assert(misc, "could not find the misc panel")
 
-            -- Panel:Register only keeps widgets that carry a Refresh -- Section,
-            -- Label, Button and Gap do not, so a checkbox is the only thing that
-            -- would show up here. One entry means one checkbox is left, where
-            -- there used to be two.
-            assert(#misc.widgets == 1,
-                ("misc panel has %d registered widgets, expected exactly 1 (proc glow)")
-                :format(#misc.widgets))
+            -- Found by label, not by index. This case used to assert
+            -- `#misc.widgets == 1`, which made it a tripwire for ANY control
+            -- added to this panel: task 20's "Lock position" checkbox broke it
+            -- while changing nothing it was written to protect. What it guards
+            -- is that the Blizzard-buffs checkbox left this panel (task 08) and
+            -- that proc glow still drives its setting.
+            local byLabel = {}
+            for _, widget in ipairs(misc.widgets) do
+                if widget.labelText then byLabel[widget.labelText] = widget end
+            end
+
+            for label in pairs(byLabel) do
+                assert(not label:lower():find("buff"),
+                    ("the misc panel still carries a buffs checkbox: %s"):format(label))
+            end
+
+            local glow = byLabel["Show proc glow"]
+            assert(glow, "the misc panel lost its proc glow checkbox")
 
             local profile = Data.GetActiveProfile()
             local restore = profile.showProcGlow
             profile.showProcGlow = true
-            misc.widgets[1]:SetChecked(false)
-            misc.widgets[1]:GetScript("OnClick")(misc.widgets[1])
+            glow:SetChecked(false)
+            glow:GetScript("OnClick")(glow)
             assert(profile.showProcGlow == false,
-                "the one remaining checkbox did not drive showProcGlow")
+                "the proc glow checkbox did not drive showProcGlow")
             profile.showProcGlow = restore
         end },
 

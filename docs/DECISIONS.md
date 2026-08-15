@@ -2283,3 +2283,61 @@ down as a known limitation, where it will actually be read, and delete the
 checklist. This project's docs are load-bearing precisely because each one earns
 its place — the moment a file is kept out of good intentions it starts costing
 attention it does not repay.
+
+## 29. The cooldown grid's mouse state is one boolean, and it defaults to inert
+
+**2026-08-15, task 20**, from the player's report: with `Follow cursor` off, the
+viewer swallowed clicks and hovers in the middle of the game view, over an area
+whose edges were impossible to predict.
+
+The cause was the shape of the old condition (`Core.lua`, `CV:UpdateVisibility`):
+
+```lua
+local editable = self.previewMode or not InCombatLockdown()
+f:EnableMouse(editable and not profile.followCursor)
+```
+
+Neither half of that asks *"does the player want to drag this right now"* — it
+takes the mouse whenever combat ends. And the frame is a **full 10x10 grid
+whatever the player placed in it**. That constant size is deliberate (it is what
+makes an intersection anchor mean the same place always, §18), but it means the
+frame is mostly invisible empty space.
+
+### Three states, derived once
+
+```lua
+local draggable = not profile.followCursor
+    and (self.previewMode or (not profile.locked and not InCombatLockdown()))
+f:EnableMouse(draggable)
+f.dragBorder:SetShown(draggable)
+```
+
+- **Following the cursor** — never takes the mouse. Unchanged; it moves itself,
+  so there is nothing to drag, and this half was never the bug.
+- **Unlocked, or previewing** — takes the mouse, border drawn.
+- **Locked** — inert. Clicks, hovers and world targeting pass straight through.
+
+**The border and the mouse come from one value on purpose.** The border answers
+exactly one question — *will clicking here drag the grid, or hit the world?* — so
+a border that could show while the frame is inert, or a frame that takes the
+mouse with no border, would be worse than no border at all. Two independent flags
+that usually agree is precisely how that gets built by accident.
+
+**Preview overrides the lock, deliberately.** The lock is set from the settings
+page, and a lock that cannot be undone from the place it was set is a trap rather
+than a safety feature. Preview is already a temporary state the player entered on
+purpose.
+
+### Default `locked = true` is a behaviour change on upgrade, and that is the point
+
+`Data.GetProfile` backfills newly-added default keys into existing profiles
+(`Data.lua:354-357`), so every profile saved before this task comes back locked.
+No migration preserves the old always-editable behaviour, because that behaviour
+*was* the bug being fixed. The setting is how dragging comes back.
+
+### The general rule
+
+**An invisible frame that takes the mouse is indistinguishable from a broken
+game.** If a frame has no visible extent, its resting state should be inert, and
+the moment it becomes interactive it must draw its own edge. The grid is the case
+that bit; it is not the only frame here that is larger than what it displays.

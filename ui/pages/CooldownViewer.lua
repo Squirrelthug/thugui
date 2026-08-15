@@ -855,6 +855,15 @@ function Page:BuildInspector(host)
     misc:Section("This layout")
 
     misc:Checkbox{
+        label = "Lock position",
+        tooltip = "Locked, the grid ignores the mouse completely - clicks and hovers pass "
+            .. "through it as if it were not there. Unlocked, a thin border shows the "
+            .. "area you can drag. Has no effect while Follow cursor is on.",
+        get = function() return Profile().locked ~= false end,
+        set = function(v) Profile().locked = v; Apply() end,
+    }
+
+    misc:Checkbox{
         label = "Show proc glow",
         tooltip = "The same pulsing highlight an action button gets when a proc makes a "
             .. "spell free or empowered - Opportunity on Pistol Shot, for instance. Uses "

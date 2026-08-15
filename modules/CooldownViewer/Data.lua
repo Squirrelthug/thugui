@@ -324,6 +324,13 @@ local function DefaultProfile()
         anchorCol = 0,
         anchorRow = 0,
         point = nil,
+        -- Locked by default: dragging is the only reason the grid ever takes
+        -- the mouse, and an unlocked 10x10 grid is a large invisible
+        -- rectangle sitting over the game view, swallowing clicks with no
+        -- visible edge. Data.GetProfile backfills this into every existing
+        -- profile, so that is a deliberate behaviour change on upgrade -- the
+        -- setting is how the player gets dragging back.
+        locked = true,
         placements = {},
     }
 end

@@ -691,6 +691,51 @@ function CV:EnsureContainer()
     bg:Hide()
     f.previewBG = bg
 
+    -- An invisible frame that eats clicks is indistinguishable from a broken
+    -- game. This border is shown exactly when the container takes the mouse
+    -- (unlocked, or previewing), so where a click will drag the grid rather
+    -- than hit the world underneath is never a guess. Same teal as
+    -- previewBG, deliberately -- both say "this rectangle belongs to the
+    -- addon". A child frame, not four textures hung directly off the
+    -- container, so one SetShown drives all four edges and UpdateVisibility
+    -- stays a single line.
+    local border = CreateFrame("Frame", nil, f)
+    border:SetAllPoints()
+    -- Above the pooled icons, which are children of the same container and so
+    -- default to this same frame level -- a 1px edge line loses a same-level
+    -- tie to whichever frame was created first, and an icon in an outer cell
+    -- sits exactly on top of it.
+    border:SetFrameLevel(f:GetFrameLevel() + 5)
+    border:Hide()
+
+    local function BorderLine()
+        local line = border:CreateTexture(nil, "OVERLAY")
+        line:SetColorTexture(0, 1, 0.8, 0.6)
+        return line
+    end
+
+    local top = BorderLine()
+    top:SetPoint("TOPLEFT")
+    top:SetPoint("TOPRIGHT")
+    top:SetHeight(1)
+
+    local bottom = BorderLine()
+    bottom:SetPoint("BOTTOMLEFT")
+    bottom:SetPoint("BOTTOMRIGHT")
+    bottom:SetHeight(1)
+
+    local left = BorderLine()
+    left:SetPoint("TOPLEFT")
+    left:SetPoint("BOTTOMLEFT")
+    left:SetWidth(1)
+
+    local right = BorderLine()
+    right:SetPoint("TOPRIGHT")
+    right:SetPoint("BOTTOMRIGHT")
+    right:SetWidth(1)
+
+    f.dragBorder = border
+
     self.container = f
     return f
 end
@@ -1270,11 +1315,21 @@ function CV:UpdateVisibility(forceCombat)
     local profile = CV:CurrentProfile()
     f:SetScale(profile.scale or 1.0)
 
-    -- The preview tint and the drag handle travel together: both are for
-    -- placing the thing, and neither belongs on screen during a pull.
-    local editable = self.previewMode or not InCombatLockdown()
     f.previewBG:SetShown(self.previewMode)
-    f:EnableMouse(editable and not profile.followCursor)
+
+    -- Three states, and the middle one is the point of the lock:
+    --   following the cursor -> never takes the mouse (it moves itself; unchanged)
+    --   unlocked, or preview -> takes the mouse, border drawn, draggable
+    --   locked               -> inert. Clicks, hovers and world targeting pass
+    --                           straight through the 10x10 grid, which is mostly
+    --                           empty space the player cannot see.
+    --
+    -- Preview overrides the lock deliberately: locking is done from the settings
+    -- page, and a lock that cannot be undone from the place it was set is a trap.
+    local draggable = not profile.followCursor
+        and (self.previewMode or (not profile.locked and not InCombatLockdown()))
+    f:EnableMouse(draggable)
+    f.dragBorder:SetShown(draggable)
 
     f:Show()
 
@@ -1626,6 +1681,7 @@ SlashCmdList["THUGCV"] = function(msg)
         print("  only in combat:   " .. tostring(profile.onlyInCombat)
             .. "   in combat now: " .. YesNo(InCombat(), true))
         print("  follow cursor:    " .. tostring(profile.followCursor))
+        print("  locked:           " .. tostring(profile.locked))
         print("  preview forced:   " .. tostring(CV.previewMode))
         print("  collapse:         " .. tostring(profile.collapse)
             .. " (" .. Data.ResolveCollapseDirection(profile) .. ")")

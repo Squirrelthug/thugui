@@ -116,6 +116,7 @@ local function CaptureProfiles()
         enabled = profile.enabled,
         onlyInCombat = profile.onlyInCombat,
         followCursor = profile.followCursor,
+        locked = profile.locked,
         collapse = profile.collapse,
         collapseDirection = profile.collapseDirection,
         anchor = ("col %d, row %d"):format(profile.anchorCol or 0, profile.anchorRow or 0),
